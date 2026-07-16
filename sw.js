@@ -1,4 +1,4 @@
-const CACHE = 'scorecard-v4';
+const CACHE = 'scorecard-v5';
 
 self.addEventListener('install', e => {
   e.waitUntil(
@@ -7,6 +7,8 @@ self.addEventListener('install', e => {
       return c.addAll([
         base,
         base + 'index.html',
+        base + 'styles.css',
+        base + 'app.js',
         base + 'manifest.json',
         base + 'icon-192.png',
         base + 'icon-512.png',
