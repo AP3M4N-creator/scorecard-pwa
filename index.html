@@ -962,7 +962,6 @@ input:focus { outline: 2px solid var(--gold); outline-offset: -1px; }
       <span class="timer-display" id="timer-display">0:00</span>
     </div>
     <div class="header-actions">
-      <button onclick="showMLBPicker()" style="background:rgba(196,30,58,0.3);border-color:rgba(196,30,58,0.5)">MLB</button>
       <button onclick="showGameSummary()">Game Summary</button>
       <button onclick="openGameLibrary()">Games</button>
       <button id="save-btn" onclick="saveGame()">Save</button>
@@ -1277,7 +1276,6 @@ function createEmptyState() {
       home: { innings: Array(14).fill(''), r:'', h:'', e:'' }
     },
     visibleInnings: 9,
-    mlbGamePk: null,
     standings: Array(STANDINGS_ROWS).fill(null).map(() => ({ team:'', rec:'', gb:'' })),
     innings: {
       visiting: Array(INNINGS).fill(null).map(() => makeInning()),
@@ -3616,7 +3614,6 @@ function applyState() {
   if (gameState.notes === undefined) gameState.notes = '';
   if (!gameState.defChanges) gameState.defChanges = [];
   if (!gameState.visibleInnings) gameState.visibleInnings = 9;
-  if (gameState.mlbGamePk === undefined) gameState.mlbGamePk = null;
   const makeAtBat = () => ({ bases:[false,false,false,false], advReason:['','','',''], outOnBase:null, play:'', out:0, outsRecorded:0, pitches:[], hitLoc:null, rbi:0, pitcher:0, reachedOnError:false, pitcherChangeNum:'', subChange:false });
   ['visiting','home'].forEach(t => {
     if (gameState.linescore[t] && gameState.linescore[t].innings.length < 14) {
@@ -4798,7 +4795,7 @@ function showGameSummary() {
 
   // Win probability chart
   const hasScoreData = gameState.linescore.visiting.innings.some(v => v !== '') || gameState.linescore.home.innings.some(v => v !== '');
-  if (gameState.mlbGamePk || hasScoreData) {
+  if (hasScoreData) {
     html += '<div class="gs-section" id="gs-winprob-section"><h3>Win Probability</h3><div id="gs-winprob-chart" style="min-height:40px"></div></div>';
   }
 
@@ -4806,9 +4803,7 @@ function showGameSummary() {
   document.getElementById('gs-inner').innerHTML = html;
   modal.classList.add('active');
 
-  if (gameState.mlbGamePk) {
-    renderWinProbChart(gameState.mlbGamePk, 'gs-winprob-chart');
-  } else if (hasScoreData) {
+  if (hasScoreData) {
     renderManualWinProbChart('gs-winprob-chart');
   }
 }
@@ -4910,26 +4905,6 @@ function renderManualWinProbChart(containerId) {
   renderWinProbSVG(container, data, vTeam, hTeam, vis, true);
 }
 
-async function renderWinProbChart(gamePk, containerId) {
-  const container = document.getElementById(containerId);
-  if (!container) return;
-  container.innerHTML = '<div style="color:var(--text-light);font-size:12px;padding:8px 0">Loading win probability...</div>';
-  try {
-    const res = await fetch(`https://statsapi.mlb.com/api/v1/game/${gamePk}/winProbability`);
-    const data = await res.json();
-    if (!Array.isArray(data) || data.length === 0) {
-      container.innerHTML = '<div style="color:var(--text-light);font-size:12px;padding:8px 0">Win probability data not available for this game.</div>';
-      return;
-    }
-    const vTeam = gameState.info.visitingTeam || 'VIS';
-    const hTeam = gameState.info.homeTeam || 'HOM';
-    const numInns = gameState.visibleInnings || 9;
-    renderWinProbSVG(container, data, vTeam, hTeam, numInns, false);
-  } catch(e) {
-    container.innerHTML = '<div style="color:var(--text-light);font-size:12px;padding:8px 0">Win probability unavailable.</div>';
-  }
-}
-
 /* Keyboard handler */
 document.addEventListener('keydown', function(e) {
   const inInput = document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'SELECT');
@@ -5022,431 +4997,6 @@ document.addEventListener('click', function(e) {
   const cell = e.target.closest('.at-bat-cell');
   if (cell) selectCell(cell);
 });
-
-/* ===== MLB Auto-Scoring ===== */
-const MLB_BASE = 'https://statsapi.mlb.com/api';
-
-const MLB_POS_WORDS = [
-  ['first baseman', '3'], ['second baseman', '4'], ['third baseman', '5'],
-  ['shortstop', '6'], ['left fielder', '7'], ['center fielder', '8'],
-  ['right fielder', '9'], ['pitcher', '1'], ['catcher', '2']
-];
-
-function mlbExtractPositions(desc) {
-  const lower = desc.toLowerCase();
-  const found = [];
-  for (const [word, num] of MLB_POS_WORDS) {
-    let idx = lower.indexOf(word);
-    while (idx >= 0) {
-      found.push({ idx, num });
-      idx = lower.indexOf(word, idx + word.length);
-    }
-  }
-  found.sort((a, b) => a.idx - b.idx);
-  return found.map(f => f.num);
-}
-
-function mlbTranslatePlay(play) {
-  const et = play.result.eventType;
-  const ev = play.result.event || '';
-  const desc = play.result.description || '';
-  const positions = mlbExtractPositions(desc);
-  const posStr = positions.length ? ' ' + positions.join('-') : '';
-
-  switch (et) {
-    case 'single': return '1B';
-    case 'double': return '2B';
-    case 'triple': return '3B';
-    case 'home_run': return 'HR';
-    case 'strikeout':
-    case 'strikeout_double_play': {
-      const pitches = (play.playEvents || []).filter(e => e.isPitch);
-      const last = pitches[pitches.length - 1];
-      if (last?.details?.call?.code === 'C') return 'ꓘ';
-      return 'K';
-    }
-    case 'walk': return 'BB';
-    case 'intent_walk': return 'IBB';
-    case 'hit_by_pitch': return 'HBP';
-    case 'sac_fly':
-    case 'sac_fly_double_play': return 'SF';
-    case 'sac_bunt':
-    case 'sac_bunt_double_play': return 'SH';
-    case 'field_error': {
-      const epos = positions.length ? positions[0] : '';
-      return 'E' + epos;
-    }
-    case 'catcher_interf': return 'CI';
-    case 'grounded_into_double_play':
-    case 'double_play': return 'DP' + posStr;
-    case 'triple_play': return 'TP' + posStr;
-    case 'fielders_choice':
-    case 'fielders_choice_out': return 'FC' + posStr;
-    case 'force_out': return 'FC' + posStr;
-    case 'field_out': {
-      if (ev.includes('Ground') || desc.includes('grounds out')) return 'GO' + posStr;
-      if (ev.includes('Line') || desc.includes('lines out')) return 'LO' + posStr;
-      if (ev.includes('Pop') || desc.includes('pops out')) return 'PO' + posStr;
-      return 'FO' + posStr;
-    }
-    default: return et ? et.replace(/_/g, ' ').toUpperCase() : '';
-  }
-}
-
-function mlbFillAtBat(ab, play) {
-  ab.play = mlbTranslatePlay(play);
-  ab.rbi = play.result.rbi || 0;
-
-  const pitchEvents = (play.playEvents || []).filter(e => e.isPitch);
-  ab.pitches = [];
-  for (const p of pitchEvents) {
-    const code = p.details?.call?.code;
-    if (!code) continue;
-    if (code === 'B' || code === '*B') ab.pitches.push('B');
-    else if (code === 'C' || code === 'S' || code === 'W') ab.pitches.push('S');
-    else if (code === 'F' || code === 'T' || code === 'L') ab.pitches.push('F');
-    else if (code === 'D' || code === 'E' || code === 'X') ab.pitches.push('X');
-  }
-
-  const batterRunner = (play.runners || []).find(r =>
-    r.movement && (r.movement.start === null || r.movement.originBase === null)
-  );
-  if (batterRunner) {
-    const end = batterRunner.movement.end;
-    if (end === '1B' || end === '2B' || end === '3B' || end === 'score') ab.bases[0] = true;
-    if (end === '2B' || end === '3B' || end === 'score') ab.bases[1] = true;
-    if (end === '3B' || end === 'score') ab.bases[2] = true;
-    if (end === 'score') ab.bases[3] = true;
-  }
-
-  const et = play.result.eventType;
-  if (et === 'field_error') ab.reachedOnError = true;
-
-  const outsThisPlay = (play.runners || []).filter(r => r.movement?.isOut).length;
-  ab.outsRecorded = outsThisPlay;
-  ab.out = (play.runners || []).some(r => r.movement?.start === null && r.movement?.isOut) ? 1 : 0;
-}
-
-function mlbFillLineup(team, boxTeam) {
-  const starters = {};
-  const subs = {};
-
-  for (const key of Object.keys(boxTeam.players)) {
-    const p = boxTeam.players[key];
-    if (!p.battingOrder) continue;
-    const spot = Math.floor(parseInt(p.battingOrder) / 100) - 1;
-    if (spot < 0 || spot >= POSITIONS) continue;
-
-    if (p.gameStatus?.isSubstitute) {
-      if (!subs[spot]) subs[spot] = p;
-    } else {
-      starters[spot] = p;
-    }
-  }
-
-  for (let spot = 0; spot < POSITIONS; spot++) {
-    const si = spot * ROWS_PER_POS;
-    if (starters[spot]) {
-      const p = starters[spot];
-      gameState.teams[team].players[si].name = p.person?.fullName || '';
-      gameState.teams[team].players[si].num = String(p.jerseyNumber || '');
-      gameState.teams[team].players[si].pos = p.allPositions?.[0]?.abbreviation || '';
-    }
-    if (subs[spot]) {
-      const p = subs[spot];
-      gameState.teams[team].players[si + 1].name = p.person?.fullName || '';
-      gameState.teams[team].players[si + 1].num = String(p.jerseyNumber || '');
-      gameState.teams[team].players[si + 1].pos = p.allPositions?.[0]?.abbreviation || '';
-    }
-  }
-}
-
-function mlbFillPitchers(team, boxTeam) {
-  const pitcherIds = boxTeam.pitchers || [];
-  let row = 0;
-  for (let i = 0; i < pitcherIds.length && row < PITCHER_ROWS; i++) {
-    const p = boxTeam.players['ID' + pitcherIds[i]];
-    if (!p) continue;
-    const stats = p.stats?.pitching || {};
-    if (!stats.inningsPitched && !stats.pitchesThrown && !stats.numberOfPitches) continue;
-    const pitcher = gameState.teams[team].pitchers[row];
-    pitcher.name = p.person?.fullName || '';
-    pitcher.num = String(p.jerseyNumber || '');
-    pitcher.ip = stats.inningsPitched || '';
-    pitcher.pc = String(stats.pitchesThrown || stats.numberOfPitches || '');
-    pitcher.h = String(stats.hits || 0);
-    pitcher.r = String(stats.runs || 0);
-    pitcher.er = String(stats.earnedRuns || 0);
-    pitcher.k = String(stats.strikeOuts || 0);
-    pitcher.bb = String(stats.baseOnBalls || 0);
-    row++;
-  }
-}
-
-function showMLBPicker() {
-  let modal = document.getElementById('mlb-picker-modal');
-  if (!modal) {
-    modal = document.createElement('div');
-    modal.id = 'mlb-picker-modal';
-    modal.className = 'game-summary-modal';
-    modal.onclick = function(e) { if (e.target === modal) modal.classList.remove('active'); };
-    modal.innerHTML = '<div class="game-summary-inner" id="mlb-picker-inner" style="max-width:520px"></div>';
-    document.body.appendChild(modal);
-  }
-  const today = new Date().toISOString().split('T')[0];
-  document.getElementById('mlb-picker-inner').innerHTML = `
-    <div style="position:relative">
-      <button onclick="document.getElementById('mlb-picker-modal').classList.remove('active')" style="position:absolute;top:-8px;right:-12px;font-size:24px;cursor:pointer;color:var(--text-light);background:none;border:none;font-weight:700">&times;</button>
-      <div style="text-align:center;margin-bottom:16px">
-        <h2 style="font-family:var(--heading);font-size:18px;color:var(--navy);text-transform:uppercase;letter-spacing:2px">Score from MLB</h2>
-        <p style="font-size:11px;color:var(--text-light);margin-top:4px">Select a date and pick a game to auto-fill the scorecard</p>
-      </div>
-      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;justify-content:center">
-        <button onclick="mlbShiftDate(-1)" style="padding:8px 10px;font-size:14px;background:var(--navy);color:#fff;border:none;border-radius:4px;cursor:pointer">&larr;</button>
-        <input type="date" id="mlb-date" value="${today}" style="padding:8px 12px;font-size:14px;border:2px solid var(--navy);border-radius:4px;font-family:var(--mono)">
-        <button onclick="mlbShiftDate(1)" style="padding:8px 10px;font-size:14px;background:var(--navy);color:#fff;border:none;border-radius:4px;cursor:pointer">&rarr;</button>
-        <button onclick="fetchMLBSchedule()" style="padding:8px 16px;font-size:12px;font-weight:700;background:var(--navy);color:#fff;border:none;border-radius:4px;cursor:pointer;font-family:var(--heading);text-transform:uppercase;letter-spacing:1px">Load</button>
-      </div>
-      <div id="mlb-games-list" style="max-height:400px;overflow-y:auto"></div>
-    </div>`;
-  modal.classList.add('active');
-  fetchMLBSchedule();
-}
-
-function mlbShiftDate(days) {
-  const inp = document.getElementById('mlb-date');
-  const d = new Date(inp.value + 'T12:00:00');
-  d.setDate(d.getDate() + days);
-  inp.value = d.toISOString().split('T')[0];
-  fetchMLBSchedule();
-}
-
-async function fetchMLBSchedule() {
-  const date = document.getElementById('mlb-date').value;
-  const list = document.getElementById('mlb-games-list');
-  list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-light)">Loading...</div>';
-  try {
-    const res = await fetch(`${MLB_BASE}/v1/schedule?sportId=1&date=${date}&hydrate=linescore`);
-    const data = await res.json();
-    const games = (data.dates && data.dates[0]?.games) || [];
-    if (!games.length) { list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-light)">No games found for this date</div>'; return; }
-    let html = '';
-    for (const g of games) {
-      const away = g.teams.away;
-      const home = g.teams.home;
-      const status = g.status.detailedState;
-      const ls = g.linescore;
-      const score = ls ? `${ls.teams.away.runs ?? 0} - ${ls.teams.home.runs ?? 0}` : '';
-      const isFinal = status === 'Final' || status === 'Game Over';
-      const isLive = status.includes('Progress') || status.includes('In Progress');
-      const statusColor = isFinal ? '#2a7a2a' : (isLive ? 'var(--accent)' : 'var(--text-light)');
-      const canLoad = isFinal || isLive;
-      html += `<div ${canLoad ? `onclick="loadMLBGame(${g.gamePk})"` : ''} style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border:1.5px solid var(--border-light);border-radius:6px;margin-bottom:6px;${canLoad ? 'cursor:pointer' : 'opacity:0.5'};background:var(--card);transition:all 0.15s" ${canLoad ? `onmouseover="this.style.borderColor='var(--navy)';this.style.background='var(--cream)'" onmouseout="this.style.borderColor='var(--border-light)';this.style.background='var(--card)'"` : ''}>
-        <div>
-          <div style="font-weight:700;font-size:13px;font-family:var(--heading);letter-spacing:0.5px">${away.team.name} @ ${home.team.name}</div>
-          <div style="font-size:11px;color:var(--text-light);margin-top:2px">${score ? score + '  &bull;  ' : ''}${g.venue?.name || ''}</div>
-        </div>
-        <span style="font-size:10px;font-weight:700;color:${statusColor};text-transform:uppercase;font-family:var(--heading);letter-spacing:0.5px">${status}</span>
-      </div>`;
-    }
-    list.innerHTML = html;
-  } catch(e) {
-    list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--accent)">Failed to fetch schedule: ' + e.message + '</div>';
-  }
-}
-
-async function loadMLBGame(gamePk) {
-  const list = document.getElementById('mlb-games-list');
-  list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-light)"><div style="font-size:14px;font-weight:700;margin-bottom:8px">Loading game data...</div><div style="font-size:11px">Translating plays to scorecard notation</div></div>';
-  try {
-    const res = await fetch(`${MLB_BASE}/v1.1/game/${gamePk}/feed/live`);
-    const data = await res.json();
-    autoScoreMLBGame(data);
-    document.getElementById('mlb-picker-modal').classList.remove('active');
-  } catch(e) {
-    list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--accent)">Failed: ' + e.message + '</div>';
-  }
-}
-
-function autoScoreMLBGame(data) {
-  const gd = data.gameData;
-  const box = data.liveData.boxscore;
-  const plays = data.liveData.plays.allPlays || [];
-
-  gameState = createEmptyState();
-  gameState.mlbGamePk = data.gamePk || gd.game?.pk || null;
-
-  // Game info
-  gameState.info.date = gd.datetime?.officialDate || '';
-  gameState.info.startTime = gd.datetime?.time && gd.datetime?.ampm ? gd.datetime.time + ' ' + gd.datetime.ampm : '';
-  gameState.info.visitingTeam = gd.teams.away.abbreviation || '';
-  gameState.info.homeTeam = gd.teams.home.abbreviation || '';
-  if (gd.weather) gameState.info.weather = `${gd.weather.temp || ''}° ${gd.weather.condition || ''}, Wind: ${gd.weather.wind || ''}`.trim();
-  if (gd.gameInfo?.attendance) gameState.info.attendance = String(gd.gameInfo.attendance);
-  if (gd.gameInfo?.gameDurationMinutes) {
-    const mins = gd.gameInfo.gameDurationMinutes;
-    gameState.info.timeOfGame = `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, '0')}`;
-  }
-
-  // Umpires
-  if (gd.officialVenue || data.liveData.boxscore.officials) {
-    const officials = box.officials || [];
-    for (const o of officials) {
-      const name = o.official?.fullName || '';
-      if (o.officialType === 'Home Plate') gameState.umpires.hp = name;
-      else if (o.officialType === 'First Base') gameState.umpires['1b'] = name;
-      else if (o.officialType === 'Second Base') gameState.umpires['2b'] = name;
-      else if (o.officialType === 'Third Base') gameState.umpires['3b'] = name;
-    }
-  }
-
-  // Lineups
-  mlbFillLineup('visiting', box.teams.away);
-  mlbFillLineup('home', box.teams.home);
-
-  // Pitchers
-  mlbFillPitchers('visiting', box.teams.away);
-  mlbFillPitchers('home', box.teams.home);
-
-  // Build batter ID → lineup spot map
-  const batterMap = { visiting: {}, home: {} };
-  ['away', 'home'].forEach(side => {
-    const team = side === 'away' ? 'visiting' : 'home';
-    for (const key of Object.keys(box.teams[side].players)) {
-      const p = box.teams[side].players[key];
-      if (!p.battingOrder) continue;
-      const spot = Math.floor(parseInt(p.battingOrder) / 100) - 1;
-      if (spot >= 0 && spot < POSITIONS) {
-        batterMap[team][p.person.id] = { spot, isSub: !!p.gameStatus?.isSubstitute };
-      }
-    }
-  });
-
-  // Process plays — track base occupants by player ID so substitutions (PRs) work
-  let halfKey = '';
-  const innOuts = { visiting: 0, home: 0 };
-  // baseOcc[team][base] = player ID (number)
-  const baseOcc = {
-    visiting: { '1B': null, '2B': null, '3B': null },
-    home:     { '1B': null, '2B': null, '3B': null }
-  };
-
-  // Find the at-bat object for a player currently running on bases.
-  // Searches starter and sub rows for whichever one has bases[0]=true in this inning,
-  // so pinch runners and substitutes are tracked to the right cell.
-  function getRunnerAb(team, pid, colIdx) {
-    const info = batterMap[team][pid];
-    if (!info) return null;
-    const si = info.spot * ROWS_PER_POS;
-    for (let row = si; row <= si + 1; row++) {
-      const p = gameState.teams[team].players[row];
-      if (!p) continue;
-      const oabs = gameState.overflowAtBats.filter(o => o.team === team && o.pIdx === row && o.colIdx === colIdx && o.atBat.bases[0]);
-      if (oabs.length) return oabs[oabs.length - 1].atBat;
-      if (p.atBats[colIdx].bases[0]) return p.atBats[colIdx];
-    }
-    // Pinch runner with no prior at-bat in this inning — return starter row as placeholder
-    return gameState.teams[team].players[si].atBats[colIdx];
-  }
-
-  for (const play of plays) {
-    if (!play.about.isComplete) continue;
-    if (!play.result?.eventType) continue;
-
-    const half = play.about.halfInning;
-    const inning = play.about.inning;
-    const team = half === 'top' ? 'visiting' : 'home';
-    const colIdx = inning - 1;
-    if (colIdx >= INNINGS) continue;
-
-    const hk = `${half}-${inning}`;
-    if (hk !== halfKey) {
-      halfKey = hk;
-      baseOcc[team] = { '1B': null, '2B': null, '3B': null };
-      innOuts[team] = 0;
-    }
-
-    // Fill the batter's at-bat
-    const batterId = play.matchup?.batter?.id;
-    const bInfo = batterId ? batterMap[team][batterId] : null;
-    if (bInfo) {
-      const si = bInfo.spot * ROWS_PER_POS;
-      const player = gameState.teams[team].players[si];
-      let ab;
-      if (player.atBats[colIdx].play) {
-        ab = { bases:[false,false,false,false], advReason:['','','',''], outOnBase:null, play:'', out:0, outsRecorded:0, pitches:[], hitLoc:null, rbi:0, pitcher:0, reachedOnError:false, pitcherChangeNum:'', subChange: bInfo.isSub };
-        mlbFillAtBat(ab, play);
-        gameState.overflowAtBats.push({ team, pIdx: si, colIdx, atBat: ab });
-      } else {
-        ab = player.atBats[colIdx];
-        ab.subChange = bInfo.isSub;
-        mlbFillAtBat(ab, play);
-      }
-      if (ab.out) { innOuts[team]++; ab.outNum = innOuts[team]; }
-    }
-
-    // Deduplicate runners: always keep the last entry per runner ID.
-    // The API sometimes lists a runner twice (e.g. 1B→2B then 2B→3B on the same play);
-    // the last entry is always the final position.
-    const runnerFinal = {};
-    for (const r of (play.runners || [])) {
-      const rid = r.details?.runner?.id;
-      if (!rid) continue;
-      runnerFinal[rid] = r;
-    }
-
-    // Advance non-batter runners and count their outs
-    for (const [rid, runner] of Object.entries(runnerFinal)) {
-      if (runner.movement?.start === null) continue; // batter handled above
-      const pid = parseInt(rid);
-      const rAb = getRunnerAb(team, pid, colIdx);
-      if (!rAb) continue;
-      const end = runner.movement?.end;
-      const isOut = runner.movement?.isOut;
-      if (end === '2B' || end === '3B' || end === 'score') rAb.bases[1] = true;
-      if (end === '3B' || end === 'score') rAb.bases[2] = true;
-      if (end === 'score') { rAb.bases[0] = true; rAb.bases[1] = true; rAb.bases[2] = true; rAb.bases[3] = true; }
-      if (isOut) {
-        innOuts[team]++;
-        const ob = runner.movement?.outBase || end;
-        const bn = ob === '1B' ? 1 : ob === '2B' ? 2 : ob === '3B' ? 3 : null;
-        if (bn) rAb.outOnBase = bn;
-      }
-    }
-
-    // Rebuild base state entirely from this play's end positions (handles PRs automatically)
-    baseOcc[team] = { '1B': null, '2B': null, '3B': null };
-    for (const [rid, runner] of Object.entries(runnerFinal)) {
-      const end = runner.movement?.end;
-      if ((end === '1B' || end === '2B' || end === '3B') && !runner.movement?.isOut) {
-        baseOcc[team][end] = parseInt(rid);
-      }
-    }
-  }
-
-  // Linescore errors from API
-  const lsData = data.liveData.linescore;
-  if (lsData?.teams) {
-    if (lsData.teams.away?.errors != null) gameState.linescore.visiting.e = String(lsData.teams.away.errors);
-    if (lsData.teams.home?.errors != null) gameState.linescore.home.e = String(lsData.teams.home.errors);
-  }
-
-  // Auto-expand grid to actual innings played
-  const maxInnPlayed = plays.length ? Math.max(...plays.map(p => p.about?.inning || 1)) : 9;
-  gameState.visibleInnings = Math.min(Math.max(maxInnPlayed, 9), INNINGS);
-
-  // Apply everything to DOM
-  applyState();
-
-  // Recalculate runs per inning from at-bat data
-  ['visiting', 'home'].forEach(t => {
-    for (let col = 0; col < INNINGS; col++) updateInningRuns(t, col);
-    updateLinescoreHits(t);
-    updateLinescoreTotals(t);
-  });
-
-  autoSave();
-}
 
 /* Init */
 function init() {
