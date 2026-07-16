@@ -1,4 +1,22 @@
-const CACHE = 'scorecard-v5';
+const CACHE = 'scorecard-v6';
+
+const FONTS = [
+  'fonts/oswald-400-latin.woff2',
+  'fonts/oswald-500-latin.woff2',
+  'fonts/oswald-600-latin.woff2',
+  'fonts/oswald-700-latin.woff2',
+  'fonts/source-sans-3-400-ext.woff2',
+  'fonts/source-sans-3-400-latin.woff2',
+  'fonts/source-sans-3-500-ext.woff2',
+  'fonts/source-sans-3-500-latin.woff2',
+  'fonts/source-sans-3-600-ext.woff2',
+  'fonts/source-sans-3-600-latin.woff2',
+  'fonts/source-sans-3-700-ext.woff2',
+  'fonts/source-sans-3-700-latin.woff2',
+  'fonts/jetbrains-mono-500-latin.woff2',
+  'fonts/jetbrains-mono-600-latin.woff2',
+  'fonts/jetbrains-mono-700-latin.woff2'
+];
 
 self.addEventListener('install', e => {
   e.waitUntil(
@@ -12,7 +30,8 @@ self.addEventListener('install', e => {
         base + 'manifest.json',
         base + 'icon-192.png',
         base + 'icon-512.png',
-        base + 'icon-180.png'
+        base + 'icon-180.png',
+        ...FONTS.map(f => base + f)
       ]);
     }).then(() => self.skipWaiting())
   );
