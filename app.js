@@ -2836,7 +2836,11 @@ function renderPitcherChange(team, pIdx, innIdx) {
     el.setAttribute('data-pnum', ab.pitcherChangeNum ? '#' + ab.pitcherChangeNum : '');
   }
   const sel = document.getElementById('scm-' + team + '-' + pIdx + '-' + innIdx);
-  if (sel) sel.classList.toggle('active', !!ab.subChange);
+  if (sel) {
+    const prev = innIdx > 0 ? gameState.teams[team].players[pIdx].atBats[innIdx - 1] : null;
+    const isSubStart = !!ab.subChange && !(prev && prev.subChange);
+    sel.classList.toggle('active', isSubStart);
+  }
 }
 
 // Map a jersey number stored on a change marker back to a pitcher row index.
