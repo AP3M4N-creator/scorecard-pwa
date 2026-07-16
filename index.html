@@ -3502,7 +3502,19 @@ function switchTab(tab) {
 }
 
 /* Save / Load */
+// Debounced persistence. Play/pitch actions and typing all call autoSave(),
+// which coalesces rapid changes into a single collect + serialize + write
+// (~400ms after the last change) instead of scraping the DOM and rewriting
+// localStorage on every pitch. Call flushSave() when an immediate,
+// authoritative write is required (explicit Save, switching games, page hide).
+let _saveTimer = null;
 function autoSave() {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(flushSave, 400);
+}
+function flushSave() {
+  clearTimeout(_saveTimer);
+  _saveTimer = null;
   collectState();
   safeStorage.setItem(CURRENT_GAME_KEY, JSON.stringify(gameState));
 }
@@ -3562,7 +3574,7 @@ function collectState() {
 }
 
 function saveGame() {
-  autoSave();
+  flushSave();
   const btn = document.getElementById('save-btn');
   const orig = btn.textContent;
   btn.textContent = 'Saved!';
@@ -3720,6 +3732,7 @@ function applyState() {
 
 function newGame() {
   if (!confirm('Clear all data and start a new scorecard?')) return;
+  clearTimeout(_saveTimer); _saveTimer = null;  // drop any pending save of the outgoing game
   // Stop timer if running
   if (timerInterval) clearInterval(timerInterval);
   gameState = createEmptyState();
@@ -4398,21 +4411,21 @@ function saveAsNewGame() {
 
   saveGameLibrary(library);
   gameState.currentGameId = id;
-  autoSave();
+  flushSave();
   renderGameLibrary();
 }
 
 function loadGameFromLibrary(idx) {
   const library = getGameLibrary();
   if (!library[idx] || !library[idx].state || !library[idx].state.teams) return;
-  collectState();
+  flushSave();  // persist the outgoing game before switching
   gameState = library[idx].state;
   playHistory = [];
   redoHistory = [];
   gameOverShown = false;
   applyState();
   closeGameLibrary();
-  autoSave();
+  flushSave();
 }
 
 function deleteGameFromLibrary(idx) {
@@ -4964,19 +4977,20 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
-/* Auto-save on any input/select change */
+/* Auto-save on any input/select change (autoSave is itself debounced) */
 document.addEventListener('input', function(e) {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
-    clearTimeout(window._saveTimer);
-    window._saveTimer = setTimeout(autoSave, 500);
-  }
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') autoSave();
 });
 document.addEventListener('change', function(e) {
-  if (e.target.tagName === 'SELECT') {
-    clearTimeout(window._saveTimer);
-    window._saveTimer = setTimeout(autoSave, 500);
-  }
+  if (e.target.tagName === 'SELECT') autoSave();
 });
+
+/* Flush any pending save when the page is hidden or closed so nothing is
+   lost when backgrounding/closing the app (iOS Safari fires these reliably). */
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'hidden') flushSave();
+});
+window.addEventListener('pagehide', flushSave);
 
 /* Update team labels in linescore */
 document.getElementById('info-visiting-team')?.addEventListener('input', function() {
