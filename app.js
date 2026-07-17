@@ -1749,7 +1749,9 @@ function pushUndo(team, pIdx, innIdx) {
   const prevTab = document.querySelector('.tab-btn.active')?.dataset.tab;
   const prevRunners = {};
   gameState.teams[team].players.forEach((pl, i) => { prevRunners[i] = JSON.parse(JSON.stringify(pl.atBats[innIdx])); });
-  playHistory.push({ team, pIdx, innIdx, prevAb: JSON.parse(JSON.stringify(ab)), prevInn: JSON.parse(JSON.stringify(inn)), prevRunners, prevTab });
+  // Full batter row across all innings — captures multi-column mutations (e.g. sub lines) that span past innIdx.
+  const prevPlayerAbs = JSON.parse(JSON.stringify(gameState.teams[team].players[pIdx].atBats));
+  playHistory.push({ team, pIdx, innIdx, prevAb: JSON.parse(JSON.stringify(ab)), prevInn: JSON.parse(JSON.stringify(inn)), prevRunners, prevPlayerAbs, prevTab });
 }
 
 function snapshotForRedo(team, pIdx, innIdx) {
@@ -1758,7 +1760,27 @@ function snapshotForRedo(team, pIdx, innIdx) {
   const prevTab = document.querySelector('.tab-btn.active')?.dataset.tab;
   const prevRunners = {};
   gameState.teams[team].players.forEach((pl, i) => { prevRunners[i] = JSON.parse(JSON.stringify(pl.atBats[innIdx])); });
-  return { team, pIdx, innIdx, prevAb: JSON.parse(JSON.stringify(ab)), prevInn: JSON.parse(JSON.stringify(inn)), prevRunners, prevTab };
+  const prevPlayerAbs = JSON.parse(JSON.stringify(gameState.teams[team].players[pIdx].atBats));
+  return { team, pIdx, innIdx, prevAb: JSON.parse(JSON.stringify(ab)), prevInn: JSON.parse(JSON.stringify(inn)), prevRunners, prevPlayerAbs, prevTab };
+}
+
+// Restore a player's entire at-bat row (all innings) and re-render every cell.
+// Needed for mutations that span multiple inning columns (e.g. substitution lines).
+function restorePlayerRow(team, pIdx, prevAbs) {
+  const abs = gameState.teams[team].players[pIdx].atBats;
+  const n = Math.min(abs.length, prevAbs.length);
+  for (let c = 0; c < n; c++) {
+    const target = abs[c];
+    const src = JSON.parse(JSON.stringify(prevAbs[c]));
+    Object.keys(target).forEach(k => { if (!(k in src)) delete target[k]; });
+    Object.assign(target, src);
+    renderDiamond(team, pIdx, c);
+    renderOut(team, pIdx, c);
+    renderPlayText(team, pIdx, c);
+    renderPitches(team, pIdx, c);
+    renderPitchCount(team, pIdx, c);
+    renderPitcherChange(team, pIdx, c);
+  }
 }
 
 function restoreSnapshot(snap) {
@@ -1772,6 +1794,8 @@ function restoreSnapshot(snap) {
       Object.assign(target, src);
     });
   }
+  // Restore the batter's full row so multi-column mutations (sub lines) revert.
+  if (snap.prevPlayerAbs) restorePlayerRow(team, pIdx, snap.prevPlayerAbs);
   const inn = getInnState(team, innIdx);
   const prevInnCopy = JSON.parse(JSON.stringify(prevInn));
   Object.keys(inn).forEach(k => { if (!(k in prevInnCopy)) delete inn[k]; });
@@ -2106,7 +2130,7 @@ function clearSelectedCell() {
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
-  if (!ab.play && (!ab.pitches || !ab.pitches.length)) return;
+  if (!ab.play && (!ab.pitches || !ab.pitches.length) && !ab.subChange && !ab.pitcherChangeNum) return;
 
   const histIdx = playHistory.findIndex(h => h.team === team && h.pIdx === pIdx && h.innIdx === innIdx);
   const isLatest = histIdx !== -1 && histIdx === playHistory.length - 1;
@@ -2128,6 +2152,7 @@ function clearSelectedCell() {
         renderPitchCount(team, pi, innIdx);
       });
     }
+    if (snapshot.prevPlayerAbs) restorePlayerRow(team, pIdx, snapshot.prevPlayerAbs);
     if (snapshot.prevInn) {
       const inn = getInnState(team, innIdx);
       Object.assign(inn, JSON.parse(JSON.stringify(snapshot.prevInn)));
@@ -2164,6 +2189,13 @@ function clearSelectedCell() {
     ab.reachedOnError = false;
     ab.extraOuts = 0;
     ab.pitcherChangeNum = '';
+    // A sub line spans from here to the end of the game; clear the whole contiguous run.
+    if (ab.subChange) {
+      for (let c = innIdx; c < players[pIdx].atBats.length && players[pIdx].atBats[c].subChange; c++) {
+        players[pIdx].atBats[c].subChange = false;
+        renderPitcherChange(team, pIdx, c);
+      }
+    }
     ab.subChange = false;
     renderDiamond(team, pIdx, innIdx);
     renderOut(team, pIdx, innIdx);

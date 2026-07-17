@@ -1,4 +1,4 @@
-const CACHE = 'scorecard-v6';
+const CACHE = 'scorecard-v7';
 
 const FONTS = [
   'fonts/oswald-400-latin.woff2',
