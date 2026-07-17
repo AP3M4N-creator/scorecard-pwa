@@ -1,0 +1,20 @@
+#!/bin/sh
+# Auto-bump the service-worker cache version when app assets change.
+# Forces installed PWA clients to drop the old cache and re-precache on
+# activate, so a deploy can never leave a stale shell behind.
+#
+# Triggers on staged changes to app code, fonts, icons, or the manifest.
+# Does NOT trigger when only sw.js itself changed (e.g. a manual bump).
+
+sw="sw.js"
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+echo "$staged" | grep -Eq '^(index\.html|app\.js|styles\.css|manifest\.json|icon-[^/]*\.png|fonts/)' || exit 0
+
+current=$(grep -oE "SHELL_VERSION = 'v[0-9]+'" "$sw" | grep -oE '[0-9]+')
+[ -n "$current" ] || { echo "pre-commit: could not read SHELL_VERSION in $sw" >&2; exit 0; }
+next=$((current + 1))
+
+sed -i '' "s/SHELL_VERSION = 'v[0-9]*'/SHELL_VERSION = 'v$next'/" "$sw"
+git add "$sw"
+echo "pre-commit: assets changed -> bumped service-worker cache to v$next"
