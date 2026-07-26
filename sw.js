@@ -5,7 +5,7 @@
 //  - Fonts/icons are stale-while-revalidate: instant from cache, refreshed
 //    in the background.
 // Bump SHELL_VERSION only if you ever need to force-drop the whole cache.
-const SHELL_VERSION = 'v9';
+const SHELL_VERSION = 'v10';
 const CACHE = 'scorecard-' + SHELL_VERSION;
 
 const FONTS = [
@@ -26,6 +26,13 @@ const FONTS = [
   'fonts/jetbrains-mono-700-latin.woff2'
 ];
 
+// Third-party libs used by the PDF export. Precached (stale-while-revalidate)
+// so "Export PDF" works offline at the ballpark.
+const VENDOR = [
+  'vendor/html2canvas.min.js',
+  'vendor/jspdf.umd.min.js'
+];
+
 // Files treated as "app code": always try the network first when online.
 const SHELL = ['index.html', 'styles.css', 'app.js', 'manifest.json'];
 
@@ -39,6 +46,7 @@ self.addEventListener('install', e => {
         base + 'icon-192.png',
         base + 'icon-512.png',
         base + 'icon-180.png',
+        ...VENDOR.map(f => base + f),
         ...FONTS.map(f => base + f)
       ]);
     }).then(() => self.skipWaiting())
