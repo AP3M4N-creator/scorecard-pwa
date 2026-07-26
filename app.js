@@ -455,7 +455,7 @@ function advanceForcedRunners(team, innIdx, reason) {
 function isOutPlay(play) {
   return ['K','ꓘ','GO','SAC','DP','FC','SF','SH','IF','TP'].includes(play) ||
     /^F\d/.test(play) || /^P\d/.test(play) || /^\d+-\d/.test(play) || /^L\d/.test(play) ||
-    /^\d+$/.test(play) ||
+    /^\d+U?$/i.test(play) || /^U\d+$/i.test(play) ||
     /^DP /.test(play) || /^FC /.test(play) || /^TP /.test(play);
 }
 
@@ -777,6 +777,8 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
     html += `<div class="oc-row" data-base="${r.base}" style="margin-bottom:8px;padding:6px;background:var(--cream);border-radius:4px">`;
     html += `<div style="font-size:11px;font-weight:600;margin-bottom:4px">${r.name} <span style="color:var(--text-light)">(on ${r.fromLabel})</span></div>`;
     html += `<div style="display:flex;gap:4px;flex-wrap:wrap">`;
+    // Hold option — keep the runner on their current base (e.g. runner on 3rd during a DP)
+    html += `<button class="oc-btn" data-base="${r.base}" data-action="safe" data-dest="${r.base}" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid #ccc;border-radius:3px;background:#fff;color:#555;cursor:pointer;font-family:var(--mono)">Hold ${r.fromLabel}</button>`;
     // Safe options
     for (let d = r.base + 1; d <= 3; d++) {
       const isDefault = d === r.base + 1 && outcomes[r.base].action === 'safe';
@@ -3247,7 +3249,7 @@ function showGameSummary() {
   }
 
   const vTeam = document.getElementById('info-visiting-team')?.value || 'Visiting';
-  const hTeam = 'Home';
+  const hTeam = document.getElementById('info-home-team')?.value || 'Home';
   const date = document.getElementById('info-date')?.value || '';
   const vR = parseInt(document.querySelector('input[data-ls="visiting"][data-stat="r"]')?.value) || 0;
   const hR = parseInt(document.querySelector('input[data-ls="home"][data-stat="r"]')?.value) || 0;
