@@ -926,17 +926,3 @@ input:focus { outline: 2px solid var(--gold); outline-offset: -1px; }
   .linescore-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .grid-wrap { -webkit-overflow-scrolling: touch; }
 }
-
-@media print {
-  body { background: #fff; padding: 0; font-size: 11px; }
-  .header-actions, .quick-bar, .legend-box, .game-timer { display: none; }
-  .tab-bar { display: none; }
-  .tab-content { display: flex !important; page-break-inside: avoid; border: 1px solid #000; margin-bottom: 12px; }
-  .tab-content + .tab-content { page-break-before: always; }
-  .game-info-card, .linescore-wrap { border: 1px solid #000; }
-  .at-bat-cell { height: 80px; }
-  input { border-bottom-color: transparent !important; }
-  .sidebar { display: none; }
-  .modal-overlay { display: none !important; }
-  .spray-popup { display: none !important; }
-}
