@@ -1,11 +1,28 @@
 
 // Storage shim: use memory storage if localStorage is blocked (file:// URLs)
+// or the quota is exceeded. setItem returns true on a durable write, false when
+// it fell back to in-memory (data will be lost when the page closes) so callers
+// can warn the user instead of silently losing a game.
 const _storage = {};
 const safeStorage = {
   getItem: function(k) { try { return localStorage.getItem(k); } catch(e) { return _storage[k] || null; } },
-  setItem: function(k,v) { try { localStorage.setItem(k,v); } catch(e) { _storage[k] = v; } },
+  setItem: function(k,v) {
+    try { localStorage.setItem(k,v); return true; }
+    catch(e) { _storage[k] = v; reportStorageFailure(); return false; }
+  },
   removeItem: function(k) { try { localStorage.removeItem(k); } catch(e) { delete _storage[k]; } }
 };
+
+// Shown once when a write falls back to memory. Reveals the persistent banner
+// that warns the user their changes are not being saved on this device and
+// offers a JSON backup they can download to recover the game elsewhere.
+let _storageWarned = false;
+function reportStorageFailure() {
+  if (_storageWarned) return;
+  _storageWarned = true;
+  const banner = (typeof document !== 'undefined') && document.getElementById('storage-warning');
+  if (banner) banner.style.display = 'flex';
+}
 // Field image embedded directly in SVG
 const POSITIONS = 9;
 const ROWS_PER_POS = 2;
@@ -2494,29 +2511,33 @@ function saveGame() {
   setTimeout(() => btn.textContent = orig, 1200);
 }
 
+// Backfill any fields a persisted/imported state is missing so no downstream
+// code hits an undefined object. Mutates and returns `parsed`.
+function mergeStateDefaults(parsed) {
+  const defaults = createEmptyState();
+  if (!parsed.log) parsed.log = [];
+  if (!parsed.innings) parsed.innings = defaults.innings;
+  if (parsed.timerElapsed === undefined) parsed.timerElapsed = 0;
+  if (parsed.timerRunning === undefined) parsed.timerRunning = false;
+  // Deep merge with defaults so no fields are undefined
+  Object.keys(defaults).forEach(k => {
+    if (parsed[k] === undefined) parsed[k] = defaults[k];
+  });
+  if (!parsed.info) parsed.info = defaults.info;
+  if (!parsed.umpires) parsed.umpires = defaults.umpires;
+  if (!parsed.linescore) parsed.linescore = defaults.linescore;
+  if (!parsed.teams) parsed.teams = defaults.teams;
+  if (!parsed.innings) parsed.innings = defaults.innings;
+  if (!parsed.columnMap) parsed.columnMap = defaults.columnMap;
+  return parsed;
+}
+
 function loadState() {
   const saved = safeStorage.getItem(CURRENT_GAME_KEY);
   if (saved) {
     try {
-      const parsed = JSON.parse(saved);
-      // Merge with defaults to handle missing new fields
-      const defaults = createEmptyState();
-      if (!parsed.log) parsed.log = [];
-      if (!parsed.innings) parsed.innings = defaults.innings;
-      if (parsed.timerElapsed === undefined) parsed.timerElapsed = 0;
-      if (parsed.timerRunning === undefined) parsed.timerRunning = false;
-      // Deep merge with defaults so no fields are undefined
-      Object.keys(defaults).forEach(k => {
-        if (parsed[k] === undefined) parsed[k] = defaults[k];
-      });
-      if (!parsed.info) parsed.info = defaults.info;
-      if (!parsed.umpires) parsed.umpires = defaults.umpires;
-      if (!parsed.linescore) parsed.linescore = defaults.linescore;
-      if (!parsed.teams) parsed.teams = defaults.teams;
-      if (!parsed.innings) parsed.innings = defaults.innings;
-      if (!parsed.columnMap) parsed.columnMap = defaults.columnMap;
-      gameState = parsed;
-    } catch(e) { 
+      gameState = mergeStateDefaults(JSON.parse(saved));
+    } catch(e) {
       console.error('Failed to load state', e);
       gameState = createEmptyState();
     }
@@ -3430,6 +3451,62 @@ function deleteGameFromLibrary(idx) {
   library.splice(idx, 1);
   saveGameLibrary(library);
   renderGameLibrary();
+}
+
+/* Export / Import — offline JSON backup of the in-progress game. No
+   dependencies: a Blob download out, a file input in. Doubles as the recovery
+   path when localStorage can't persist (see reportStorageFailure). */
+function exportGameJSON() {
+  collectState();
+  const slug = s => (s || '').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase();
+  const vis = slug(gameState.info.visitingTeam) || 'visiting';
+  const hom = slug(gameState.info.homeTeam) || 'home';
+  const blob = new Blob([JSON.stringify(gameState, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `scorecard-${vis}-vs-${hom}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Delay revoke so the download has time to start (Safari/iOS).
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function importGameJSON(input) {
+  const file = input.files && input.files[0];
+  input.value = '';  // allow re-importing the same file later
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function() {
+    let parsed;
+    try {
+      parsed = JSON.parse(reader.result);
+    } catch(e) {
+      alert('That file is not valid JSON and could not be imported.');
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object' || !parsed.teams || !parsed.info) {
+      alert('That file does not look like a saved scorecard game.');
+      return;
+    }
+    collectState();  // capture live DOM edits before comparing
+    if (currentGameHasUnsavedChanges() &&
+        !confirm('The current game has unsaved changes that will be lost. Import the selected file anyway?')) {
+      return;
+    }
+    flushSave();  // persist the outgoing game before switching
+    gameState = mergeStateDefaults(parsed);
+    playHistory = [];
+    redoHistory = [];
+    gameOverShown = false;
+    applyState();
+    flushSave();
+    updateLibraryButtons();
+    closeGameLibrary();
+  };
+  reader.onerror = function() { alert('Could not read that file.'); };
+  reader.readAsText(file);
 }
 
 /* Game Summary */
