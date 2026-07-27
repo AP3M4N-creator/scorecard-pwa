@@ -23,6 +23,14 @@ function reportStorageFailure() {
   const banner = (typeof document !== 'undefined') && document.getElementById('storage-warning');
   if (banner) banner.style.display = 'flex';
 }
+// Escapes user free-text (team/player names, notes, linescore cells) before it
+// is interpolated into an innerHTML sink — the play log, saved-game library, and
+// game summary. Without this a stray '<' breaks rendering and a crafted name
+// persists as injected markup in the saved library.
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 // Field image embedded directly in SVG
 const POSITIONS = 9;
 const ROWS_PER_POS = 2;
@@ -2219,7 +2227,7 @@ function reviewEarnedRuns() {
   }
 
   const teamName = (team === 'visiting' ? gameState.info.visitingTeam : gameState.info.homeTeam) || (team === 'visiting' ? 'Visiting' : 'Home');
-  let html = `<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--navy,#1a2744);margin-bottom:8px">Earned Run Review — ${escapeErText(teamName)}, Inn ${realInn + 1}</div>`;
+  let html = `<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--navy,#1a2744);margin-bottom:8px">Earned Run Review — ${escapeHtml(teamName)}, Inn ${realInn + 1}</div>`;
 
   if (!erReviewList.length) {
     html += '<div style="font-size:12px;color:var(--text-light,#666);margin-bottom:10px">No runs scored in this inning.</div>';
@@ -2232,7 +2240,7 @@ function reviewEarnedRuns() {
       const label = (pl.num ? '#' + pl.num + ' ' : '') + (pl.name || `Batter ${r.pIdx + 1}`);
       const unearned = !!r.ab.reachedOnError;
       html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--border-light,#ddd)">';
-      html += `<div style="font-size:12px;line-height:1.3"><div style="font-weight:600">${escapeErText(label)}</div><div style="font-size:10px;color:var(--text-light,#666)">${escapeErText(describeReach(r.ab))}</div></div>`;
+      html += `<div style="font-size:12px;line-height:1.3"><div style="font-weight:600">${escapeHtml(label)}</div><div style="font-size:10px;color:var(--text-light,#666)">${escapeHtml(describeReach(r.ab))}</div></div>`;
       html += '<div style="display:flex;gap:4px;flex:0 0 auto">';
       html += `<button onclick="setRunEarnedByIndex(${i}, false)" style="padding:5px 9px;font-size:11px;font-weight:700;border:1.5px solid ${!unearned ? '#1565c0' : '#ccc'};border-radius:4px;background:${!unearned ? '#e3f2fd' : '#fff'};color:${!unearned ? '#1565c0' : '#666'};cursor:pointer">Earned</button>`;
       html += `<button onclick="setRunEarnedByIndex(${i}, true)" style="padding:5px 9px;font-size:11px;font-weight:700;border:1.5px solid ${unearned ? 'var(--accent,#c41e3a)' : '#ccc'};border-radius:4px;background:${unearned ? '#fdecef' : '#fff'};color:${unearned ? 'var(--accent,#c41e3a)' : '#666'};cursor:pointer">Unearned</button>`;
@@ -2258,11 +2266,6 @@ function setRunEarnedByIndex(idx, unearned) {
   updatePitcherStats(entry.team);
   autoSave();
   reviewEarnedRuns(); // rebuild popup to reflect the new state
-}
-
-// Minimal escaping for names/text injected into the review popup's innerHTML.
-function escapeErText(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function clearSelectedCell() {
@@ -3181,7 +3184,7 @@ function addPlayLogEntry(team, pIdx, innIdx) {
 function refreshPlayLogDisplay() {
   const el = document.getElementById('play-log');
   if (!el || !gameState.log) return;
-  el.innerHTML = (gameState.log || []).map(entry => `<div>${entry}</div>`).join('');
+  el.innerHTML = (gameState.log || []).map(entry => `<div>${escapeHtml(entry)}</div>`).join('');
   el.scrollTop = el.scrollHeight;
   const section = el.closest('.play-log-section');
   if (section) section.classList.toggle('empty', !gameState.log.length);
@@ -3345,10 +3348,10 @@ function renderGameLibrary() {
   }
   let html = '<ul class="game-list">';
   library.forEach((game, idx) => {
-    const date = game.date || 'No date';
-    const teams = game.teams || 'Unknown teams';
-    const score = game.score || '';
-    const saved = game.lastSaved ? 'Saved ' + game.lastSaved : '';
+    const date = escapeHtml(game.date || 'No date');
+    const teams = escapeHtml(game.teams || 'Unknown teams');
+    const score = escapeHtml(game.score || '');
+    const saved = game.lastSaved ? 'Saved ' + escapeHtml(game.lastSaved) : '';
     const isCurrent = game.id && game.id === gameState.currentGameId;
     html += `<li>
       <div>
@@ -3540,7 +3543,7 @@ function showGameSummary() {
     let cells = '';
     for (let i = 0; i < gsVis; i++) {
       const v = document.querySelector('input[data-ls="' + team + '"][data-inn="' + i + '"]')?.value || '';
-      cells += '<td>' + (v || '-') + '</td>';
+      cells += '<td>' + escapeHtml(v || '-') + '</td>';
     }
     return cells;
   }
@@ -3570,7 +3573,7 @@ function showGameSummary() {
     function addRow(name, posLabel, s, indent) {
       const avg = s.ab > 0 ? (s.h / s.ab).toFixed(3).replace(/^0/, '') : '-';
       const pre = indent ? '&nbsp;&nbsp;↳ ' : '';
-      rows += '<tr><td>' + pre + name + ' <span style="color:var(--text-light);font-size:10px">' + posLabel + '</span></td><td>' + s.ab + '</td><td>' + s.r + '</td><td>' + s.h + '</td><td>' + s.rbi + '</td><td>' + s.bb + '</td><td>' + s.k + '</td><td>' + avg + '</td></tr>';
+      rows += '<tr><td>' + pre + escapeHtml(name) + ' <span style="color:var(--text-light);font-size:10px">' + escapeHtml(posLabel) + '</span></td><td>' + s.ab + '</td><td>' + s.r + '</td><td>' + s.h + '</td><td>' + s.rbi + '</td><td>' + s.bb + '</td><td>' + s.k + '</td><td>' + avg + '</td></tr>';
       totAB += s.ab; totH += s.h; totR += s.r; totRBI += s.rbi; totBB += s.bb;
     }
     for (let pos = 0; pos < POSITIONS; pos++) {
@@ -3614,7 +3617,7 @@ function showGameSummary() {
       const ip = p.ip || '0';
       if (ip === '0' && !p.h && !p.k) continue;
       const name = (p.num ? '#' + p.num + ' ' : '') + (p.name || 'Pitcher ' + (i + 1));
-      rows += '<tr><td>' + name + '</td><td>' + (p.ip || '0') + '</td><td>' + (p.pc || '0') + '</td><td>' + (p.h || '0') + '</td><td>' + (p.r || '0') + '</td><td>' + (p.er || '0') + '</td><td>' + (p.k || '0') + '</td><td>' + (p.bb || '0') + '</td></tr>';
+      rows += '<tr><td>' + escapeHtml(name) + '</td><td>' + (p.ip || '0') + '</td><td>' + (p.pc || '0') + '</td><td>' + (p.h || '0') + '</td><td>' + (p.r || '0') + '</td><td>' + (p.er || '0') + '</td><td>' + (p.k || '0') + '</td><td>' + (p.bb || '0') + '</td></tr>';
     }
     return rows;
   }
@@ -3785,32 +3788,32 @@ function showGameSummary() {
 
   // Header
   html += '<div class="gs-header"><h2>Game Summary</h2>';
-  html += '<div class="gs-subtitle">' + (date || 'Date TBD') + '</div></div>';
+  html += '<div class="gs-subtitle">' + escapeHtml(date || 'Date TBD') + '</div></div>';
 
   // Score banner
   html += '<div class="gs-score-banner">';
-  html += '<div class="gs-team-score"><div class="gs-team-name">' + vTeam + '</div><div class="gs-score-num">' + vR + '</div></div>';
+  html += '<div class="gs-team-score"><div class="gs-team-name">' + escapeHtml(vTeam) + '</div><div class="gs-score-num">' + vR + '</div></div>';
   html += '<div style="text-align:center"><div class="gs-vs">vs</div><div class="gs-final-tag">Final</div></div>';
-  html += '<div class="gs-team-score"><div class="gs-team-name">' + hTeam + '</div><div class="gs-score-num">' + hR + '</div></div>';
+  html += '<div class="gs-team-score"><div class="gs-team-name">' + escapeHtml(hTeam) + '</div><div class="gs-score-num">' + hR + '</div></div>';
   html += '</div>';
 
   // Highlights row
   html += '<div class="gs-highlight">';
   if (potg) {
     html += '<div class="gs-highlight-card"><div class="gs-hl-label">Player of the Game</div>';
-    html += '<div class="gs-hl-value">' + potg.name + '</div>';
+    html += '<div class="gs-hl-value">' + escapeHtml(potg.name) + '</div>';
     if (potg.isPitcher) {
       html += '<div class="gs-hl-detail">' + potg.ip + ' IP, ' + potg.k + ' K, ' + potg.er + ' ER</div>';
     } else {
       html += '<div class="gs-hl-detail">' + potg.h + '-' + potg.ab + ', ' + potg.rbi + ' RBI, ' + potg.r + ' R' + (potg.hr ? ', ' + potg.hr + ' HR' : '') + '</div>';
     }
-    html += '<div class="gs-hl-detail" style="color:var(--text-light)">' + potg.team + '</div></div>';
+    html += '<div class="gs-hl-detail" style="color:var(--text-light)">' + escapeHtml(potg.team) + '</div></div>';
   }
   if (decisions.wp) {
     html += '<div class="gs-highlight-card"><div class="gs-hl-label">Pitching Decision</div>';
-    html += '<div class="gs-pitching-line"><b>W:</b> ' + decisions.wp + '</div>';
-    html += '<div class="gs-pitching-line"><b>L:</b> ' + decisions.lp + '</div>';
-    if (decisions.sv) html += '<div class="gs-pitching-line"><b>SV:</b> ' + decisions.sv + '</div>';
+    html += '<div class="gs-pitching-line"><b>W:</b> ' + escapeHtml(decisions.wp) + '</div>';
+    html += '<div class="gs-pitching-line"><b>L:</b> ' + escapeHtml(decisions.lp) + '</div>';
+    if (decisions.sv) html += '<div class="gs-pitching-line"><b>SV:</b> ' + escapeHtml(decisions.sv) + '</div>';
     html += '</div>';
   }
   html += '</div>';
@@ -3820,30 +3823,30 @@ function showGameSummary() {
   html += '<table class="gs-table"><thead><tr><th></th>';
   for (let i = 1; i <= gsVis; i++) html += '<th>' + i + '</th>';
   html += '<th>R</th><th>H</th><th>E</th></tr></thead><tbody>';
-  html += '<tr><td>' + vTeam + '</td>' + lsRow('visiting') + '<td><b>' + vR + '</b></td><td>' + vH + '</td><td>' + vE + '</td></tr>';
-  html += '<tr><td>' + hTeam + '</td>' + lsRow('home') + '<td><b>' + hR + '</b></td><td>' + hH + '</td><td>' + hE + '</td></tr>';
+  html += '<tr><td>' + escapeHtml(vTeam) + '</td>' + lsRow('visiting') + '<td><b>' + vR + '</b></td><td>' + vH + '</td><td>' + vE + '</td></tr>';
+  html += '<tr><td>' + escapeHtml(hTeam) + '</td>' + lsRow('home') + '<td><b>' + hR + '</b></td><td>' + hH + '</td><td>' + hE + '</td></tr>';
   html += '</tbody></table></div>';
 
   // Box score — Visiting
-  html += '<div class="gs-section"><h3>' + vTeam + ' — Batting</h3>';
+  html += '<div class="gs-section"><h3>' + escapeHtml(vTeam) + ' — Batting</h3>';
   html += '<table class="gs-table"><thead><tr><th>Player</th><th>AB</th><th>R</th><th>H</th><th>RBI</th><th>BB</th><th>K</th><th>AVG</th></tr></thead><tbody>';
   html += playerBox('visiting', vTeam);
   html += '</tbody></table></div>';
 
   // Box score — Home
-  html += '<div class="gs-section"><h3>' + hTeam + ' — Batting</h3>';
+  html += '<div class="gs-section"><h3>' + escapeHtml(hTeam) + ' — Batting</h3>';
   html += '<table class="gs-table"><thead><tr><th>Player</th><th>AB</th><th>R</th><th>H</th><th>RBI</th><th>BB</th><th>K</th><th>AVG</th></tr></thead><tbody>';
   html += playerBox('home', hTeam);
   html += '</tbody></table></div>';
 
   // Pitching — Visiting pitchers
-  html += '<div class="gs-section"><h3>' + vTeam + ' — Pitching</h3>';
+  html += '<div class="gs-section"><h3>' + escapeHtml(vTeam) + ' — Pitching</h3>';
   html += '<table class="gs-table"><thead><tr><th>Pitcher</th><th>IP</th><th>PC</th><th>H</th><th>R</th><th>ER</th><th>K</th><th>BB</th></tr></thead><tbody>';
   html += pitcherBox('visiting');
   html += '</tbody></table></div>';
 
   // Pitching — Home pitchers
-  html += '<div class="gs-section"><h3>' + hTeam + ' — Pitching</h3>';
+  html += '<div class="gs-section"><h3>' + escapeHtml(hTeam) + ' — Pitching</h3>';
   html += '<table class="gs-table"><thead><tr><th>Pitcher</th><th>IP</th><th>PC</th><th>H</th><th>R</th><th>ER</th><th>K</th><th>BB</th></tr></thead><tbody>';
   html += pitcherBox('home');
   html += '</tbody></table></div>';
@@ -3860,7 +3863,7 @@ function showGameSummary() {
     for (const dc of sorted) {
       const teamName = dc.team === 'visiting' ? vTeam : hTeam;
       for (const c of dc.changes) {
-        html += '<tr><td>' + dc.inning + '</td><td>' + teamName + '</td><td>' + c.name + '</td><td>' + c.fromPos + '</td><td>' + c.toPos + '</td></tr>';
+        html += '<tr><td>' + escapeHtml(dc.inning) + '</td><td>' + escapeHtml(teamName) + '</td><td>' + escapeHtml(c.name) + '</td><td>' + escapeHtml(c.fromPos) + '</td><td>' + escapeHtml(c.toPos) + '</td></tr>';
       }
     }
     html += '</tbody></table></div>';
@@ -3870,7 +3873,7 @@ function showGameSummary() {
   if (notable.length > 0) {
     html += '<div class="gs-section"><h3>Notable Plays</h3>';
     html += '<div class="gs-plays">';
-    notable.forEach(p => { html += '<span>' + p + '</span> '; });
+    notable.forEach(p => { html += '<span>' + escapeHtml(p) + '</span> '; });
     html += '</div></div>';
   }
 
