@@ -27,6 +27,7 @@ function createEmptyState() {
     umpires: { hp:'', '1b':'', '2b':'', '3b':'' },
     notes: '',
     currentGameId: null,
+    lastSaved: null,
     timerStart: null,
     timerElapsed: 0,
     timerRunning: false,
@@ -3168,6 +3169,17 @@ function openGameLibrary() {
   const modal = document.getElementById('game-library-modal');
   modal.classList.add('active');
   renderGameLibrary();
+  updateLibraryButtons();
+}
+
+// Show the "Update Saved Game" button only when the game in progress
+// corresponds to an existing library entry.
+function updateLibraryButtons() {
+  const btn = document.getElementById('lib-update-btn');
+  if (!btn) return;
+  const inLibrary = gameState.currentGameId &&
+    getGameLibrary().some(g => g.id === gameState.currentGameId);
+  btn.style.display = inLibrary ? '' : 'none';
 }
 
 function closeGameLibrary() {
@@ -3178,7 +3190,7 @@ function renderGameLibrary() {
   const library = getGameLibrary();
   const listEl = document.getElementById('game-library-list');
   if (library.length === 0) {
-    listEl.innerHTML = '<p style="font-size:12px;color:var(--text-light);padding:10px">No saved games yet. Click "Save Current as New" to save this game.</p>';
+    listEl.innerHTML = '<p style="font-size:12px;color:var(--text-light);padding:10px">No saved games yet. Click "Save as New Game" to save this game.</p>';
     return;
   }
   let html = '<ul class="game-list">';
@@ -3186,10 +3198,13 @@ function renderGameLibrary() {
     const date = game.date || 'No date';
     const teams = game.teams || 'Unknown teams';
     const score = game.score || '';
+    const saved = game.lastSaved ? 'Saved ' + game.lastSaved : '';
+    const isCurrent = game.id && game.id === gameState.currentGameId;
     html += `<li>
       <div>
-        <div class="game-info-text">${teams}</div>
+        <div class="game-info-text">${teams}${isCurrent ? ' <span style="color:var(--navy);font-weight:600">● current</span>' : ''}</div>
         <div class="game-date">${date} ${score ? '| ' + score : ''}</div>
+        ${saved ? `<div class="game-date">${saved}</div>` : ''}
       </div>
       <div>
         <button class="load-btn" onclick="loadGameFromLibrary(${idx})">Load</button>
@@ -3201,33 +3216,74 @@ function renderGameLibrary() {
   listEl.innerHTML = html;
 }
 
-function saveAsNewGame() {
-  collectState();
-  const library = getGameLibrary();
+// Build a library entry (metadata + deep-copied state) from the current game.
+// Stamps `lastSaved` onto the live state first so it travels into the snapshot.
+function buildLibraryEntry(id) {
   const vis = gameState.info.visitingTeam || 'Visiting';
   const hom = gameState.info.homeTeam || 'Home';
   const vR = document.querySelector('input[data-ls="visiting"][data-stat="r"]');
   const hR = document.querySelector('input[data-ls="home"][data-stat="r"]');
   const score = `${vR ? vR.value || 0 : 0} - ${hR ? hR.value || 0 : 0}`;
-  const id = Date.now().toString(36);
-
-  library.push({
+  gameState.lastSaved = new Date().toLocaleString();
+  return {
     id: id,
     date: gameState.info.date || new Date().toLocaleDateString(),
     teams: `${vis} vs ${hom}`,
     score: score,
+    lastSaved: gameState.lastSaved,
     state: JSON.parse(JSON.stringify(gameState))
-  });
+  };
+}
 
+function saveAsNewGame() {
+  collectState();
+  const library = getGameLibrary();
+  const id = Date.now().toString(36);
+  gameState.currentGameId = id;   // set before snapshot so it's captured
+  library.push(buildLibraryEntry(id));
   saveGameLibrary(library);
-  gameState.currentGameId = id;
   flushSave();
   renderGameLibrary();
+  updateLibraryButtons();
+}
+
+// Replace the existing library entry for the current game in place. Falls back
+// to saving a new game if the current id no longer matches any entry.
+function updateSavedGame() {
+  collectState();
+  const library = getGameLibrary();
+  const idx = library.findIndex(g => g.id === gameState.currentGameId);
+  if (idx === -1) { saveAsNewGame(); return; }
+  library[idx] = buildLibraryEntry(gameState.currentGameId);
+  saveGameLibrary(library);
+  flushSave();
+  renderGameLibrary();
+  updateLibraryButtons();
+}
+
+// Serialize state for change-detection, ignoring the save timestamp.
+function stateSignature(state) {
+  const clone = JSON.parse(JSON.stringify(state));
+  delete clone.lastSaved;
+  return JSON.stringify(clone);
+}
+
+// True if the in-progress game differs from its saved library snapshot.
+function currentGameHasUnsavedChanges() {
+  if (!gameState.currentGameId) return false;
+  const entry = getGameLibrary().find(g => g.id === gameState.currentGameId);
+  if (!entry || !entry.state) return false;
+  return stateSignature(gameState) !== stateSignature(entry.state);
 }
 
 function loadGameFromLibrary(idx) {
   const library = getGameLibrary();
   if (!library[idx] || !library[idx].state || !library[idx].state.teams) return;
+  collectState();  // capture live DOM edits before comparing
+  if (currentGameHasUnsavedChanges() &&
+      !confirm('The current game has unsaved changes that will be lost. Load the selected game anyway?')) {
+    return;
+  }
   flushSave();  // persist the outgoing game before switching
   gameState = library[idx].state;
   playHistory = [];
@@ -3236,6 +3292,7 @@ function loadGameFromLibrary(idx) {
   applyState();
   closeGameLibrary();
   flushSave();
+  updateLibraryButtons();
 }
 
 function deleteGameFromLibrary(idx) {
