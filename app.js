@@ -16,6 +16,9 @@ const STANDINGS_ROWS = 5;
 let selectedCell = null;
 let gameState = createEmptyState();
 
+// Identity column->inning map sized to INNINGS ([0,1,2,...,INNINGS-1]).
+function defaultColumnMap() { return Array.from({ length: INNINGS }, (_, i) => i); }
+
 function createEmptyState() {
   const makeAtBat = () => ({ bases:[false,false,false,false], advReason:['','','',''], outOnBase:null, play:'', out:0, outsRecorded:0, pitches:[], hitLoc:null, rbi:0, pitcher:0, reachedOnError:false, pitcherChangeNum:'', subChange:false });
   const makeInning = () => ({ outs:0, bases:[null,null,null], currentPitcher:0, lob:0 });
@@ -29,8 +32,8 @@ function createEmptyState() {
     timerRunning: false,
     log: [],
     linescore: {
-      visiting: { innings: Array(14).fill(''), r:'', h:'', e:'' },
-      home: { innings: Array(14).fill(''), r:'', h:'', e:'' }
+      visiting: { innings: Array(INNINGS).fill(''), r:'', h:'', e:'' },
+      home: { innings: Array(INNINGS).fill(''), r:'', h:'', e:'' }
     },
     visibleInnings: 9,
     standings: Array(STANDINGS_ROWS).fill(null).map(() => ({ team:'', rec:'', gb:'' })),
@@ -59,8 +62,8 @@ function createEmptyState() {
       }
     },
     columnMap: {
-      visiting: [0,1,2,3,4,5,6,7,8,9,10,11,12,13],
-      home: [0,1,2,3,4,5,6,7,8,9,10,11,12,13]
+      visiting: defaultColumnMap(),
+      home: defaultColumnMap()
     },
     nextLeadoff: {},
     overflowAtBats: [],
@@ -80,7 +83,7 @@ function getOverflowForInning(team, colIdx) {
 
 /* Column-to-inning mapping helpers */
 function getRealInning(team, colIdx) {
-  if (!gameState.columnMap) gameState.columnMap = { visiting:[0,1,2,3,4,5,6,7,8,9,10,11,12,13], home:[0,1,2,3,4,5,6,7,8,9,10,11,12,13] };
+  if (!gameState.columnMap) gameState.columnMap = { visiting:defaultColumnMap(), home:defaultColumnMap() };
   return gameState.columnMap[team][colIdx] ?? colIdx;
 }
 
@@ -212,12 +215,20 @@ function buildPitcherTable(team, containerId) {
 }
 
 function buildLinescore() {
+  // Header: one inning column per INNINGS, then R/H/E/LOB.
+  const headerRow = document.getElementById('ls-header-row');
+  if (headerRow) {
+    let ths = '<th class="team-col"></th>';
+    for (let i = 0; i < INNINGS; i++) ths += `<th data-inn-col="${i}">${i + 1}</th>`;
+    ths += '<th>R</th><th>H</th><th>E</th><th>LOB</th>';
+    headerRow.innerHTML = ths;
+  }
   const teams = ['visiting','home'];
   teams.forEach(t => {
     const row = document.getElementById(`ls-${t}`);
     const existing = row.querySelector('.team-col');
     let html = '';
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < INNINGS; i++) {
       html += `<td data-inn-col="${i}"><input type="text" data-ls="${t}" data-inn="${i}" maxlength="3" oninput="updateLinescoreTotals('${t}')"></td>`;
     }
     html += `<td class="total"><input type="text" data-ls="${t}" data-stat="r" readonly tabindex="-1"></td>`;
@@ -1101,7 +1112,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback) {
 
 function updateInningRuns(team, innIdx) {
   const realInning = getRealInning(team, innIdx);
-  if (realInning >= 14) return;
+  if (realInning >= INNINGS) return;
   const players = gameState.teams[team].players;
   // Count runs across ALL columns that belong to this real inning
   const cols = getColumnsForInning(team, realInning);
@@ -1162,7 +1173,7 @@ function overflowToNextColumn(team, innIdx) {
   if (nextCol >= INNINGS) return;
 
   // Mark the next column as a continuation of the same real inning
-  if (!gameState.columnMap) gameState.columnMap = { visiting:[0,1,2,3,4,5,6,7,8,9,10,11,12,13], home:[0,1,2,3,4,5,6,7,8,9,10,11,12,13] };
+  if (!gameState.columnMap) gameState.columnMap = { visiting:defaultColumnMap(), home:defaultColumnMap() };
   const realInning = getRealInning(team, innIdx);
   // Shift all subsequent column mappings right by 1 (insert overflow)
   for (let c = INNINGS - 1; c > nextCol; c--) {
@@ -2226,8 +2237,8 @@ function highlightLinescore(team, innIdx) {
   const rows = document.querySelectorAll('.linescore tbody tr');
   if (rows[row]) {
     const cells = rows[row].querySelectorAll('td');
-    // cells[0] is team name, cells[1-10] are innings, cells[11-13] are R/H/E
-    if (realInn < 10 && cells[realInn + 1]) {
+    // cells[0] is team name, cells[1..INNINGS] are innings, then R/H/E/LOB
+    if (realInn < INNINGS && cells[realInn + 1]) {
       cells[realInn + 1].classList.add('ls-active');
     }
   }
@@ -2235,10 +2246,10 @@ function highlightLinescore(team, innIdx) {
 
 function fillLinescoreZeros() {
   ['visiting', 'home'].forEach(team => {
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < INNINGS; i++) {
       const realInn = getRealInning(team, i);
       const inp = document.querySelector(`input[data-ls="${team}"][data-inn="${realInn}"]`);
-      if (!inp || realInn >= 10) continue;
+      if (!inp || realInn >= INNINGS) continue;
       const inn = getInnState(team, i);
       if (inn.outs >= 3 && inp.value === '') {
         inp.value = '0';
@@ -2250,7 +2261,7 @@ function fillLinescoreZeros() {
 
 function updateLinescoreTotals(team) {
   let r = 0;
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < INNINGS; i++) {
     const inp = document.querySelector(`input[data-ls="${team}"][data-inn="${i}"]`);
     if (!inp) continue;
     const val = parseInt(inp.value) || 0;
@@ -2419,9 +2430,13 @@ function applyState() {
   if (!gameState.visibleInnings) gameState.visibleInnings = 9;
   const makeAtBat = () => ({ bases:[false,false,false,false], advReason:['','','',''], outOnBase:null, play:'', out:0, outsRecorded:0, pitches:[], hitLoc:null, rbi:0, pitcher:0, reachedOnError:false, pitcherChangeNum:'', subChange:false });
   ['visiting','home'].forEach(t => {
-    if (gameState.linescore[t] && gameState.linescore[t].innings.length < 14) {
-      const ext = Array(14 - gameState.linescore[t].innings.length).fill('');
+    if (gameState.linescore[t] && gameState.linescore[t].innings.length < INNINGS) {
+      const ext = Array(INNINGS - gameState.linescore[t].innings.length).fill('');
       gameState.linescore[t].innings = gameState.linescore[t].innings.concat(ext);
+    }
+    // Extend an older/shorter column map so extra-inning columns map to themselves
+    if (gameState.columnMap && gameState.columnMap[t]) {
+      for (let c = gameState.columnMap[t].length; c < INNINGS; c++) gameState.columnMap[t][c] = c;
     }
     // Extend player atBat arrays if loaded from older save with fewer innings
     if (gameState.teams && gameState.teams[t]) {
@@ -3814,6 +3829,9 @@ function init() {
   loadState();
 }
 
+// tests.html sets window.__NO_AUTO_INIT__ so it can load app.js and exercise
+// the scoring functions against a minimal DOM without booting the whole app.
+if (!(typeof window !== 'undefined' && window.__NO_AUTO_INIT__)) {
 init();
 
 if ('serviceWorker' in navigator) {
@@ -3832,4 +3850,5 @@ if ('serviceWorker' in navigator) {
     reloading = true;
     window.location.reload();
   });
+}
 }

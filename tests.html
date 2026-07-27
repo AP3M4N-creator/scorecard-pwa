@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scorecard — Regression Tests</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; background: #111; color: #eee; }
+  h1 { font-size: 20px; }
+  #summary { font-size: 18px; font-weight: 700; margin: 12px 0; padding: 8px 12px; border-radius: 6px; }
+  #summary.pass { background: #16391b; color: #7CFC9A; }
+  #summary.fail { background: #4a1616; color: #ff9a9a; }
+  ul { list-style: none; padding: 0; }
+  li { padding: 4px 8px; border-bottom: 1px solid #333; font-family: ui-monospace, monospace; font-size: 13px; }
+  li.pass::before { content: "✓ "; color: #7CFC9A; }
+  li.fail::before { content: "✗ "; color: #ff6b6b; }
+  li.fail { color: #ff9a9a; }
+  /* The linescore table under test — hidden, only its DOM matters. */
+  #harness { position: absolute; left: -9999px; top: 0; }
+</style>
+</head>
+<body>
+<h1>Scorecard — Extra innings &amp; totals regression tests</h1>
+<div id="summary">Running…</div>
+<ul id="results"></ul>
+
+<!-- Minimal linescore DOM the scoring functions operate on. buildLinescore()
+     fills #ls-header-row and the two body rows with INNINGS columns. -->
+<div id="harness">
+  <table class="linescore">
+    <thead>
+      <tr id="ls-header-row"><th class="team-col"></th><th>R</th><th>H</th><th>E</th><th>LOB</th></tr>
+    </thead>
+    <tbody>
+      <tr id="ls-visiting"><td class="team-col" id="ls-visiting-name">Visiting</td></tr>
+      <tr id="ls-home"><td class="team-col"><span id="ls-h-label">Home</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<script>window.__NO_AUTO_INIT__ = true;</script>
+<script src="app.js"></script>
+<script>
+(function () {
+  const results = [];
+  function check(name, cond) { results.push({ name, pass: !!cond }); }
+  function eq(name, actual, expected) {
+    results.push({ name: `${name} (expected ${expected}, got ${actual})`, pass: actual === expected });
+  }
+
+  // Reset the shared gameState object in place (can't reassign the module's
+  // `let gameState`, so mutate the same reference to a fresh empty state).
+  function resetState() {
+    const fresh = createEmptyState();
+    for (const k of Object.keys(gameState)) delete gameState[k];
+    Object.assign(gameState, fresh);
+    buildLinescore(); // rebuild header + input cells for the current INNINGS
+  }
+
+  // Mark one at-bat in a real inning as a run scored (all four bases, no out).
+  function scoreRun(team, innIdx, playerIdx) {
+    const ab = gameState.teams[team].players[playerIdx].atBats[innIdx];
+    ab.bases = [true, true, true, true];
+    ab.outOnBase = null;
+    ab.play = '1B';
+  }
+
+  function lsInput(team, innIdx) {
+    return document.querySelector(`input[data-ls="${team}"][data-inn="${innIdx}"]`);
+  }
+  function rTotal(team) {
+    const el = document.querySelector(`input[data-ls="${team}"][data-stat="r"]`);
+    return el ? el.value : '(no R input)';
+  }
+
+  // --- Sanity: INNINGS-derived DOM ---
+  resetState();
+  eq('linescore builds one input column per INNINGS',
+     document.querySelectorAll('input[data-ls="visiting"][data-inn]').length, INNINGS);
+  eq('header has one inning <th> per INNINGS',
+     document.querySelectorAll('#ls-header-row th[data-inn-col]').length, INNINGS);
+  check('a 15th-inning (index 14) input column exists', !!lsInput('visiting', 14));
+
+  // --- Core bug: runs in innings 10, 11, 14, 15 must reach the R total ---
+  // Inning numbers 10, 11, 14, 15 -> zero-based indices 9, 10, 13, 14.
+  const cases = [
+    { innNum: 10, idx: 9 },
+    { innNum: 11, idx: 10 },
+    { innNum: 14, idx: 13 },
+    { innNum: 15, idx: 14 },
+  ];
+
+  // Each inning individually contributes its run to R.
+  cases.forEach(({ innNum, idx }) => {
+    resetState();
+    scoreRun('visiting', idx, 0);
+    updateInningRuns('visiting', idx);
+    eq(`run in inning ${innNum} lands in its own linescore column`,
+       lsInput('visiting', idx).value, '1');
+    eq(`run in inning ${innNum} reaches the R total`, rTotal('visiting'), '1');
+  });
+
+  // All four together sum correctly (this is the regression: pre-fix the R
+  // total capped at inning 10 and dropped 11/14/15, reading '1' instead of '4').
+  resetState();
+  cases.forEach(({ idx }, i) => scoreRun('visiting', idx, i)); // distinct batters
+  cases.forEach(({ idx }) => updateInningRuns('visiting', idx));
+  eq('runs in innings 10+11+14+15 all reach the R total', rTotal('visiting'), '4');
+
+  // Multiple runs within a single extra inning.
+  resetState();
+  scoreRun('home', 14, 0);
+  scoreRun('home', 14, 1);
+  scoreRun('home', 14, 2);
+  updateInningRuns('home', 14);
+  eq('three runs in the 15th sum in that column', lsInput('home', 14).value, '3');
+  eq('three runs in the 15th reach the R total', rTotal('home'), '3');
+
+  // Mapping: an overflow column pointing back to a real inning is summed once,
+  // not double-counted. Column 5 continues real inning 4 (index 3).
+  resetState();
+  gameState.columnMap.visiting[5] = 3;       // column 5 belongs to real inning index 3
+  scoreRun('visiting', 3, 0);                // run in the inning's first column
+  const ab5 = gameState.teams.visiting.players[1].atBats[5];
+  ab5.bases = [true, true, true, true]; ab5.outOnBase = null; ab5.play = '1B'; // run in overflow col
+  updateInningRuns('visiting', 3);
+  eq('batted-around inning consolidates both columns into one linescore cell',
+     lsInput('visiting', 3).value, '2');
+  eq('batted-around inning is not double-counted in R', rTotal('visiting'), '2');
+
+  // --- Render ---
+  const passed = results.filter(r => r.pass).length;
+  const failed = results.length - passed;
+  const summary = document.getElementById('summary');
+  summary.textContent = failed === 0
+    ? `All ${passed} assertions passed`
+    : `${failed} of ${results.length} assertions FAILED`;
+  summary.className = failed === 0 ? 'pass' : 'fail';
+  const ul = document.getElementById('results');
+  results.forEach(r => {
+    const li = document.createElement('li');
+    li.className = r.pass ? 'pass' : 'fail';
+    li.textContent = r.name;
+    ul.appendChild(li);
+  });
+})();
+</script>
+</body>
+</html>

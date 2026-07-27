@@ -58,11 +58,9 @@
     <h3 style="display:flex;align-items:center;gap:6px">Linescore <button id="add-extra-inn-btn" class="ei-btn" onclick="addExtraInning()" style="display:none">+EI</button></h3>
     <table class="linescore">
       <thead>
-        <tr>
+        <!-- Inning header cells are generated from the INNINGS constant in buildLinescore() -->
+        <tr id="ls-header-row">
           <th class="team-col"></th>
-          <th data-inn-col="0">1</th><th data-inn-col="1">2</th><th data-inn-col="2">3</th><th data-inn-col="3">4</th><th data-inn-col="4">5</th>
-          <th data-inn-col="5">6</th><th data-inn-col="6">7</th><th data-inn-col="7">8</th><th data-inn-col="8">9</th><th data-inn-col="9">10</th>
-          <th data-inn-col="10">11</th><th data-inn-col="11">12</th><th data-inn-col="12">13</th><th data-inn-col="13">14</th>
           <th>R</th><th>H</th><th>E</th><th>LOB</th>
         </tr>
       </thead>
