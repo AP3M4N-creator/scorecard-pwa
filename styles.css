@@ -432,6 +432,13 @@ input:focus { outline: 2px solid var(--gold); outline-offset: -1px; }
 }
 .pitcher-grid td.p-name input { text-align: left; padding-left: 6px; font-family: var(--font); font-weight: 500; }
 .pitcher-grid td.p-stat { width: 38px; }
+/* ER cell flagged for manual earned/unearned review */
+.pitcher-grid td.p-stat.er-review { position: relative; background: rgba(196,30,58,0.12); }
+.pitcher-grid td.p-stat.er-review::after {
+  content: ''; position: absolute; top: 0; right: 0;
+  border-width: 0 7px 7px 0; border-style: solid;
+  border-color: transparent var(--accent) transparent transparent; pointer-events: none;
+}
 
 /* Standings */
 .standings-box { border: 1.5px solid var(--border); border-radius: 3px; padding: 6px; }

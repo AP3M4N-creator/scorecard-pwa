@@ -2123,19 +2123,129 @@ function adjustRBI(delta) {
   autoSave();
 }
 
-/* Feature 8: Toggle earned/unearned run */
-function toggleEarnedRun() {
+/* Feature 8: Earned/unearned run review (per-run, per-inning) */
+
+// Collect every scored run for a batting team in a given real inning.
+// Returns entries [{ team, pIdx, colIdx, ab, overflow }] in batting-order-ish
+// column order. Includes batting-around overflow at-bats.
+function collectScoredRuns(battingTeam, realInn) {
+  const players = gameState.teams[battingTeam].players;
+  const cols = getColumnsForInning(battingTeam, realInn);
+  const runs = [];
+  const scored = ab => ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null;
+  for (const col of cols) {
+    for (let pIdx = 0; pIdx < players.length; pIdx++) {
+      const ab = players[pIdx].atBats[col];
+      if (scored(ab)) runs.push({ team: battingTeam, pIdx, colIdx: col, ab, overflow: false });
+    }
+    for (const oa of getOverflowForInning(battingTeam, col)) {
+      if (scored(oa.atBat)) runs.push({ team: battingTeam, pIdx: oa.pIdx, colIdx: col, ab: oa.atBat, overflow: true });
+    }
+  }
+  return runs;
+}
+
+// An inning's earned-run count is "provisional" when it scored runs AND contains
+// an error signal (error play, a run flagged reached-on-error via error/PB, or
+// catcher's interference). The auto ER count can't apply the "inning would have
+// ended but for the error" rule, so a human should confirm which runs are earned.
+function inningErProvisional(battingTeam, realInn) {
+  if (!collectScoredRuns(battingTeam, realInn).length) return false;
+  const players = gameState.teams[battingTeam].players;
+  const cols = getColumnsForInning(battingTeam, realInn);
+  const hasSignal = ab => ab.reachedOnError || isErrorPlay(ab.play) || ab.play === 'CI';
+  for (const col of cols) {
+    for (const player of players) {
+      if (hasSignal(player.atBats[col])) return true;
+    }
+    for (const oa of getOverflowForInning(battingTeam, col)) {
+      if (hasSignal(oa.atBat)) return true;
+    }
+  }
+  return false;
+}
+
+function describeReach(ab) {
+  const p = ab.play || '';
+  if (isErrorPlay(p)) return 'reached on error';
+  if (p === '1B') return 'single';
+  if (p === '2B') return 'double';
+  if (p === '3B') return 'triple';
+  if (p === 'HR') return 'home run';
+  if (p === 'BB') return 'walk';
+  if (p === 'IBB') return 'intentional walk';
+  if (p === 'HBP') return 'hit by pitch';
+  if (p === 'FC') return "fielder's choice";
+  if (p === 'CI') return "catcher's interference";
+  if (ab.reachedOnError) return 'reached (unearned)';
+  if (p) return p;
+  return 'reached base';
+}
+
+// Backing list for the review popup so onclick can address the exact at-bat
+// (including overflow at-bats that don't live in players[].atBats).
+let erReviewList = [];
+
+function reviewEarnedRuns() {
   if (!selectedCell) return;
   const team = selectedCell.dataset.team;
-  const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
-  const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
-  if (!ab.bases || !ab.bases[3]) return;
-  pushUndo(team, pIdx, innIdx);
-  ab.reachedOnError = !ab.reachedOnError;
-  renderDiamond(team, pIdx, innIdx);
-  updatePitcherStats(team);
+  const realInn = getRealInning(team, innIdx);
+  erReviewList = collectScoredRuns(team, realInn);
+
+  let popup = document.getElementById('er-review-popup');
+  if (!popup) {
+    popup = document.createElement('div');
+    popup.id = 'er-review-popup';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card,#fff);border:2px solid var(--navy,#1a2744);border-radius:8px;padding:14px 16px;z-index:400;box-shadow:0 8px 40px rgba(0,0,0,0.35);min-width:280px;max-width:360px;font-family:var(--font)';
+    document.body.appendChild(popup);
+  }
+
+  const teamName = (team === 'visiting' ? gameState.info.visitingTeam : gameState.info.homeTeam) || (team === 'visiting' ? 'Visiting' : 'Home');
+  let html = `<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--navy,#1a2744);margin-bottom:8px">Earned Run Review — ${escapeErText(teamName)}, Inn ${realInn + 1}</div>`;
+
+  if (!erReviewList.length) {
+    html += '<div style="font-size:12px;color:var(--text-light,#666);margin-bottom:10px">No runs scored in this inning.</div>';
+  } else {
+    if (inningErProvisional(team, realInn)) {
+      html += '<div style="font-size:11px;color:var(--accent,#c41e3a);margin-bottom:10px;line-height:1.4">This inning had an error, passed ball, or interference. Mark any run that would <b>not</b> have scored without it as <b>unearned</b>.</div>';
+    }
+    erReviewList.forEach((r, i) => {
+      const pl = gameState.teams[team].players[r.pIdx];
+      const label = (pl.num ? '#' + pl.num + ' ' : '') + (pl.name || `Batter ${r.pIdx + 1}`);
+      const unearned = !!r.ab.reachedOnError;
+      html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--border-light,#ddd)">';
+      html += `<div style="font-size:12px;line-height:1.3"><div style="font-weight:600">${escapeErText(label)}</div><div style="font-size:10px;color:var(--text-light,#666)">${escapeErText(describeReach(r.ab))}</div></div>`;
+      html += '<div style="display:flex;gap:4px;flex:0 0 auto">';
+      html += `<button onclick="setRunEarnedByIndex(${i}, false)" style="padding:5px 9px;font-size:11px;font-weight:700;border:1.5px solid ${!unearned ? '#1565c0' : '#ccc'};border-radius:4px;background:${!unearned ? '#e3f2fd' : '#fff'};color:${!unearned ? '#1565c0' : '#666'};cursor:pointer">Earned</button>`;
+      html += `<button onclick="setRunEarnedByIndex(${i}, true)" style="padding:5px 9px;font-size:11px;font-weight:700;border:1.5px solid ${unearned ? 'var(--accent,#c41e3a)' : '#ccc'};border-radius:4px;background:${unearned ? '#fdecef' : '#fff'};color:${unearned ? 'var(--accent,#c41e3a)' : '#666'};cursor:pointer">Unearned</button>`;
+      html += '</div></div>';
+    });
+  }
+  html += '<button onclick="document.getElementById(\'er-review-popup\').style.display=\'none\'" style="margin-top:10px;width:100%;padding:6px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Done</button>';
+
+  popup.innerHTML = html;
+  popup.style.display = 'block';
+}
+
+function setRunEarnedByIndex(idx, unearned) {
+  const entry = erReviewList[idx];
+  if (!entry) return;
+  const ab = entry.ab;
+  if (!!ab.reachedOnError === !!unearned) return; // no change
+  // Overflow at-bats aren't captured by the column-based undo snapshot; toggle
+  // them directly. Regular at-bats get a normal undo entry.
+  if (!entry.overflow) pushUndo(entry.team, entry.pIdx, entry.colIdx);
+  ab.reachedOnError = !!unearned;
+  if (!entry.overflow) renderDiamond(entry.team, entry.pIdx, entry.colIdx);
+  updatePitcherStats(entry.team);
   autoSave();
+  reviewEarnedRuns(); // rebuild popup to reflect the new state
+}
+
+// Minimal escaping for names/text injected into the review popup's innerHTML.
+function escapeErText(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function clearSelectedCell() {
@@ -2670,16 +2780,24 @@ function updatePitcherStats(battingTeam) {
   const pitchers = gameState.teams[pitchingTeam].pitchers;
   const stats = {};
   for (let i = 0; i < PITCHER_ROWS; i++) {
-    stats[i] = { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0 };
+    stats[i] = { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0, prov: false };
+  }
+
+  // Innings whose ER total is provisional (contained an error/PB/CI) — a run
+  // scored in one of these flags its pitcher for manual ER review.
+  const provInnings = new Set();
+  for (let ri = 0; ri < INNINGS; ri++) {
+    if (inningErProvisional(battingTeam, ri)) provInnings.add(ri);
   }
 
   // Go through the batting team's players to compute stats for the pitching team's pitchers
   const batters = gameState.teams[battingTeam].players;
   for (const player of batters) {
-    for (const ab of player.atBats) {
+    for (let col = 0; col < player.atBats.length; col++) {
+      const ab = player.atBats[col];
       if (!ab.play) continue;
       const pi = ab.pitcher || 0;
-      if (!stats[pi]) stats[pi] = { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0 };
+      if (!stats[pi]) stats[pi] = { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0, prov: false };
       const s = stats[pi];
       // Pitch count
       s.pc += (ab.pitches || []).length;
@@ -2703,6 +2821,7 @@ function updatePitcherStats(battingTeam) {
       if (ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null) {
         s.r++;
         if (!ab.reachedOnError) s.er++;
+        if (provInnings.has(getRealInning(battingTeam, col))) s.prov = true;
       }
     }
   }
@@ -2729,6 +2848,7 @@ function updatePitcherStats(battingTeam) {
       if (ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null) {
         s.r++;
         if (!ab.reachedOnError) s.er++;
+        if (provInnings.has(getRealInning(battingTeam, oa.colIdx))) s.prov = true;
       }
     }
   }
@@ -2748,6 +2868,15 @@ function updatePitcherStats(battingTeam) {
         pitchers[i][field] = String(fields[field]);
       }
     });
+
+    // ER-review badge: flag the ER cell when this pitcher allowed a run in an
+    // inning that had an error/PB/CI, so the scorer knows to verify it.
+    const erInp = document.querySelector(`input[data-team="${pitchingTeam}"][data-pitcher="${i}"][data-field="er"]`);
+    if (erInp) {
+      const td = erInp.closest('td');
+      if (td) td.classList.toggle('er-review', !!s.prov);
+      erInp.title = s.prov ? 'ER review needed — a run scored in an inning with an error, passed ball, or interference. Select a scored cell in that inning and tap “E/UE” to review.' : '';
+    }
   }
 }
 
