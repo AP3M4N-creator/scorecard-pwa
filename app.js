@@ -511,15 +511,22 @@ function setAdvReason(ab, segIdx, reason) {
   if (!ab.advReason[segIdx]) ab.advReason[segIdx] = reason;
 }
 
-// When the batting order wraps (overflow column), a runner may have batted in
-// an earlier visual column for the same real inning. Return that original column
-// so advancement renders on the correct cell.
+// When the batting order wraps (overflow column), a runner may have batted in an
+// earlier visual column for the same real inning. Return the cell his current
+// trip around the bases started from, so advancement renders on it.
+//
+// That is his LAST plate appearance of the inning, not his first (#9). A man on
+// base can't be at the plate, so any earlier PA of his in this inning is already
+// closed — he scored on it or was put out on it. Scanning forward found the closed
+// one: in a batted-around inning his second single's advancement was written onto
+// his first single's cell, which already showed four bases, so the run vanished
+// and two runners derived onto the same base.
 function getRunnerCol(team, pIdx, innIdx) {
   const realInn = getRealInning(team, innIdx);
   const colMap = gameState.columnMap[team];
   const player = gameState.teams[team].players[pIdx];
   if (!player) return innIdx;
-  for (let c = 0; c < INNINGS; c++) {
+  for (let c = INNINGS - 1; c >= 0; c--) {
     if (colMap[c] === realInn && player.atBats[c] && player.atBats[c].play) return c;
   }
   return innIdx;

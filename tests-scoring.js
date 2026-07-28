@@ -743,6 +743,26 @@
     eq('IP', pStat('visiting', 0, 'ip'), '1');
   });
 
+  // #9 — a batter's SECOND time up in a batted-around inning is a different runner
+  // on the bases than his first. `getRunnerCol` scanned columns forward and found
+  // the first PA, so the second one's advancement was written onto a cell that
+  // already showed four bases: the run disappeared and two runners derived onto the
+  // same base. Phase 6's recompute is only sound if a runner's cell is the one he is
+  // actually running from, so this is the gate that phase hinges on.
+  test('a run scored on a second plate appearance in the same inning counts', () => {
+    sel('visiting', 0, 0);
+    for (let i = 0; i < 9; i++) play('BB');         // fills all 9 spots, forces 6 in
+    eq('overflowed to the next column', curCol(), 1);
+    eq('six runs so far', lsInput('visiting', 0).value, '6');
+    eq('leadoff man scored on his first PA', ab('visiting', 0, 0).bases[3], true);
+    play('BB'); play('BB'); play('BB');             // p0 back on 1st, then forced round
+    eq('leadoff man is on 3rd on his second PA', inn('visiting', 1).bases[2], 0);
+    play('BB');                                     // forces him home again
+    eq('he scored on his second PA too', ab('visiting', 0, 1).bases[3], true);
+    eq('ten runs', lsInput('visiting', 0).value, '10');
+    eq('his first PA cell is untouched', JSON.stringify(ab('visiting', 0, 0).bases), '[true,true,true,true]');
+  });
+
   test('undo reverts a caught stealing, out log included', () => {
     sel('visiting', 0, 0);
     play('1B');
