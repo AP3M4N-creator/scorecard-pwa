@@ -92,6 +92,7 @@
     queued.clear();
     due.forEach(([, t]) => t.fn());
   }
+  function timerQueued(id) { return queued.has(id); }
 
   /* ------------------------------------------------------------- state ---
      Reset by mutating the shared gameState object (the module's binding can't
@@ -1022,5 +1023,111 @@
     eq('runs', lsInput('visiting', 0).value, '4');
     eq('RBI', ab('visiting', 6, 0).rbi, 4);
     eq('bases empty', inn('visiting', 0).bases.filter(b => b !== null).length, 0);
+  });
+
+  /* =====================================================================
+     Phase 5 — runner events go through afterStateChange.
+
+     The four runner-event paths (SB / CS / pickoff / the bulk WP-PB-BK handler)
+     used to each re-implement part of finishPlay's tail. Every case below is a
+     thing that only happened on the batter's path before.
+     ===================================================================== */
+
+  // #20 — the transition after a base out has to use the one cancellable handle.
+  test('a caught stealing that ends the inning arms a transition undo can cancel', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K');
+    play('1B');                                    // p4 on 1st, p6 up
+    promptCSBase();                                // single option, applies directly
+    eq('outs', inn('visiting', 0).outs, 3);
+    ok('a transition is pending', pendingTransitionTimer !== null);
+    ok('the handle points at a live timer', timerQueued(pendingTransitionTimer));
+    key('u');                                      // undo
+    eq('undo cleared the handle', pendingTransitionTimer, null);
+    flushTimers();
+    eq('outs given back', inn('visiting', 0).outs, 2);
+    eq('the half-inning did not switch', selectedCell.dataset.team, 'visiting');
+  });
+
+  // #20 — the bulk CS branch used a bare setTimeout that undo could not reach.
+  test('the bulk caught-stealing path routes its transition through the same handle', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K');
+    play('1B');
+    applyRunnerEvent('CS');
+    eq('outs', inn('visiting', 0).outs, 3);
+    ok('a transition is pending', pendingTransitionTimer !== null);
+    ok('the handle points at a live timer', timerQueued(pendingTransitionTimer));
+    undoLastPlay();
+    eq('undo cleared the handle', pendingTransitionTimer, null);
+    flushTimers();
+    eq('the half-inning did not switch', selectedCell.dataset.team, 'visiting');
+  });
+
+  // #5 — the pickoff sibling of the caught-stealing case above. Passed before this
+  // phase too; it's here so routing both paths through one exit can't drop it.
+  test('the game ends when the 3rd out of the top of the 9th is a pickoff', () => {
+    lsInput('home', 0).value = '2';                // home leads 2-0
+    updateLinescoreTotals('home');
+    sel('visiting', 0, 8);                         // top of the 9th
+    play('1B'); play('K'); play('K');
+    promptPickoff();
+    basePicker(0);
+    eq('outs', inn('visiting', 8).outs, 3);
+    ok('game recognised as over', gameOverShown);
+  });
+
+  // #5 — a walk-off is a run, not an out. The check only ever ran on the batter's
+  // path, so a game won on a wild pitch just kept going.
+  test('a walk-off wild pitch ends the game', () => {
+    sel('home', 0, 8);                             // bottom of the 9th, 0-0
+    play('3B');                                    // p0 on 3rd
+    ok('not over yet', !gameOverShown);
+    key('n');                                      // wild pitch scores him
+    eq('run scored', lsInput('home', 8).value, '1');
+    ok('game recognised as over', gameOverShown);
+  });
+
+  test('a walk-off steal of home ends the game', () => {
+    sel('home', 0, 8);
+    play('3B');
+    promptSBBase();                                // only SBH is on offer
+    eq('run scored', lsInput('home', 8).value, '1');
+    ok('game recognised as over', gameOverShown);
+  });
+
+  test('a tying run in the bottom of the 9th does not end the game', () => {
+    lsInput('visiting', 0).value = '1';
+    updateLinescoreTotals('visiting');
+    sel('home', 0, 8);
+    play('3B');
+    key('n');                                      // ties it 1-1
+    eq('run scored', lsInput('home', 8).value, '1');
+    ok('game still going', !gameOverShown);
+  });
+
+  // #3 / #13 plumbing — the SB path never recomputed the pitcher's line, so a run
+  // stolen home (and any ER-review flag it raises) went unrecorded until the next
+  // completed at-bat happened to refresh it.
+  test('a run stolen home is charged to the pitcher immediately', () => {
+    sel('visiting', 0, 0);
+    play('3B');
+    promptSBBase();                                // SBH
+    eq('run on the line', lsInput('visiting', 0).value, '1');
+    eq('pitcher charged the run', pStat('visiting', 0, 'r'), '1');
+  });
+
+  // `inn.lob` was written only when a batter made the 3rd out; a base out left it
+  // to whatever updateLinescoreTotals' own scan happened to produce. Both write it
+  // today — that's #16, Phase 6 — so this pins the value while they still disagree.
+  test('a half-inning ended by a caught stealing still records LOB', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K');
+    play('1B');                                    // p4 on 1st
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });   // p4 to 2nd, p6 on 1st
+    promptCSBase();
+    basePicker(0);                                 // CS the trailing runner off 1st
+    eq('outs', inn('visiting', 0).outs, 3);
+    eq('one runner stranded', inn('visiting', 0).lob, 1);
   });
 })();

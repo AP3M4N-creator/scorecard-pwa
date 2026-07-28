@@ -6,11 +6,11 @@ finding, so this document stands alone — phases below refer to findings by num
 
 **Decisions confirmed by Adam, 2026-07-28** (see *Decisions* below).
 
-> ## ▶ Phases 1, 2, 3 and 4 — all ✅ **done**
+> ## ▶ Phases 1–5 — all ✅ **done**
 > Test harness, then every result-changing bug fixed surgically, then the
-> `recordOut` chokepoint, then the runner-placement chokepoint. **Stopped here for
-> review.** Phases 5–10 are planned but **not** authorised yet.
-> Suite: **81 passing, 0 known failures** (`npm test`).
+> `recordOut` chokepoint, then the runner-placement chokepoint, then the single
+> post-play exit. **Stopped here for review.** Phases 6–10 are planned but **not**
+> authorised yet. Suite: **89 passing, 0 known failures** (`npm test`).
 
 **How this is ordered.** The 34 findings collapse into 9 root causes. Fixing
 causes retires whole families at once — but three of the six result-changing bugs
@@ -357,7 +357,7 @@ Notes where the implementation differs from the outline above:
 
 ---
 
-## Phase 5 — Runner events go through `finishPlay` *(not yet authorised)*
+## Phase 5 — Runner events go through `finishPlay` ✅ **done**
 
 - Extract the tail of `finishPlay` (app.js:975-1032) into
   `afterStateChange(team, innIdx, { endsHalfInning })`: run/linescore update, stat
@@ -368,6 +368,54 @@ Notes where the implementation differs from the outline above:
   cancel-before-set.
 
 **Closes:** 3, 5, 13 (plumbing), 20. **Size:** half a day. **Risk:** medium.
+
+### Shipped
+
+**89 passing, 0 known failures.** 8 new cases, 4 of which fail on `121f50a`.
+
+New in `app.js`: `afterStateChange(team, innIdx, opts)` and
+`scheduleTransition(fn, delay)`. `finishPlay` keeps only what is specific to a
+completed plate appearance — cell rendering, `lastPA`/`seq`, undo history, the
+play log, the spray chart — and ends with
+`afterStateChange(team, innIdx, { advanceBatter: true })`. `applySBAtBase`,
+`applyCSAtBase`, `applyPickoff` and `applyRunnerEvent` each end with the same
+call and no post-processing of their own.
+
+Notes where the implementation differs from the outline above:
+
+- **`opts.advanceBatter`, not `opts.endsHalfInning`.** Whether the half-inning
+  ended is derivable (`inn.outs >= 3`) and every caller had it right by
+  construction, so passing it in would only let a caller be wrong about it. What
+  callers genuinely disagree on is the *other* thing: a completed plate appearance
+  moves the selection to the next batter, a steal or a wild pitch leaves the same
+  batter at the plate. That's the one flag.
+- **The walk-off check moved into `checkGameOver`.** It lived inline in
+  `finishPlay`'s `else` branch as a second, near-duplicate copy of the same
+  comparison — which is why a game won on a wild pitch or a steal of home never
+  ended. `checkGameOver` now reads: at `realInn >= 8`, the home half ends on
+  `hR > vR` at any out count, or on `vR !== hR` with 3 out; the visiting half is
+  unchanged. The new "a tying run in the bottom of the 9th does not end the game"
+  case guards the arm against over-firing.
+- **`scheduleTransition` is the only writer of `pendingTransitionTimer`** —
+  cancel-before-set, one handle. Grep `pendingTransitionTimer =` to confirm; the
+  hits are the declaration, the two lines inside `scheduleTransition`, and undo's
+  clear. The bulk-CS bare `setTimeout` (#20) is gone with it. That branch isn't
+  reachable from a button today (only WP/PB/BK are wired), so its case calls
+  `applyRunnerEvent('CS')` directly rather than through a key.
+- **Runner events now recompute pitcher stats,** which they never did. A run
+  stolen home used to leave the pitcher's R blank until the next completed at-bat
+  refreshed it — and since `updatePitcherStats` is also what recomputes the
+  provisional-ER badges, no error on the bases could ever raise one. That's the
+  #13 plumbing; setting `reachedOnError` on SB+E / PO+E and teaching
+  `inningErProvisional` to read an `'E'` advancement reason is still 8a.
+- **`inn.lob` is now written whenever the half ends,** not only when a batter made
+  the 3rd out. It still gets overwritten by `updateLinescoreTotals`' own scan —
+  the two definitions are #16, Phase 6 — so the new case pins the value rather
+  than the writer.
+- **Ordering inside `finishPlay` changed once:** the three stat recomputes used to
+  run before `addPlayLogEntry` / `showSprayChart` and now run after them. Neither
+  reads a stat or the linescore, and the selection change that follows was already
+  after both.
 
 ---
 
@@ -525,7 +573,7 @@ asked for already exists (app.js:3994). A strict CSP still requires converting
 | 2 Surgical result bugs | 1, 2, 3, 4†, 5, 6, 7, 8, 15, 26, 27 | 1–2 sittings | low | ✅ **done** |
 | 3 `recordOut` chokepoint | 2, 7, 8, 10, 21† | half day | medium | ✅ **done** |
 | 4 Runner placement chokepoint | 4 | 1 sitting | low-med | ✅ **done** |
-| 5 Runner events via `finishPlay` | 3, 5, 13†, 20 | half day | medium | planned |
+| 5 Runner events via `finishPlay` | 3, 5, 13†, 20 | half day | medium | ✅ **done** |
 | 6 Recompute instead of patch | 16, 21, 22, 23 | multi-session | med-high | planned |
 | 7 PA identity + delete dead state | 9, 19, 24, 30 | multi-session | high | planned |
 | 8a Box-score rule fixes | 11, 12, 13, 14, 17 | 1–2 sittings | low | planned |

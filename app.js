@@ -1359,6 +1359,15 @@ function applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes) {
   renderPlayText(team, pIdx, innIdx);
 }
 
+// The one place a delayed transition is scheduled. Every scheduler used to write
+// `pendingTransitionTimer` itself — and the bulk caught-stealing path didn't write
+// it at all — so undo's clearTimeout had nothing to cancel, and a second timer
+// could be armed on top of a live one (#20). Cancel-before-set, one handle.
+function scheduleTransition(fn, delay) {
+  if (pendingTransitionTimer) clearTimeout(pendingTransitionTimer);
+  pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; fn(); }, delay);
+}
+
 // Does the half-inning that just ended (or the run that just scored) end the
 // game? Returns true when the summary has been scheduled, so the caller knows not
 // to also schedule the next half-inning.
@@ -1371,13 +1380,48 @@ function checkGameOver(team, innIdx) {
   const realInn = getRealInning(team, innIdx);
   const vR = parseInt(document.querySelector('input[data-ls="visiting"][data-stat="r"]')?.value) || 0;
   const hR = parseInt(document.querySelector('input[data-ls="home"][data-stat="r"]')?.value) || 0;
-  const isGameOver = (team === 'home' && realInn >= 8 && inn.outs >= 3 && vR !== hR) ||
-                     (team === 'visiting' && realInn >= 8 && inn.outs >= 3 && hR > vR);
+  // The bottom half ends the instant the home team goes ahead — a walk-off doesn't
+  // wait for a 3rd out, and it doesn't care whether the run came in on a hit or on
+  // a wild pitch. Otherwise the half has to be complete and the game not tied.
+  const isGameOver = realInn >= 8 && (team === 'home'
+    ? (hR > vR || (inn.outs >= 3 && vR !== hR))
+    : (inn.outs >= 3 && hR > vR));
   if (!isGameOver || gameOverShown) return false;
   gameOverShown = true;
-  if (pendingTransitionTimer) clearTimeout(pendingTransitionTimer);
-  pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; showGameSummary(); }, 1000);
+  scheduleTransition(showGameSummary, 1000);
   return true;
+}
+
+// Everything that has to happen once the inning state changes, whatever changed
+// it. `finishPlay` did all of this inline and the four runner-event paths (SB, CS,
+// pickoff, and the bulk WP/PB/BK/SB/CS handler) each re-implemented a different
+// subset — which is how a caught stealing could end the game with no summary (#5),
+// how a stolen base could put a run on a finished inning's line (#3), how the 3rd
+// out made on the bases got a transition timer undo couldn't reach (#20), and why
+// an error on a steal never refreshed the pitcher's ER-review badge (#13).
+//
+// opts.advanceBatter — only a completed plate appearance moves the selection on.
+// A steal or a wild pitch leaves the same batter standing at the plate.
+function afterStateChange(team, innIdx, opts) {
+  const inn = getInnState(team, innIdx);
+  const endsHalfInning = inn.outs >= 3;
+  updateInningRuns(team, innIdx);
+  updatePlayerStats(team);
+  updatePitcherStats(team);   // also recomputes the provisional-ER badges
+  if (endsHalfInning) {
+    let lob = 0;
+    for (let b = 0; b < 3; b++) if (inn.bases[b] !== null) lob++;
+    inn.lob = lob;
+    updateLinescoreTotals(team);
+    if (!checkGameOver(team, innIdx)) {
+      scheduleTransition(() => switchToNextHalf(team, innIdx), 600);
+    }
+  } else {
+    if (opts && opts.advanceBatter) selectNextBatter(team, innIdx);
+    checkGameOver(team, innIdx);   // walk-off: the run ends it, not the out
+  }
+  updateSituation();
+  autoSave();
 }
 
 function finishPlay(team, pIdx, innIdx, snapshot) {
@@ -1399,9 +1443,6 @@ function finishPlay(team, pIdx, innIdx, snapshot) {
   renderPlayText(team, pIdx, innIdx);
   renderRBI(team, pIdx, innIdx);
   renderPitchCount(team, pIdx, innIdx);
-  updateInningRuns(team, innIdx);
-  updatePlayerStats(team);
-  updatePitcherStats(team);
   redoHistory.length = 0;
   playHistory.push(snapshot);
 
@@ -1413,32 +1454,7 @@ function finishPlay(team, pIdx, innIdx, snapshot) {
     showSprayChart(team, pIdx, innIdx);
   }
 
-  // LOB tracking at end of half-inning
-  if (inn.outs >= 3) {
-    let lob = 0;
-    if (inn.bases[0] !== null) lob++;
-    if (inn.bases[1] !== null) lob++;
-    if (inn.bases[2] !== null) lob++;
-    inn.lob = lob;
-    updateLinescoreTotals(team);
-    if (!checkGameOver(team, innIdx)) {
-      pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; switchToNextHalf(team, innIdx); }, 600);
-    }
-  } else {
-    selectNextBatter(team, innIdx);
-    // Walk-off check: home team takes lead mid-inning in bottom 9+
-    if (team === 'home') {
-      const realInn = getRealInning(team, innIdx);
-      const vR = parseInt(document.querySelector('input[data-ls="visiting"][data-stat="r"]')?.value) || 0;
-      const hR = parseInt(document.querySelector('input[data-ls="home"][data-stat="r"]')?.value) || 0;
-      if (realInn >= 8 && hR > vR && !gameOverShown) {
-        gameOverShown = true;
-        pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; showGameSummary(); }, 1000);
-      }
-    }
-  }
-  updateSituation();
-  autoSave();
+  afterStateChange(team, innIdx, { advanceBatter: true });
 }
 
 /* Runner advancement popup */
@@ -2093,10 +2109,7 @@ function applySBAtBase(team, innIdx, fromBase, withError) {
     setAdvReason(rab, step, step === fromBase + 1 ? 'SB' : 'E');
   }
   renderDiamond(team, r, rc);
-  updateInningRuns(team, innIdx);
-  updatePlayerStats(team);
-  updateSituation();
-  autoSave();
+  afterStateChange(team, innIdx);
 }
 
 function promptCSBase() {
@@ -2136,17 +2149,9 @@ function applyCSAtBase(team, innIdx, fromBase) {
   renderDiamond(team, r, rc);
   renderOut(team, r, rc);
   clearRunner(inn, fromBase);
-  if (inn.outs >= 3) {
-    // CS made the 3rd out — markNextInningLeadoff works this out from lastPA.
-    updateLinescoreTotals(team);
-    if (!checkGameOver(team, innIdx)) {
-      pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; switchToNextHalf(team, innIdx); }, 600);
-    }
-  }
-  updatePlayerStats(team);
-  updatePitcherStats(team);
-  updateSituation();
-  autoSave();
+  // A CS can make the 3rd out; afterStateChange ends the half-inning (or the
+  // game) from there, and markNextInningLeadoff works the order out from lastPA.
+  afterStateChange(team, innIdx);
 }
 
 function promptPickoff() {
@@ -2193,7 +2198,6 @@ function applyPickoff(team, innIdx, atBase, withError) {
     rab.bases[dest] = true;
     setAdvReason(rab, dest, 'E');
     renderDiamond(team, r, rc);
-    updateInningRuns(team, innIdx);
   } else {
     // See applyCSAtBase: the out's pitcher lives in the log, `rab.pitcher` keeps
     // pointing at the pitcher the runner reached base against.
@@ -2205,17 +2209,8 @@ function applyPickoff(team, innIdx, atBase, withError) {
     renderDiamond(team, r, rc);
     renderOut(team, r, rc);
     clearRunner(inn, atBase);
-    if (inn.outs >= 3) {
-      updateLinescoreTotals(team);
-      if (!checkGameOver(team, innIdx)) {
-        pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; switchToNextHalf(team, innIdx); }, 600);
-      }
-    }
   }
-  updatePlayerStats(team);
-  updatePitcherStats(team);
-  updateSituation();
-  autoSave();
+  afterStateChange(team, innIdx);
 }
 
 function showBasePickerPopup(title, options, callback) {
@@ -2262,7 +2257,6 @@ function applyRunnerEvent(type) {
       gameState.teams[team].players[r].atBats[rc].reachedOnError = true;
     }
     advanceRunners(team, innIdx, 1, type);
-    updateInningRuns(team, innIdx);
   } else if (type === 'SB') {
     const players = gameState.teams[team].players;
     // Lead runner first, so 2nd is free for the man behind him. A blocked steal is
@@ -2282,7 +2276,6 @@ function applyRunnerEvent(type) {
         renderDiamond(team, r, rc);
       }
     }
-    updateInningRuns(team, innIdx);
   } else if (type === 'CS') {
     const players = gameState.teams[team].players;
     let removed = false;
@@ -2302,16 +2295,11 @@ function applyRunnerEvent(type) {
         removed = true;
       }
     }
-    if (inn.outs >= 3) { setTimeout(() => switchToNextHalf(team, innIdx), 600); }
   } else if (type === 'BK') {
     // Balk: all runners advance 1 base, like WP
     advanceRunners(team, innIdx, 1, 'BK');
-    updateInningRuns(team, innIdx);
   }
-  updatePlayerStats(team);
-  updatePitcherStats(team);
-  updateSituation();
-  autoSave();
+  afterStateChange(team, innIdx);
 }
 
 /* Undo / Redo */
