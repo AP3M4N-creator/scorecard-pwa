@@ -778,6 +778,46 @@
     eq('his first PA cell is untouched', JSON.stringify(ab('visiting', 0, 0).bases), '[true,true,true,true]');
   });
 
+  // The base entry names the plate appearance the runner is running from, so a
+  // reader gets his cell without searching the inning for it.
+  test('a base entry points at the plate appearance the runner came up in', () => {
+    sel('visiting', 0, 0);
+    for (let i = 0; i < 9; i++) play('BB');          // bats around; 6 in, bases loaded
+    eq('overflowed to the next column', curCol(), 1);
+    eq('runner on 3rd came up in column 0', onBaseFrom('visiting', 1, 2), '12@0');
+    play('BB'); play('BB'); play('BB');              // p0 up again in column 1
+    eq('runner on 3rd now came up in column 1', onBaseFrom('visiting', 1, 2), '0@1');
+  });
+
+  // The RBI count compared the batter's column before and after the play, so a
+  // runner who had reached in an *earlier* column of the same inning scored
+  // without anyone being credited for driving him in.
+  test('driving in a runner who reached in an earlier column is an RBI', () => {
+    sel('visiting', 0, 0);
+    for (let i = 0; i < 9; i++) play('BB');          // bats around; 6 in, bases loaded
+    play('1B'); runnerPopup({ 2: 3, 1: 2, 0: 1, batter: 0 });
+    eq('seven runs', lsInput('visiting', 0).value, '7');
+    eq('the single is credited with the RBI', ab('visiting', 0, 1).rbi, 1);
+  });
+
+  // #19 — a snapshot captured `atBats[innIdx]` and that column's inning record
+  // only. A batted-around inning spans two columns, and a play in the later one
+  // moves runners standing on bases they reached in the earlier one, so undo put
+  // back half of what the play had changed and the run it drove in stayed.
+  test('undo of a play in the overflow column takes back the run it drove in', () => {
+    sel('visiting', 0, 0);
+    for (let i = 0; i < 9; i++) play('BB');          // bats around; 6 in, bases loaded
+    eq('six runs', lsInput('visiting', 0).value, '6');
+    play('1B'); runnerPopup({ 2: 3, 1: 2, 0: 1, batter: 0 });
+    eq('seven runs', lsInput('visiting', 0).value, '7');
+    undoLastPlay();
+    eq('back to six runs', lsInput('visiting', 0).value, '6');
+    eq('the runner is back on 3rd', onB('visiting', 1, 2), 12);
+    eq('his column-0 cell shows no run', ab('visiting', 12, 0).bases[3], false);
+    eq('the batter has no play', ab('visiting', 0, 1).play, '');
+    basesConsistent('visiting', 1);
+  });
+
   test('undo reverts a caught stealing, out log included', () => {
     sel('visiting', 0, 0);
     play('1B');

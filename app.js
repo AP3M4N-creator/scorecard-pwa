@@ -984,14 +984,78 @@ function hidePopupBackdrop() {
   if (bd) bd.style.display = 'none';
 }
 
-function countRunnersScored(team, innIdx, prevRunners) {
+/* ------------------------------------------------ undo: the whole inning ---
+   A snapshot used to hold one column: `atBats[innIdx]` for every player, plus
+   that column's inning record. A batted-around inning lives in two or more
+   columns and a play in the later one moves runners standing on bases they
+   reached in the earlier one, so undo restored half of what the play had changed
+   (#19). These capture and restore every column of the play's *real* inning.
+
+   Snapshots are memory-only (they are never persisted), so the shape is free to
+   change. What they still can't undo is the column insertion itself: a play that
+   bats the order around adds a column and shifts `columnMap`, and that happens
+   after the snapshot was taken. `cols` is therefore the inning as it stood when
+   the play was entered. */
+function captureInning(team, innIdx) {
   const players = gameState.teams[team].players;
+  const cols = getColumnsForInning(team, getRealInning(team, innIdx));
+  const abs = {};
+  const inns = {};
+  for (const col of cols) {
+    for (let p = 0; p < players.length; p++) {
+      abs[p + ':' + col] = JSON.parse(JSON.stringify(players[p].atBats[col]));
+    }
+    inns[col] = JSON.parse(JSON.stringify(getInnState(team, col)));
+  }
+  return { cols, abs, inns };
+}
+
+// Overwrite `target` with a snapshot copy: fields the snapshot doesn't have are
+// dropped, not left over from the newer state.
+function assignOver(target, src) {
+  const copy = JSON.parse(JSON.stringify(src));
+  Object.keys(target).forEach(k => { if (!(k in copy)) delete target[k]; });
+  Object.assign(target, copy);
+}
+
+function restoreInning(team, prev) {
+  if (!prev || !prev.cols) return;
+  const players = gameState.teams[team].players;
+  for (const col of prev.cols) {
+    for (let p = 0; p < players.length; p++) {
+      const src = prev.abs[p + ':' + col];
+      if (src) assignOver(players[p].atBats[col], src);
+    }
+    if (prev.inns[col]) assignOver(getInnState(team, col), prev.inns[col]);
+  }
+}
+
+function renderInning(team, prev) {
+  if (!prev || !prev.cols) return;
+  const players = gameState.teams[team].players;
+  for (const col of prev.cols) {
+    for (let p = 0; p < players.length; p++) {
+      renderDiamond(team, p, col);
+      renderOut(team, p, col);
+      renderPlayText(team, p, col);
+      renderPitches(team, p, col);
+      renderPitchCount(team, p, col);
+      renderPitcherChange(team, p, col);
+    }
+  }
+}
+
+// How many runners this play drove in: who is credited with a run now who wasn't
+// before it. Counted across every column of the inning, so a runner who reached
+// on an earlier trip through the order still earns the RBI.
+function countRunnersScored(team, prev) {
+  const players = gameState.teams[team].players;
+  const didScore = ab => !!(ab && ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null);
   let scored = 0;
-  for (let i = 0; i < players.length; i++) {
-    const ab = players[i].atBats[innIdx];
-    const curScored = ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null;
-    const prevScored = prevRunners[i] && prevRunners[i].bases[0] && prevRunners[i].bases[1] && prevRunners[i].bases[2] && prevRunners[i].bases[3] && prevRunners[i].outOnBase == null;
-    if (curScored && !prevScored) scored++;
+  for (const col of prev.cols) {
+    for (let p = 0; p < players.length; p++) {
+      if (didScore(players[p].atBats[col]) && !didScore(prev.abs[p + ':' + col])) scored++;
+    }
   }
   return scored;
 }
@@ -1035,11 +1099,8 @@ function applyPlay(play, target) {
 
   // Save undo snapshot
   const prevTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-  const prevAb = JSON.parse(JSON.stringify(ab));
-  const prevInn = JSON.parse(JSON.stringify(inn));
-  const prevRunners = {};
-  gameState.teams[team].players.forEach((pl, i) => { prevRunners[i] = JSON.parse(JSON.stringify(pl.atBats[innIdx])); });
-  const snapshot = { team, pIdx, innIdx, prevAb, prevInn, prevRunners, prevTab };
+  const prev = captureInning(team, innIdx);
+  const snapshot = { team, pIdx, innIdx, prev, prevTab };
 
   ab.play = play;
   // Every at-bat ends on a pitch — add the final pitch that produced the result
@@ -1076,7 +1137,7 @@ function applyPlay(play, target) {
     if (isWalk) {
       advanceForcedRunners(team, innIdx, play, { pIdx, col: innIdx });
       ab.bases[0] = true; setRunnerOn(inn, 0, runnerRef(pIdx, innIdx));
-      ab.rbi = countRunnersScored(team, innIdx, prevRunners);
+      ab.rbi = countRunnersScored(team, prev);
       finishPlay(team, pIdx, innIdx, snapshot);
       return;
     }
@@ -1092,7 +1153,7 @@ function applyPlay(play, target) {
         const bDest = choices.batterDest !== undefined ? choices.batterDest : 0;
         for (let s = 0; s <= bDest; s++) ab.bases[s] = true;
         setRunnerOn(inn, bDest, runnerRef(pIdx, innIdx));
-        ab.rbi = countRunnersScored(team, innIdx, prevRunners);
+        ab.rbi = countRunnersScored(team, prev);
         finishPlay(team, pIdx, innIdx, snapshot);
       }, { batterTakesBase: true, batterPIdx: pIdx });
       return;
@@ -1116,7 +1177,7 @@ function applyPlay(play, target) {
       }
       // RBI
       if (!isErrorPlay(play)) {
-        ab.rbi = countRunnersScored(team, innIdx, prevRunners);
+        ab.rbi = countRunnersScored(team, prev);
       }
       finishPlay(team, pIdx, innIdx, snapshot);
     }, { batterTakesBase: isHitOrError, batterPIdx: pIdx });
@@ -1141,7 +1202,7 @@ function applyPlay(play, target) {
     // Runner count already checked at entry, before any pitch was pushed (#27).
     showRunnerOutcomePopup(team, innIdx, play, true, function(outcomes) {
       applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes);
-      ab.rbi = countRunnersScored(team, innIdx, prevRunners);
+      ab.rbi = countRunnersScored(team, prev);
       finishPlay(team, pIdx, innIdx, snapshot);
     });
     return;
@@ -1150,7 +1211,7 @@ function applyPlay(play, target) {
     if (hasRunnersOnBase(team, innIdx)) {
       showRunnerOutcomePopup(team, innIdx, play, isDP, function(outcomes) {
         applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes);
-        ab.rbi = countRunnersScored(team, innIdx, prevRunners);
+        ab.rbi = countRunnersScored(team, prev);
         finishPlay(team, pIdx, innIdx, snapshot);
       });
       return;
@@ -2006,21 +2067,10 @@ function removePitch() {
   if (wasAutoPlay) {
     // Find the snapshot from when the auto-play was applied (entry before this removePitch's pushUndo)
     const autoSnapIdx = playHistory.length - 2;
-    if (autoSnapIdx >= 0 && playHistory[autoSnapIdx].prevRunners && playHistory[autoSnapIdx].prevInn) {
+    if (autoSnapIdx >= 0 && playHistory[autoSnapIdx].prev) {
       const snap = playHistory[autoSnapIdx];
-      const players = gameState.teams[team].players;
-      Object.keys(snap.prevRunners).forEach(p => {
-        const pi = parseInt(p);
-        const restored = JSON.parse(JSON.stringify(snap.prevRunners[pi]));
-        const target = players[pi].atBats[innIdx];
-        Object.keys(target).forEach(k => { if (!(k in restored)) delete target[k]; });
-        Object.assign(target, restored);
-        renderDiamond(team, pi, innIdx);
-        renderOut(team, pi, innIdx);
-        renderPlayText(team, pi, innIdx);
-      });
-      const inn = getInnState(team, innIdx);
-      Object.assign(inn, JSON.parse(JSON.stringify(snap.prevInn)));
+      restoreInning(team, snap.prev);
+      renderInning(team, snap.prev);
       playHistory.splice(autoSnapIdx, 1);
     } else {
       removeOutsFromPlay(team, innIdx, pIdx, innIdx, ab.out > 0 ? 1 : 0);
@@ -2464,24 +2514,15 @@ let pendingTransitionTimer = null;
 
 function pushUndo(team, pIdx, innIdx) {
   redoHistory.length = 0;
-  const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
-  const inn = getInnState(team, innIdx);
-  const prevTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-  const prevRunners = {};
-  gameState.teams[team].players.forEach((pl, i) => { prevRunners[i] = JSON.parse(JSON.stringify(pl.atBats[innIdx])); });
-  // Full batter row across all innings — captures multi-column mutations (e.g. sub lines) that span past innIdx.
-  const prevPlayerAbs = JSON.parse(JSON.stringify(gameState.teams[team].players[pIdx].atBats));
-  playHistory.push({ team, pIdx, innIdx, prevAb: JSON.parse(JSON.stringify(ab)), prevInn: JSON.parse(JSON.stringify(inn)), prevRunners, prevPlayerAbs, prevTab });
+  playHistory.push(snapshotForRedo(team, pIdx, innIdx));
 }
 
 function snapshotForRedo(team, pIdx, innIdx) {
-  const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
-  const inn = getInnState(team, innIdx);
   const prevTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-  const prevRunners = {};
-  gameState.teams[team].players.forEach((pl, i) => { prevRunners[i] = JSON.parse(JSON.stringify(pl.atBats[innIdx])); });
+  // Full batter row across all innings — captures multi-column mutations (e.g. sub
+  // lines) that span past the inning captureInning covers.
   const prevPlayerAbs = JSON.parse(JSON.stringify(gameState.teams[team].players[pIdx].atBats));
-  return { team, pIdx, innIdx, prevAb: JSON.parse(JSON.stringify(ab)), prevInn: JSON.parse(JSON.stringify(inn)), prevRunners, prevPlayerAbs, prevTab };
+  return { team, pIdx, innIdx, prev: captureInning(team, innIdx), prevPlayerAbs, prevTab };
 }
 
 // Restore a player's entire at-bat row (all innings) and re-render every cell.
@@ -2490,10 +2531,7 @@ function restorePlayerRow(team, pIdx, prevAbs) {
   const abs = gameState.teams[team].players[pIdx].atBats;
   const n = Math.min(abs.length, prevAbs.length);
   for (let c = 0; c < n; c++) {
-    const target = abs[c];
-    const src = JSON.parse(JSON.stringify(prevAbs[c]));
-    Object.keys(target).forEach(k => { if (!(k in src)) delete target[k]; });
-    Object.assign(target, src);
+    assignOver(abs[c], prevAbs[c]);
     renderDiamond(team, pIdx, c);
     renderOut(team, pIdx, c);
     renderPlayText(team, pIdx, c);
@@ -2504,34 +2542,14 @@ function restorePlayerRow(team, pIdx, prevAbs) {
 }
 
 function restoreSnapshot(snap) {
-  const { team, pIdx, innIdx, prevAb, prevInn, prevRunners } = snap;
-  if (prevRunners) {
-    Object.keys(prevRunners).forEach(p => {
-      const pi = parseInt(p);
-      const target = gameState.teams[team].players[pi].atBats[innIdx];
-      const src = JSON.parse(JSON.stringify(prevRunners[pi]));
-      Object.keys(target).forEach(k => { if (!(k in src)) delete target[k]; });
-      Object.assign(target, src);
-    });
-  }
+  const { team, pIdx, innIdx } = snap;
+  restoreInning(team, snap.prev);
   // Restore the batter's full row so multi-column mutations (sub lines) revert.
   if (snap.prevPlayerAbs) restorePlayerRow(team, pIdx, snap.prevPlayerAbs);
-  const inn = getInnState(team, innIdx);
-  const prevInnCopy = JSON.parse(JSON.stringify(prevInn));
-  Object.keys(inn).forEach(k => { if (!(k in prevInnCopy)) delete inn[k]; });
-  Object.assign(inn, prevInnCopy);
-  for (let p = 0; p < gameState.teams[team].players.length; p++) {
-    renderDiamond(team, p, innIdx);
-    renderOut(team, p, innIdx);
-    renderPlayText(team, p, innIdx);
-    renderPitches(team, p, innIdx);
-    renderPitchCount(team, p, innIdx);
-    renderPitcherChange(team, p, innIdx);
-  }
-  // `prevInn` has already been reinstated above, so this mostly confirms it. It
-  // also covers what the snapshot can't: `prevRunners` captures one column, and a
-  // batted-around inning lives in two, so the other column's copy of the outs and
-  // bases would otherwise stay as the undone play left it.
+  renderInning(team, snap.prev);
+  // The snapshot has already reinstated the outs and bases, so this mostly
+  // confirms them — and puts right anything the play changed in a column the
+  // snapshot didn't cover (one the batting order wrapped into after it was taken).
   recomputeInning(team, getRealInning(team, innIdx));
   updateSprayMini();
   const cell = document.querySelector(`.at-bat-cell[data-team="${team}"][data-p="${pIdx}"][data-inn="${innIdx}"]`);
@@ -2975,25 +2993,13 @@ function clearSelectedCell() {
 
   if (isLatest) {
     const snapshot = playHistory[histIdx];
-    if (snapshot.prevRunners) {
-      Object.keys(snapshot.prevRunners).forEach(p => {
-        const pi = parseInt(p);
-        const restored = JSON.parse(JSON.stringify(snapshot.prevRunners[pi]));
-        const target = gameState.teams[team].players[pi].atBats[innIdx];
-        Object.keys(target).forEach(k => { if (!(k in restored)) delete target[k]; });
-        Object.assign(target, restored);
-        renderDiamond(team, pi, innIdx);
-        renderOut(team, pi, innIdx);
-        renderPlayText(team, pi, innIdx);
-        renderPitches(team, pi, innIdx);
-        renderRBI(team, pi, innIdx);
-        renderPitchCount(team, pi, innIdx);
-      });
-    }
+    restoreInning(team, snapshot.prev);
     if (snapshot.prevPlayerAbs) restorePlayerRow(team, pIdx, snapshot.prevPlayerAbs);
-    if (snapshot.prevInn) {
-      const inn = getInnState(team, innIdx);
-      Object.assign(inn, JSON.parse(JSON.stringify(snapshot.prevInn)));
+    renderInning(team, snapshot.prev);
+    if (snapshot.prev) {
+      for (const col of snapshot.prev.cols) {
+        for (let p = 0; p < gameState.teams[team].players.length; p++) renderRBI(team, p, col);
+      }
     }
     playHistory.splice(histIdx, 1);
   } else {
@@ -3050,8 +3056,8 @@ function clearSelectedCell() {
   renderPitcherChange(team, pIdx, innIdx);
   // Both branches above touch only the at-bat records (and the out log); the
   // inning's outs, bases, runs and LOB come back out of them here. The restore
-  // branch reinstates `prevInn` wholesale, so a recompute over it is a no-op
-  // unless the snapshot and the records disagree — in which case the records win.
+  // branch reinstates the snapshot's inning records wholesale, so a recompute over
+  // it is a no-op unless the snapshot and the at-bats disagree — records win.
   recomputeInning(team, getRealInning(team, innIdx));
   updateSprayMini();
   updateSituation();
