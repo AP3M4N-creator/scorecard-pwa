@@ -200,6 +200,12 @@
     const t = battingTeam === 'visiting' ? 'home' : 'visiting';
     return document.querySelector(`input[data-team="${t}"][data-pitcher="${i}"][data-field="${field}"]`).value;
   }
+  function innHeaderCell(team, col) {
+    const gridId = team === 'visiting' ? 'grid-visiting' : 'grid-home';
+    return rawAll(`#${gridId} .scoring-grid thead th.inn-col`)[col];
+  }
+  function innHeader(team, col) { return innHeaderCell(team, col).textContent; }
+  function setInnHeader(team, col, text) { innHeaderCell(team, col).textContent = text; }
   function lsInput(team, i) { return document.querySelector(`input[data-ls="${team}"][data-inn="${i}"]`); }
   function rTotal(team) { return document.querySelector(`input[data-ls="${team}"][data-stat="r"]`).value; }
   function lobTotal(team) { return document.querySelector(`input[data-ls="${team}"][data-stat="lob"]`).value; }
@@ -856,6 +862,35 @@
     eq('first out', merged.innings.visiting[0].outsLog[0].n, 1);
     eq('second out', merged.innings.visiting[0].outsLog[1].n, 2);
     eq('pitcher carried over', merged.innings.visiting[0].outsLog[0].pitcher, 0);
+  });
+
+  // A pre-Phase-7 save holds a bare player index in `inn.bases`, not a
+  // `{ p, col }` ref. Everything that reads a runner's cell would break on it.
+  test('a game saved with bare base indices is migrated on load', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    collectState();
+    const saved = JSON.parse(JSON.stringify(gameState));
+    saved.innings.visiting[0].bases = [0, null, null];       // the old shape
+    const merged = mergeStateDefaults(saved);
+    eq('upgraded to a ref', JSON.stringify(merged.innings.visiting[0].bases[0]), '{"p":0,"col":0}');
+  });
+
+  // #24 — buildScoringGrid writes the headers 1…15 and only
+  // overflowToNextColumn ever re-derived them from the column map, so real inning
+  // numbers were lost on reload: after batting around, column 2 read "3" when it
+  // was still the 1st. Uses the real applyState, which is what a reload runs.
+  test('column headers are re-derived from the column map on load', () => {
+    sel('visiting', 0, 0);
+    for (let i = 0; i < 9; i++) play('BB');          // bats around into column 1
+    eq('overflowed', curCol(), 1);
+    eq('the overflow column is still the 1st', innHeader('visiting', 1), '1');
+    // What a reload starts from: the built header row, before any map is applied.
+    for (let c = 0; c < INNINGS; c++) setInnHeader('visiting', c, String(c + 1));
+    eq('reset for the reload', innHeader('visiting', 1), '2');
+    applyState();
+    eq('overflow column re-derived', innHeader('visiting', 1), '1');
+    eq('the column after it is the 2nd', innHeader('visiting', 2), '2');
   });
 
   /* =====================================================================

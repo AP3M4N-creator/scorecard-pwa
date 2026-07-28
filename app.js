@@ -3444,6 +3444,11 @@ function applyState() {
     });
     const eInp = document.querySelector(`input[data-ls="${team}"][data-stat="e"]`);
     if (eInp) eInp.value = gameState.linescore[team].e || '';
+    // #24: the grid header is built 1…15 and only `overflowToNextColumn` ever
+    // re-derived it, so a game reloaded after batting around showed the columns
+    // renumbered past their real innings — column 2 read "3" when it was still
+    // the 1st. The map is the record; re-derive from it on every load.
+    updateColumnHeaders(team);
     // Re-derive every inning somebody batted in, so a game saved by an older build
     // — or hand-edited, or imported — comes back consistent with its own records.
     // A save from before LOB had one definition carries the old inflating scan's
