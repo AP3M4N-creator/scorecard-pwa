@@ -1584,6 +1584,26 @@
     eq('play cleared', ab('visiting', 2, 0).play, '');
   });
 
+  // The #21 shape in the one path Phase 6 didn't rewire: the outs came off the log
+  // but the runner doubled off kept his out number and `outOnBase`, so he stayed
+  // off the bases with nothing recording that he was out.
+  test('clearing a double play but keeping its pitches un-outs the runner too', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st
+    promptPositionPlay('DP ');
+    positionPopup('6-4-3');
+    outcomePopup({ 0: ['out', 1], batter: ['out'] });
+    eq('two outs', inn('visiting', 0).outs, 2);
+    sel('visiting', 2, 0);
+    clearPlayKeepPitches();
+    eq('both outs came off', inn('visiting', 0).outs, 0);
+    eq('out log empty', inn('visiting', 0).outsLog.length, 0);
+    eq('the runner has no out number', ab('visiting', 0, 0).out, 0);
+    eq('and was not put out on the bases', ab('visiting', 0, 0).outOnBase, null);
+    eq('so he is back on 1st', onB('visiting', 0, 0), 0);
+    eq('IP', pStat('visiting', 0, 'ip'), '');
+  });
+
   // Loading a game re-derives every inning that has records, which is what fixes a
   // save written while LOB still had two disagreeing writers.
   test('a stale LOB on a saved inning is corrected from the records', () => {
