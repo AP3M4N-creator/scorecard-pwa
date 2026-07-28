@@ -6,11 +6,11 @@ finding, so this document stands alone — phases below refer to findings by num
 
 **Decisions confirmed by Adam, 2026-07-28** (see *Decisions* below).
 
-> ## ▶ Phases 1, 2 and 3 — all ✅ **done**
+> ## ▶ Phases 1, 2, 3 and 4 — all ✅ **done**
 > Test harness, then every result-changing bug fixed surgically, then the
-> `recordOut` chokepoint. **Stopped here for review.** Phases 4–10 are planned but
-> **not** authorised yet.
-> Suite: **64 passing, 0 known failures** (`npm test`).
+> `recordOut` chokepoint, then the runner-placement chokepoint. **Stopped here for
+> review.** Phases 5–10 are planned but **not** authorised yet.
+> Suite: **81 passing, 0 known failures** (`npm test`).
 
 **How this is ordered.** The 34 findings collapse into 9 root causes. Fixing
 causes retires whole families at once — but three of the six result-changing bugs
@@ -285,7 +285,7 @@ is not a regression — but `recomputeInning()` is what actually fixes it.
 
 ---
 
-## Phase 4 — One way to move a runner *(not yet authorised)*
+## Phase 4 — One way to move a runner ✅ **done**
 
 - Add `setRunnerOn(inn, base, runner)` / `clearRunner(inn, base)`; assert the
   target base is empty or holds the same runner, log loudly instead of overwriting.
@@ -296,6 +296,64 @@ is not a regression — but `recomputeInning()` is what actually fixes it.
 
 **Closes:** 4 properly. **Size:** one sitting. **Risk:** low-medium — don't
 over-restrict legal odd plays.
+
+### Shipped
+
+**81 passing, 0 known failures.** 17 new cases.
+
+New in `app.js`: `setRunnerOn()`, `clearRunner()`, `moveRunnerTo()`,
+`removeRunnerFromBases()`, `runnerPathClear()`, `runnerOrderConflicts()`,
+`runnerOrderMessage()`, `reportRunnerCollision()`, `setOptionBlocked()` /
+`isOptionBlocked()`. **Every `inn.bases` write in the file is now inside
+`setRunnerOn`, `clearRunner` or `moveRunnerTo`** — grep `inn\.bases\[.*\] *=` to
+confirm; the only hits are the three definitions. A refused placement logs a
+`console.warn` naming both runners *and* shows the toast, so it can't pass
+unnoticed either live or in a log.
+
+Notes where the implementation differs from the outline above:
+
+- **`moveRunnerTo` is the third helper the outline didn't ask for,** and it's the one
+  most sites use. Checking occupancy, clearing the old base and setting the new one
+  have to be one step: split apart, a refused destination left the runner cleared off
+  his base, which is the very bug being fixed. Callers mark up the at-bat only on a
+  `true` return, so a refusal leaves no half-written advancement.
+- **The popups constrain by *runner order*, not by occupancy.** One rule covers both
+  cases the plan lists: everyone still on a base after the play must finish in the
+  same order they started (the batter starting from behind 1st), with home exempt
+  since any number of runners can score. `runnerOrderConflicts` returns the offending
+  rows, and it drives two things — greying out an option the moment another row makes
+  it illegal, and a final check on Confirm for the rows left on their defaults.
+- **`showRunnerOutcomePopup` (DP/FC/TP) had no Confirm-time validation at all;** a
+  collision was swallowed by `applyRunnerOutcomes`'s early `return`. It now gets the
+  same greying-out and the same refusal as the advancement popup.
+- **The base pickers filter their own options.** SB/PO no longer offer a steal or an
+  error-advance whose destination is occupied, and `runnerPathClear` also rejects one
+  that would run *through* an occupied base (1st→3rd past a runner on 2nd, 2nd→home
+  past a runner on 3rd). With runners on 1st and 2nd a double steal is now entered as
+  two events, lead runner first — which is the order it happens in.
+- **`applyRunnerEvent('SB')` was inventing runs.** With 3rd occupied it sent the
+  runner from 2nd *all the way home* rather than colliding — a run out of a steal that
+  never happened. It refuses the move now. (That path isn't wired to a button today;
+  only WP/PB/BK are. Left in place rather than deleted — dead code is Phase 9.)
+- **K+WP no longer places the batter before the popup opens.** It used to write him
+  onto 1st first, which erased the runner standing there *and* dropped that runner out
+  of the popup's own list, so there was nothing left to advance. He's placed from the
+  popup's batter row like every other batter who reaches, which also means the
+  order check covers him.
+- **`editPlayType` rejects a change with nowhere to put the batter** (a K rewritten as
+  a single with 1st occupied), before `pushUndo`, same shape as the Phase 2 #8 guard.
+  Changing a play to `HR` still doesn't advance the runners on base — that's #22, Phase 6.
+- **`advanceRunners` and `advanceForcedRunners` became loops** over the bases,
+  lead runner first, instead of three and then nine hand-written branches. Same
+  outcomes for both call patterns (WP/PB/BK at 1, HR at 4) — the new cases assert a
+  wild pitch, a bases-loaded walk, a 1st-and-3rd walk and a grand slam. Forced-runner
+  logic is now stated once: a runner is forced only while every base behind him is
+  occupied.
+- **`moveRunner` (the manual override) stops offering an occupied base.** It's the
+  escape hatch for odd states, but two men on one base is never one of them.
+- **Verified in a real browser** as well as jsdom: a blocked option renders greyed at
+  35% opacity, a real click on it does nothing, and blocking updates live as the other
+  rows are answered.
 
 ---
 
@@ -466,7 +524,7 @@ asked for already exists (app.js:3994). A strict CSP still requires converting
 | 1 Test harness | — | 1 sitting | none | ✅ **done** |
 | 2 Surgical result bugs | 1, 2, 3, 4†, 5, 6, 7, 8, 15, 26, 27 | 1–2 sittings | low | ✅ **done** |
 | 3 `recordOut` chokepoint | 2, 7, 8, 10, 21† | half day | medium | ✅ **done** |
-| 4 Runner placement chokepoint | 4 | 1 sitting | low-med | planned |
+| 4 Runner placement chokepoint | 4 | 1 sitting | low-med | ✅ **done** |
 | 5 Runner events via `finishPlay` | 3, 5, 13†, 20 | half day | medium | planned |
 | 6 Recompute instead of patch | 16, 21, 22, 23 | multi-session | med-high | planned |
 | 7 PA identity + delete dead state | 9, 19, 24, 30 | multi-session | high | planned |

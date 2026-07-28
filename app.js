@@ -525,46 +525,24 @@ function getRunnerCol(team, pIdx, innIdx) {
   return innIdx;
 }
 
+// Everyone on base moves up `advanceBy` (1 for a wild pitch, balk or passed
+// ball; 4 for a home run). Lead runner first, so the base he vacates is already
+// free for the man behind him.
 function advanceRunners(team, innIdx, advanceBy, reason) {
   const inn = getInnState(team, innIdx);
   const players = gameState.teams[team].players;
   const rsn = reason || '';
-  if (inn.bases[2] !== null) {
-    const r = inn.bases[2];
+  const by = Math.max(1, advanceBy || 1);
+  for (let from = 2; from >= 0; from--) {
+    const r = inn.bases[from];
+    if (r === null) continue;
+    const dest = Math.min(from + by, 3);
     const rc = getRunnerCol(team, r, innIdx);
     const rab = players[r].atBats[rc];
-    rab.bases[3] = true;
-    setAdvReason(rab, 3, rsn);
-    renderDiamond(team, r, rc);
-    inn.bases[2] = null;
-  }
-  if (inn.bases[1] !== null) {
-    const r = inn.bases[1];
-    const rc = getRunnerCol(team, r, innIdx);
-    const rab = players[r].atBats[rc];
-    if (advanceBy >= 2) {
-      rab.bases[2] = true; rab.bases[3] = true;
-      setAdvReason(rab, 2, rsn); setAdvReason(rab, 3, rsn);
-      inn.bases[1] = null;
-    } else {
-      rab.bases[2] = true;
-      setAdvReason(rab, 2, rsn);
-      inn.bases[2] = r; inn.bases[1] = null;
-    }
-    renderDiamond(team, r, rc);
-  }
-  if (inn.bases[0] !== null) {
-    const r = inn.bases[0];
-    const rc = getRunnerCol(team, r, innIdx);
-    const rab = players[r].atBats[rc];
-    if (advanceBy >= 2) {
-      rab.bases[1] = true; rab.bases[2] = true; rab.bases[3] = true;
-      setAdvReason(rab, 1, rsn); setAdvReason(rab, 2, rsn); setAdvReason(rab, 3, rsn);
-      inn.bases[0] = null;
-    } else {
-      rab.bases[1] = true;
-      setAdvReason(rab, 1, rsn);
-      inn.bases[1] = r; inn.bases[0] = null;
+    if (!moveRunnerTo(inn, from, dest, r)) continue;
+    for (let step = from + 1; step <= dest; step++) {
+      rab.bases[step] = true;
+      setAdvReason(rab, step, rsn);
     }
     renderDiamond(team, r, rc);
   }
@@ -574,19 +552,22 @@ function advanceForcedRunners(team, innIdx, reason) {
   const inn = getInnState(team, innIdx);
   const players = gameState.teams[team].players;
   const rsn = reason || 'BB';
-  const on1 = inn.bases[0] !== null, on2 = inn.bases[1] !== null, on3 = inn.bases[2] !== null;
-  if (on1 && on2 && on3) {
-    const r3 = inn.bases[2]; const rc3 = getRunnerCol(team, r3, innIdx); const ab3 = players[r3].atBats[rc3]; ab3.bases[3] = true; setAdvReason(ab3, 3, rsn); renderDiamond(team, r3, rc3);
-    const r2 = inn.bases[1]; inn.bases[2] = r2; const rc2 = getRunnerCol(team, r2, innIdx); const ab2 = players[r2].atBats[rc2]; ab2.bases[2] = true; setAdvReason(ab2, 2, rsn); renderDiamond(team, r2, rc2);
-    const r1 = inn.bases[0]; inn.bases[1] = r1; const rc1 = getRunnerCol(team, r1, innIdx); const ab1 = players[r1].atBats[rc1]; ab1.bases[1] = true; setAdvReason(ab1, 1, rsn); renderDiamond(team, r1, rc1);
-    inn.bases[0] = null;
-  } else if (on1 && on2) {
-    const r2 = inn.bases[1]; inn.bases[2] = r2; const rc2 = getRunnerCol(team, r2, innIdx); const ab2 = players[r2].atBats[rc2]; ab2.bases[2] = true; setAdvReason(ab2, 2, rsn); renderDiamond(team, r2, rc2);
-    const r1 = inn.bases[0]; inn.bases[1] = r1; const rc1 = getRunnerCol(team, r1, innIdx); const ab1 = players[r1].atBats[rc1]; ab1.bases[1] = true; setAdvReason(ab1, 1, rsn); renderDiamond(team, r1, rc1);
-    inn.bases[0] = null;
-  } else if (on1) {
-    const r1 = inn.bases[0]; inn.bases[1] = r1; const rc1 = getRunnerCol(team, r1, innIdx); const ab1 = players[r1].atBats[rc1]; ab1.bases[1] = true; setAdvReason(ab1, 1, rsn); renderDiamond(team, r1, rc1);
-    inn.bases[0] = null;
+  // A runner is only forced while every base behind him is occupied, so count out
+  // from 1st and stop at the first empty base.
+  let forcedThrough = -1;
+  for (let b = 0; b < 3; b++) {
+    if (inn.bases[b] === null) break;
+    forcedThrough = b;
+  }
+  for (let from = forcedThrough; from >= 0; from--) {
+    const r = inn.bases[from];
+    if (r === null) continue;
+    const rc = getRunnerCol(team, r, innIdx);
+    const rab = players[r].atBats[rc];
+    if (!moveRunnerTo(inn, from, from + 1, r)) continue;
+    rab.bases[from + 1] = true;
+    setAdvReason(rab, from + 1, rsn);
+    renderDiamond(team, r, rc);
   }
 }
 
@@ -647,6 +628,129 @@ function currentTarget() {
 // it's empty or he's already standing on it. Base 3 is home; any number score.
 function baseFreeFor(inn, base, pIdx) {
   return base > 2 || inn.bases[base] === null || inn.bases[base] === pIdx;
+}
+
+/* ------------------------------------------------------------------------
+   Runner placement chokepoint (audit finding #4, Phase 4)
+
+   Every write to `inn.bases` goes through these three functions. The slot used
+   to be assigned directly at fifteen sites, each with its own idea of whether
+   to check the base first, so the last writer won and the runner who was
+   standing there vanished off the bases — still marked up on his at-bat, but
+   unable to ever score.
+   ------------------------------------------------------------------------ */
+
+const BASE_NAMES = ['1st', '2nd', '3rd', 'Home'];
+
+function reportRunnerCollision(base, held, runner) {
+  if (typeof console !== 'undefined' && console.warn) {
+    console.warn('runner placement refused: ' + runner + ' → ' + BASE_NAMES[base] +
+                 ', runner ' + held + ' is already there');
+  }
+  showPlayReject('Two runners can\'t share ' + BASE_NAMES[base] + '.');
+}
+
+function clearRunner(inn, base) {
+  if (base < 0 || base > 2) return;
+  inn.bases[base] = null;
+}
+
+// Takes the runner off every base he is listed on. The five places that cleared
+// a play used to inline this same loop.
+function removeRunnerFromBases(inn, pIdx) {
+  for (let b = 0; b < 3; b++) if (inn.bases[b] === pIdx) clearRunner(inn, b);
+}
+
+// Puts `runner` on `base`. Base 3 is home — nothing to store, and any number of
+// runners can cross the plate, so that's a no-op success. Refuses to evict a
+// different runner, and says so: a silent refusal is how a scorecard ends up
+// quietly disagreeing with the game.
+function setRunnerOn(inn, base, runner) {
+  if (base > 2) return true;
+  if (base < 0 || runner == null) return false;
+  const held = inn.bases[base];
+  if (held !== null && held !== runner) {
+    reportRunnerCollision(base, held, runner);
+    return false;
+  }
+  inn.bases[base] = runner;
+  return true;
+}
+
+// Atomic move: the runner keeps the base he is on unless the destination is
+// really available. Callers mark up the at-bat only when this returns true, so a
+// refused move leaves no half-written advancement behind.
+function moveRunnerTo(inn, fromBase, dest, runner) {
+  if (dest > 2) { clearRunner(inn, fromBase); return true; }
+  if (!baseFreeFor(inn, dest, runner)) {
+    reportRunnerCollision(dest, inn.bases[dest], runner);
+    return false;
+  }
+  clearRunner(inn, fromBase);
+  inn.bases[dest] = runner;
+  return true;
+}
+
+// A runner can't run through the man in front of him. True when every base between
+// `fromBase` and `dest` (and `dest` itself, when it isn't home) is clear for him.
+// Used by the steal and pickoff-error paths, where one runner moves on his own and
+// there is no popup to validate the set as a whole.
+function runnerPathClear(inn, fromBase, dest, runner) {
+  for (let b = fromBase + 1; b <= Math.min(dest, 2); b++) {
+    if (!baseFreeFor(inn, b, runner)) return false;
+  }
+  return true;
+}
+
+// The runners' order has to survive the play: two men can't finish on one base,
+// and a trailing runner can't finish ahead of a lead runner who is still on one —
+// he would have to pass him. `parties` is [{ key, from, dest }]; `from` is the
+// base each started on (-1 for the batter) and `dest` is 0-3, or undefined for
+// anyone thrown out or not yet decided. Returns the set of keys in conflict.
+function runnerOrderConflicts(parties) {
+  const on = parties.filter(p => p.dest !== undefined && p.dest !== null && p.dest >= 0 && p.dest <= 3);
+  const bad = new Set();
+  for (let i = 0; i < on.length; i++) {
+    for (let j = i + 1; j < on.length; j++) {
+      const a = on[i], b = on[j];
+      if (a.from === b.from) continue;
+      // Both scoring is fine — home isn't a base anyone has to stand on.
+      if (a.dest === 3 && b.dest === 3) continue;
+      const keepsOrder = a.from < b.from ? a.dest < b.dest : a.dest > b.dest;
+      if (!keepsOrder) { bad.add(a.key); bad.add(b.key); }
+    }
+  }
+  return bad;
+}
+
+// Grey out an offered destination the current set of choices has made illegal, so
+// the scorer sees the constraint instead of running into a refusal on Confirm.
+// Reversible: the option comes back as soon as the conflicting choice changes.
+function setOptionBlocked(btn, blocked) {
+  btn.dataset.blocked = blocked ? '1' : '';
+  btn.disabled = !!blocked;
+  btn.style.opacity = blocked ? '0.35' : '1';
+  btn.style.cursor = blocked ? 'not-allowed' : 'pointer';
+  if (blocked) {
+    btn.style.borderColor = '#ccc';
+    btn.style.background = '#f0f0f0';
+    btn.style.color = '#999';
+  }
+}
+
+function isOptionBlocked(btn) {
+  return btn.dataset.blocked === '1';
+}
+
+// Message for a refused set of destinations — sharing a base and passing a
+// runner are different mistakes and the scorer fixes them differently.
+function runnerOrderMessage(parties) {
+  const on = parties.filter(p => p.dest !== undefined && p.dest !== null && p.dest >= 0 && p.dest <= 2);
+  const dests = on.map(p => p.dest);
+  const shared = dests.some((d, i) => dests.indexOf(d) !== i);
+  return shared
+    ? 'Two runners can\'t share a base — pick another destination.'
+    : 'A runner can\'t pass the runner ahead of him.';
 }
 
 let playRejectTimer = null;
@@ -791,23 +895,26 @@ function applyPlay(play, target) {
     // Walks: auto-advance forced runners, no popup
     if (isWalk) {
       advanceForcedRunners(team, innIdx, play);
-      ab.bases[0] = true; inn.bases[0] = pIdx;
+      ab.bases[0] = true; setRunnerOn(inn, 0, pIdx);
       ab.rbi = countRunnersScored(team, innIdx, prevRunners);
       finishPlay(team, pIdx, innIdx, snapshot);
       return;
     }
 
-    // K+WP: batter reaches 1st, show runner popup for wild pitch advancement
+    // K+WP: batter reaches 1st, show runner popup for wild pitch advancement.
+    // He is placed after the popup resolves, like every other batter who reaches:
+    // placing him first overwrote a runner standing on 1st, and that runner was
+    // then gone from the popup's own list of runners to advance (#4).
     if (isKWP) {
-      ab.bases[0] = true; inn.bases[0] = pIdx;
       const batterLbl = getBatterLabel(team, pIdx, innIdx);
-      // batterTakesBase is false here: the batter was already placed on 1st above,
-      // so he shows up as the runner-on-1st row and is counted there.
       showRunnerPopup(team, innIdx, 1, function(choices) {
         applyChosenAdvancements(team, innIdx, choices, batterLbl, { pIdx, col: innIdx });
+        const bDest = choices.batterDest !== undefined ? choices.batterDest : 0;
+        for (let s = 0; s <= bDest; s++) ab.bases[s] = true;
+        setRunnerOn(inn, bDest, pIdx);
         ab.rbi = countRunnersScored(team, innIdx, prevRunners);
         finishPlay(team, pIdx, innIdx, snapshot);
-      }, { batterTakesBase: false, batterPIdx: pIdx });
+      }, { batterTakesBase: true, batterPIdx: pIdx });
       return;
     }
 
@@ -820,12 +927,7 @@ function applyPlay(play, target) {
       if (isHitOrError) {
         if (choices.batterDest !== undefined && choices.batterDest > 0) {
           for (let s = 0; s <= choices.batterDest; s++) ab.bases[s] = true;
-          // Backstop for #4 — the popup refuses a colliding destination, so this
-          // only fires on an imported or hand-edited state. Keep the runner who
-          // is already standing there rather than erasing him off the bases.
-          if (choices.batterDest < 3 && baseFreeFor(inn, choices.batterDest, pIdx)) {
-            inn.bases[choices.batterDest] = pIdx;
-          }
+          setRunnerOn(inn, choices.batterDest, pIdx);
         } else {
           placeBatter(ab, inn, play, pIdx);
         }
@@ -852,7 +954,7 @@ function applyPlay(play, target) {
     ab.bases = [true, true, true, true];
     ab.rbi = runnersOn + 1;
   } else if (play === 'BB' || play === 'HBP' || play === 'IBB' || play === 'CI') {
-    ab.bases[0] = true; inn.bases[0] = pIdx;
+    ab.bases[0] = true; setRunnerOn(inn, 0, pIdx);
   } else if (play === 'SF' || play === 'SH' || play === 'SAC') {
     recordBatterOut(team, innIdx, pIdx, ab);
   } else if (play === 'TP' || /^TP /.test(play)) {
@@ -885,7 +987,7 @@ function applyPlay(play, target) {
       recordBatterOut(team, innIdx, pIdx, ab);
     }
   } else if (play === 'K+WP') {
-    ab.bases[0] = true; inn.bases[0] = pIdx; ab.outsRecorded = 0;
+    ab.bases[0] = true; setRunnerOn(inn, 0, pIdx); ab.outsRecorded = 0;
   } else if (play === 'IF' || isOutPlay(play)) {
     // Infield fly is an automatic out
     recordBatterOut(team, innIdx, pIdx, ab);
@@ -894,13 +996,13 @@ function applyPlay(play, target) {
 }
 
 function placeBatter(ab, inn, play, pIdx) {
-  // The `baseFreeFor` guards are the #4 backstop: the runner popup refuses a
-  // colliding destination up front, so reaching one here means the state came
-  // from an import or a hand edit. Mark the batter's at-bat either way, but don't
-  // erase the runner already on that base.
-  if (play === '1B' || play === 'E' || isErrorPlay(play)) { ab.bases[0] = true; if (baseFreeFor(inn, 0, pIdx)) inn.bases[0] = pIdx; if (isErrorPlay(play)) ab.reachedOnError = true; }
-  else if (play === '2B') { ab.bases[0] = true; ab.bases[1] = true; if (baseFreeFor(inn, 1, pIdx)) inn.bases[1] = pIdx; }
-  else if (play === '3B') { ab.bases[0] = true; ab.bases[1] = true; ab.bases[2] = true; if (baseFreeFor(inn, 2, pIdx)) inn.bases[2] = pIdx; }
+  // `setRunnerOn` is the #4 backstop: the runner popup refuses a colliding
+  // destination up front, so a refusal here means the state came from an import or
+  // a hand edit. Mark the batter's at-bat either way, but don't erase the runner
+  // already standing on that base.
+  if (play === '1B' || play === 'E' || isErrorPlay(play)) { ab.bases[0] = true; setRunnerOn(inn, 0, pIdx); if (isErrorPlay(play)) ab.reachedOnError = true; }
+  else if (play === '2B') { ab.bases[0] = true; ab.bases[1] = true; setRunnerOn(inn, 1, pIdx); }
+  else if (play === '3B') { ab.bases[0] = true; ab.bases[1] = true; ab.bases[2] = true; setRunnerOn(inn, 2, pIdx); }
 }
 
 // `src` is the plate appearance these advancements came out of, so a runner
@@ -932,19 +1034,18 @@ function applyChosenAdvancements(team, innIdx, choices, reason, src) {
         rab.out = n;
         rab.outOnBase = outAt;
       }
-      inn.bases[fromBase] = null;
+      clearRunner(inn, fromBase);
       renderDiamond(team, r, rc);
       renderOut(team, r, rc);
     } else {
-      // #4 backstop: refuse the move rather than erase whoever is on `dest`. The
-      // runner keeps the base he is on; the popup validates before we get here.
-      if (!baseFreeFor(inn, dest, r)) return;
+      // #4 backstop: the popup validates the whole set of destinations before we
+      // get here, so a refusal means imported or hand-edited state. The runner
+      // keeps the base he is on rather than erasing whoever is on `dest`.
+      if (!moveRunnerTo(inn, fromBase, dest, r)) return;
       for (let step = fromBase + 1; step <= dest; step++) {
         rab.bases[step] = true;
         setAdvReason(rab, step, rsn);
       }
-      inn.bases[fromBase] = null;
-      if (dest < 3) inn.bases[dest] = r;
       renderDiamond(team, r, rc);
     }
   });
@@ -1082,10 +1183,45 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
   popup.innerHTML = html;
   popup.style.display = 'block';
 
+  // Every runner still on a base after the play, plus the batter if he ends up on
+  // one, as `runnerOrderConflicts` wants them. A runner who is out drops out of the
+  // ordering entirely — the base he was heading for is free for the man behind him.
+  function ocParties() {
+    const list = runners.map(r => ({
+      key: r.base,
+      from: r.base,
+      dest: outcomes[r.base] && outcomes[r.base].action === 'safe' ? outcomes[r.base].dest : undefined
+    }));
+    list.push({
+      key: 'batter',
+      from: -1,
+      dest: outcomes.batter && outcomes.batter.action === 'safe'
+        ? (outcomes.batter.dest !== undefined ? outcomes.batter.dest : 0)
+        : undefined
+    });
+    return list;
+  }
+
+  function refreshOutcomeAvailability() {
+    popup.querySelectorAll('.oc-btn').forEach(btn => {
+      if (btn.dataset.action !== 'safe') return;   // an out never collides
+      const key = btn.dataset.base === 'batter' ? 'batter' : parseInt(btn.dataset.base);
+      const dest = btn.dataset.dest ? parseInt(btn.dataset.dest) : 0;
+      const hypothetical = ocParties().map(p => (p.key === key ? { key: p.key, from: p.from, dest } : p));
+      setOptionBlocked(btn, runnerOrderConflicts(hypothetical).has(key));
+    });
+  }
+
+  function flashOcRow(key) {
+    const row = popup.querySelector('.oc-row[data-base="' + key + '"]');
+    if (row) { row.style.outline = '2px solid var(--accent)'; setTimeout(() => row.style.outline = '', 800); }
+  }
+
   // Button handlers
   const maxOuts = /^TP/.test(play) ? 3 : /^DP/.test(play) ? 2 : 3;
   popup.querySelectorAll('.oc-btn').forEach(btn => {
     btn.onclick = function() {
+      if (isOptionBlocked(this)) return;
       const base = this.dataset.base;
       const action = this.dataset.action;
       const dest = this.dataset.dest ? parseInt(this.dataset.dest) : null;
@@ -1131,10 +1267,23 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
         b.style.background = isActive ? (isOut ? '#fce4ec' : '#e8f5e9') : '#fff';
         b.style.color = isActive ? (isOut ? 'var(--accent)' : '#2e7d32') : '#555';
       });
+      refreshOutcomeAvailability();   // last: it repaints whatever it blocks
     };
   });
 
+  refreshOutcomeAvailability();
+
   document.getElementById('oc-confirm').onclick = function() {
+    // The offered options are already constrained, but the defaults were never
+    // clicked and the out-count auto-revert above can change a row on its own, so
+    // check the whole set before it reaches state (#4).
+    const parties = ocParties();
+    const bad = runnerOrderConflicts(parties);
+    if (bad.size) {
+      bad.forEach(flashOcRow);
+      showPlayReject(runnerOrderMessage(parties));
+      return;
+    }
     popup.style.display = 'none';
     callback(outcomes);
   };
@@ -1162,17 +1311,15 @@ function applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes) {
       setAdvReason(rab, oc.dest, play.substring(0, 2).trim());
       renderDiamond(team, r, rc);
       renderOut(team, r, rc);
-      inn.bases[fromBase] = null;
+      clearRunner(inn, fromBase);
       runnersOutThisPlay.push(r);
     } else if (oc.action === 'safe') {
       // #4 backstop — see applyChosenAdvancements.
-      if (!baseFreeFor(inn, oc.dest, r)) return;
+      if (!moveRunnerTo(inn, fromBase, oc.dest, r)) return;
       for (let step = fromBase + 1; step <= oc.dest; step++) {
         rab.bases[step] = true;
         setAdvReason(rab, step, playLabel);
       }
-      inn.bases[fromBase] = null;
-      if (oc.dest < 3) inn.bases[oc.dest] = r;
       renderDiamond(team, r, rc);
     }
   });
@@ -1199,7 +1346,7 @@ function applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes) {
   } else {
     const batterDest = outcomes.batter.dest !== undefined ? outcomes.batter.dest : 0;
     for (let s = 0; s <= batterDest; s++) ab.bases[s] = true;
-    if (batterDest < 3 && baseFreeFor(inn, batterDest, pIdx)) inn.bases[batterDest] = pIdx;
+    setRunnerOn(inn, batterDest, pIdx);
   }
   ab.outsRecorded = totalOuts;
   if (dpOutNums.length >= 2) {
@@ -1367,9 +1514,42 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
   popup.innerHTML = html;
   popup.style.display = 'block';
 
+  // Where everyone ends up, as `runnerOrderConflicts` wants it. A runner thrown out
+  // (negative dest) leaves the ordering: the base he was heading for is free for the
+  // man behind him. The batter counts as starting from behind 1st.
+  const inPopup = new Set(runners.map(r => r.pIdx));
+  function rpParties(assume) {
+    const list = runners.map(r => ({
+      key: r.base,
+      from: r.base,
+      dest: choices[r.base] !== undefined && choices[r.base] >= 0 ? choices[r.base] : undefined
+    }));
+    // A runner this play already placed and who isn't up for a decision here holds
+    // his base — nobody in the popup may be sent to it.
+    for (let b = 0; b < 3; b++) {
+      if (inn.bases[b] !== null && !inPopup.has(inn.bases[b])) list.push({ key: 'held' + b, from: b, dest: b });
+    }
+    if (opts && opts.batterTakesBase) {
+      const bDest = choices.batterDest !== undefined ? choices.batterDest : batterDefaultBase;
+      list.push({ key: 'batter', from: -1, dest: bDest >= 0 ? bDest : undefined });
+    }
+    if (!assume) return list;
+    return list.map(p => (p.key === assume.key ? { key: p.key, from: p.from, dest: assume.dest } : p));
+  }
+
+  function refreshRunnerAvailability() {
+    popup.querySelectorAll('.rp-btn').forEach(btn => {
+      const dest = parseInt(btn.dataset.dest);
+      if (dest < 0) return;   // "Out at" never collides with anyone
+      const key = btn.dataset.base === 'batter' ? 'batter' : parseInt(btn.dataset.base);
+      setOptionBlocked(btn, runnerOrderConflicts(rpParties({ key, dest })).has(key));
+    });
+  }
+
   // Button click handlers
   popup.querySelectorAll('.rp-btn').forEach(btn => {
     btn.onclick = function() {
+      if (isOptionBlocked(this)) return;
       const baseKey = this.dataset.base;
       const dest = parseInt(this.dataset.dest);
       if (baseKey === 'batter') {
@@ -1385,8 +1565,11 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
         b.style.background = isActive ? (isOut ? '#fce4ec' : '#e3f2fd') : '#fff';
         b.style.color = isActive ? (isOut ? 'var(--accent)' : '#1565c0') : (isOut ? 'var(--accent)' : '#555');
       });
+      refreshRunnerAvailability();   // last: it repaints whatever it blocks
     };
   });
+
+  refreshRunnerAvailability();
 
   function flashRow(baseKey) {
     const row = popup.querySelector(`.rp-btn[data-base="${baseKey}"]`)?.closest('div')?.parentElement;
@@ -1404,33 +1587,17 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
       return;
     }
 
-    // #4: refuse a set of destinations that would put two men on one base. The
-    // old code took the last write and the overwritten runner vanished off the
-    // bases — still marked up on his at-bat, but unable to score.
-    const claimed = new Map(); // base -> row key to flash on collision
-    const inPopup = new Set(runners.map(r => r.pIdx));
-    // Someone already placed this play and not up for a decision here — the K+WP
-    // batter goes to 1st before the popup opens — still holds his base.
-    for (let b = 0; b < 3; b++) {
-      if (inn.bases[b] !== null && !inPopup.has(inn.bases[b])) claimed.set(b, null);
-    }
-    const collisions = [];
-    runners.forEach(r => {
-      const dest = choices[r.base];
-      if (dest < 0 || dest > 2) return;    // thrown out, or scored — off the bases
-      if (claimed.has(dest)) collisions.push(r.base);
-      else claimed.set(dest, r.base);
-    });
-    if (opts && opts.batterTakesBase) {
-      const bDest = choices.batterDest !== undefined ? choices.batterDest : batterDefaultBase;
-      if (bDest >= 0 && bDest <= 2) {
-        if (claimed.has(bDest)) collisions.push('batter');
-        else claimed.set(bDest, 'batter');
-      }
-    }
-    if (collisions.length) {
-      collisions.forEach(flashRow);
-      showPlayReject('Two runners can\'t share a base — pick another destination.');
+    // #4: refuse a set of destinations that would put two men on one base, or send
+    // a trailing runner past a lead runner still standing on one. The old code took
+    // the last write and the overwritten runner vanished off the bases — still
+    // marked up on his at-bat, but unable to score. The colliding options are
+    // greyed out as choices are made; this catches the rest, including the batter
+    // row left on its default.
+    const parties = rpParties();
+    const bad = runnerOrderConflicts(parties);
+    if (bad.size) {
+      bad.forEach(k => flashRow(k));
+      showPlayReject(runnerOrderMessage(parties));
       return;
     }
 
@@ -1679,7 +1846,7 @@ function removePitch() {
     } else {
       removeOutsFromPlay(team, innIdx, pIdx, innIdx, ab.out > 0 ? 1 : 0);
       const inn = getInnState(team, innIdx);
-      for (let b = 0; b < 3; b++) { if (inn.bases[b] === pIdx) inn.bases[b] = null; }
+      removeRunnerFromBases(inn, pIdx);
       ab.play = '';
       ab.bases = [false, false, false, false];
       ab.out = 0; ab.outsRecorded = 0; ab.seq = 0;
@@ -1879,13 +2046,18 @@ function promptSBBase() {
   const innIdx = parseInt(selectedCell.dataset.inn);
   const inn = getInnState(team, innIdx);
   const options = [];
+  // Only offer a steal the runner can actually complete (#4): nobody may be standing
+  // on the base he's taking or on one he'd have to run through. With runners on 1st
+  // and 2nd the lead runner steals 3rd first — the trailing man has nowhere to go
+  // until he does, so a double steal is entered as two events.
+  const canGo = (from, dest) => runnerPathClear(inn, from, dest, inn.bases[from]);
   if (inn.bases[1] !== null) {
-    options.push({from: 1, label: 'SB3 (2nd→3rd)'});
-    options.push({from: 1, label: 'SB3+E (2nd→Home)', extra: 'error'});
+    if (canGo(1, 2)) options.push({from: 1, label: 'SB3 (2nd→3rd)'});
+    if (canGo(1, 3)) options.push({from: 1, label: 'SB3+E (2nd→Home)', extra: 'error'});
   }
   if (inn.bases[0] !== null) {
-    options.push({from: 0, label: 'SB2 (1st→2nd)'});
-    options.push({from: 0, label: 'SB2+E (1st→3rd)', extra: 'error'});
+    if (canGo(0, 1)) options.push({from: 0, label: 'SB2 (1st→2nd)'});
+    if (canGo(0, 2)) options.push({from: 0, label: 'SB2+E (1st→3rd)', extra: 'error'});
   }
   if (inn.bases[2] !== null) {
     options.push({from: 2, label: 'SBH (3rd→Home)'});
@@ -1902,18 +2074,24 @@ function applySBAtBase(team, innIdx, fromBase, withError) {
   // steal home and put a run on the board.
   if (inn.outs >= 3) return;
   if (inn.bases[fromBase] === null) return;
+  const r = inn.bases[fromBase];
+  const dest = withError ? Math.min(fromBase + 2, 3) : fromBase + 1;
+  // The picker doesn't offer a blocked steal, so this is the guard for a hotkey
+  // firing on state the picker never saw. Refuse before the undo snapshot.
+  if (!runnerPathClear(inn, fromBase, dest, r)) {
+    const blocked = fromBase + 1 <= 2 && !baseFreeFor(inn, fromBase + 1, r) ? fromBase + 1 : Math.min(dest, 2);
+    reportRunnerCollision(blocked, inn.bases[blocked], r);
+    return;
+  }
   const pIdx = selectedCell ? parseInt(selectedCell.dataset.p) : 0;
   pushUndo(team, pIdx, innIdx);
-  const r = inn.bases[fromBase];
   const rc = getRunnerCol(team, r, innIdx);
   const rab = players[r].atBats[rc];
-  const dest = withError ? Math.min(fromBase + 2, 3) : fromBase + 1;
+  if (!moveRunnerTo(inn, fromBase, dest, r)) return;
   for (let step = fromBase + 1; step <= dest; step++) {
     rab.bases[step] = true;
     setAdvReason(rab, step, step === fromBase + 1 ? 'SB' : 'E');
   }
-  inn.bases[fromBase] = null;
-  if (dest < 3) inn.bases[dest] = r;
   renderDiamond(team, r, rc);
   updateInningRuns(team, innIdx);
   updatePlayerStats(team);
@@ -1957,7 +2135,7 @@ function applyCSAtBase(team, innIdx, fromBase) {
   setAdvReason(rab, fromBase + 1, 'CS');
   renderDiamond(team, r, rc);
   renderOut(team, r, rc);
-  inn.bases[fromBase] = null;
+  clearRunner(inn, fromBase);
   if (inn.outs >= 3) {
     // CS made the 3rd out — markNextInningLeadoff works this out from lastPA.
     updateLinescoreTotals(team);
@@ -1982,7 +2160,10 @@ function promptPickoff() {
   for (let b = 0; b < 3; b++) {
     if (inn.bases[b] !== null) {
       options.push({from: b, label: 'PO ' + baseNames[b] + ' — Out'});
-      options.push({from: b, label: 'PO ' + baseNames[b] + ' — Error (→' + destNames[b] + ')', extra: 'error'});
+      // The error variant moves him up a base; don't offer it into an occupied one (#4).
+      if (b + 1 > 2 || inn.bases[b + 1] === null) {
+        options.push({from: b, label: 'PO ' + baseNames[b] + ' — Error (→' + destNames[b] + ')', extra: 'error'});
+      }
     }
   }
   if (options.length === 0) return;
@@ -1995,17 +2176,22 @@ function applyPickoff(team, innIdx, atBase, withError) {
   // #2: no 4th out, and no advancing a stranded runner on the error variant.
   if (inn.outs >= 3) return;
   if (inn.bases[atBase] === null) return;
+  const r = inn.bases[atBase];
+  // Same as applySBAtBase: the picker won't offer a blocked advance, so this catches
+  // the paths that bypass it. Refuse before the undo snapshot.
+  if (withError && !baseFreeFor(inn, atBase + 1, r)) {
+    reportRunnerCollision(atBase + 1, inn.bases[atBase + 1], r);
+    return;
+  }
   const pIdx = selectedCell ? parseInt(selectedCell.dataset.p) : 0;
   pushUndo(team, pIdx, innIdx);
-  const r = inn.bases[atBase];
   const rc = getRunnerCol(team, r, innIdx);
   const rab = players[r].atBats[rc];
   if (withError) {
     const dest = atBase + 1;
+    if (!moveRunnerTo(inn, atBase, dest, r)) return;
     rab.bases[dest] = true;
     setAdvReason(rab, dest, 'E');
-    inn.bases[atBase] = null;
-    if (dest < 3) inn.bases[dest] = r;
     renderDiamond(team, r, rc);
     updateInningRuns(team, innIdx);
   } else {
@@ -2018,7 +2204,7 @@ function applyPickoff(team, innIdx, atBase, withError) {
     setAdvReason(rab, atBase, 'PO');
     renderDiamond(team, r, rc);
     renderOut(team, r, rc);
-    inn.bases[atBase] = null;
+    clearRunner(inn, atBase);
     if (inn.outs >= 3) {
       updateLinescoreTotals(team);
       if (!checkGameOver(team, innIdx)) {
@@ -2079,18 +2265,22 @@ function applyRunnerEvent(type) {
     updateInningRuns(team, innIdx);
   } else if (type === 'SB') {
     const players = gameState.teams[team].players;
+    // Lead runner first, so 2nd is free for the man behind him. A blocked steal is
+    // refused, not converted into an extra base: this used to send the runner from
+    // 2nd all the way home when 3rd was occupied, inventing a run (#4).
     if (inn.bases[1] !== null) {
       const r = inn.bases[1]; const rc = getRunnerCol(team, r, innIdx); const rab = players[r].atBats[rc];
-      rab.bases[2] = true; setAdvReason(rab, 2, 'SB');
-      if (inn.bases[2] === null) { inn.bases[2] = r; inn.bases[1] = null; }
-      else { rab.bases[3] = true; setAdvReason(rab, 3, 'SB'); inn.bases[1] = null; }
-      renderDiamond(team, r, rc);
+      if (moveRunnerTo(inn, 1, 2, r)) {
+        rab.bases[2] = true; setAdvReason(rab, 2, 'SB');
+        renderDiamond(team, r, rc);
+      }
     }
     if (inn.bases[0] !== null && inn.bases[1] === null) {
       const r = inn.bases[0]; const rc = getRunnerCol(team, r, innIdx); const rab = players[r].atBats[rc];
-      rab.bases[1] = true; setAdvReason(rab, 1, 'SB');
-      inn.bases[1] = r; inn.bases[0] = null;
-      renderDiamond(team, r, rc);
+      if (moveRunnerTo(inn, 0, 1, r)) {
+        rab.bases[1] = true; setAdvReason(rab, 1, 'SB');
+        renderDiamond(team, r, rc);
+      }
     }
     updateInningRuns(team, innIdx);
   } else if (type === 'CS') {
@@ -2108,7 +2298,7 @@ function applyRunnerEvent(type) {
         setAdvReason(rab, b + 1, 'CS');
         renderDiamond(team, r, rc);
         renderOut(team, r, rc);
-        inn.bases[b] = null;
+        clearRunner(inn, b);
         removed = true;
       }
     }
@@ -2288,6 +2478,17 @@ function editPlayType() {
       showPlayReject('The inning already has 3 outs — clear a play first.');
       return;
     }
+    // #4: the new play has to have a base to put the batter on. Refuse the change
+    // rather than evicting the runner standing there — same shape as the guard
+    // above, checked before anything is touched.
+    if (!nowOut && (nowHit || nowWalk) && newPlay !== 'HR') {
+      const HIT_DEST = { '1B': 0, 'E': 0, '2B': 1, '3B': 2 };
+      const bDest = HIT_DEST[newPlay] !== undefined ? HIT_DEST[newPlay] : 0;
+      if (!baseFreeFor(inn, bDest, pIdx)) {
+        showPlayReject('Another runner is on ' + BASE_NAMES[bDest] + ' — move him first.');
+        return;
+      }
+    }
     popup.style.display = 'none';
     pushUndo(team, pIdx, innIdx);
     // Adjust outs when changing between out and non-out
@@ -2298,20 +2499,20 @@ function editPlayType() {
     } else if (!wasOut && nowOut) {
       recordBatterOut(team, innIdx, pIdx, ab);
       // Remove batter from bases
-      for (let b = 0; b < 3; b++) { if (inn.bases[b] === pIdx) inn.bases[b] = null; }
+      removeRunnerFromBases(inn, pIdx);
       ab.bases = [false, false, false, false];
     }
     // Adjust bases when changing between hit types
     if (nowOut) {
-      for (let b = 0; b < 3; b++) { if (inn.bases[b] === pIdx) inn.bases[b] = null; }
+      removeRunnerFromBases(inn, pIdx);
       ab.bases = [false, false, false, false]; ab.outOnBase = null;
     } else if (nowHit || nowWalk) {
       // Clear old base position
-      for (let b = 0; b < 3; b++) { if (inn.bases[b] === pIdx) inn.bases[b] = null; }
+      removeRunnerFromBases(inn, pIdx);
       ab.bases = [false, false, false, false];
-      if (newPlay === '1B' || newPlay === 'E' || nowWalk) { ab.bases[0] = true; inn.bases[0] = pIdx; }
-      else if (newPlay === '2B') { ab.bases[0] = true; ab.bases[1] = true; inn.bases[1] = pIdx; }
-      else if (newPlay === '3B') { ab.bases[0] = true; ab.bases[1] = true; ab.bases[2] = true; inn.bases[2] = pIdx; }
+      if (newPlay === '1B' || newPlay === 'E' || nowWalk) { ab.bases[0] = true; setRunnerOn(inn, 0, pIdx); }
+      else if (newPlay === '2B') { ab.bases[0] = true; ab.bases[1] = true; setRunnerOn(inn, 1, pIdx); }
+      else if (newPlay === '3B') { ab.bases[0] = true; ab.bases[1] = true; ab.bases[2] = true; setRunnerOn(inn, 2, pIdx); }
       else if (newPlay === 'HR') { ab.bases = [true, true, true, true]; }
     }
     ab.play = newPlay;
@@ -2378,6 +2579,9 @@ function moveRunner() {
     html += '<div style="display:flex;gap:4px">';
     for (let d = 0; d <= 3; d++) {
       if (d === r.base) continue;
+      // This is the manual override, but it still can't put two men on one base (#4):
+      // an occupied destination isn't offered. Move the other runner first.
+      if (d < 3 && inn.bases[d] !== null) continue;
       html += '<button class="mr-btn" data-from="' + r.base + '" data-to="' + d + '" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid #ccc;border-radius:3px;background:#fff;color:#555;cursor:pointer;font-family:var(--mono)">→ ' + baseNames[d] + '</button>';
     }
     html += '<button class="mr-btn mr-remove" data-from="' + r.base + '" data-to="off" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid var(--accent);border-radius:3px;background:#fff;color:var(--accent);cursor:pointer;font-family:var(--mono)">Remove</button>';
@@ -2390,23 +2594,27 @@ function moveRunner() {
     btn.onclick = function() {
       const from = parseInt(this.dataset.from);
       const to = this.dataset.to;
-      pushUndo(team, pIdx, innIdx);
       const r = inn.bases[from];
       if (r === null) return;
+      const toBase = to === 'off' ? null : parseInt(to);
+      if (toBase !== null && !baseFreeFor(inn, toBase, r)) {
+        reportRunnerCollision(toBase, inn.bases[toBase], r);
+        return;
+      }
+      pushUndo(team, pIdx, innIdx);
       const rc = getRunnerCol(team, r, innIdx);
       const rab = players[r].atBats[rc];
-      inn.bases[from] = null;
       if (to === 'off') {
+        clearRunner(inn, from);
         for (let b = 0; b < 4; b++) { rab.bases[b] = false; }
         rab.advReason = ['','','',''];
         rab.out = 0; rab.outsRecorded = 0; rab.outOnBase = null;
       } else {
-        const toBase = parseInt(to);
+        if (!moveRunnerTo(inn, from, toBase, r)) return;
         for (let step = from + 1; step <= toBase; step++) {
           rab.bases[step] = true;
           setAdvReason(rab, step, 'MV');
         }
-        if (toBase < 3) inn.bases[toBase] = r;
       }
       renderDiamond(team, r, rc);
       renderOut(team, r, rc);
@@ -2454,7 +2662,7 @@ function clearPlayKeepPitches() {
   } else {
     const inn = getInnState(team, innIdx);
     removeOutsFromPlay(team, innIdx, pIdx, innIdx, ab.outsRecorded || (ab.out ? 1 : 0));
-    for (let b = 0; b < 3; b++) { if (inn.bases[b] === pIdx) inn.bases[b] = null; }
+    removeRunnerFromBases(inn, pIdx);
     ab.play = '';
     ab.bases = [false, false, false, false];
     ab.out = 0; ab.outsRecorded = 0; ab.rbi = 0; ab.hitLoc = null;
@@ -2668,7 +2876,7 @@ function clearSelectedCell() {
     // nothing (`inn.outs = Math.max(0, inn.outs)`).
     const runnerOuts = outsFromPlay(inn, pIdx, innIdx).filter(o => o.pIdx !== pIdx || o.col !== innIdx);
     removeOutsFromPlay(team, innIdx, pIdx, innIdx, ab.outsRecorded || (ab.out ? 1 : 0));
-    for (let b = 0; b < 3; b++) { if (inn.bases[b] === pIdx) inn.bases[b] = null; }
+    removeRunnerFromBases(inn, pIdx);
     for (const o of runnerOuts) {
       if (o.pIdx == null) continue;
       const rab = players[o.pIdx].atBats[o.col];

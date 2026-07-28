@@ -781,4 +781,246 @@
     eq('second out', merged.innings.visiting[0].outsLog[1].n, 2);
     eq('pitcher carried over', merged.innings.visiting[0].outsLog[0].pitcher, 0);
   });
+
+  /* =====================================================================
+     Phase 4 — one way to move a runner.
+
+     Every write to `inn.bases` goes through setRunnerOn / clearRunner /
+     moveRunnerTo, and the popups and base pickers stop offering a destination
+     that would put two men on one base or send a runner past the man in front
+     of him. Closes #4 properly.
+     ===================================================================== */
+
+  function rpBtn(base, dest) {
+    const btn = document.getElementById('runner-popup').querySelector(`.rp-btn[data-base="${base}"][data-dest="${dest}"]`);
+    if (!btn) fail(`runner popup has no option base=${base} dest=${dest}`);
+    return btn;
+  }
+  function ocBtn(base, action, dest) {
+    const q = dest === undefined
+      ? `.oc-btn[data-base="${base}"][data-action="${action}"]`
+      : `.oc-btn[data-base="${base}"][data-action="${action}"][data-dest="${dest}"]`;
+    const btn = document.getElementById('outcome-popup').querySelector(q);
+    if (!btn) fail(`outcome popup has no option ${base} ${action} ${dest}`);
+    return btn;
+  }
+  function bpLabels() {
+    return Array.from(document.getElementById('base-picker').querySelectorAll('.bp-opt')).map(b => b.textContent);
+  }
+  function mrDests(fromBase) {
+    return Array.from(document.getElementById('move-runner-popup').querySelectorAll(`.mr-btn[data-from="${fromBase}"]`))
+      .map(b => b.dataset.to);
+  }
+  // Nothing should ever leave two runners listed on one base, whatever was entered.
+  function basesConsistent(team, col) {
+    const occupied = inn(team, col).bases.filter(b => b !== null);
+    eq('no base holds two runners', occupied.length, new Set(occupied).size);
+  }
+
+  test('the runner popup blocks the base the batter has to take', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    play('1B');                                    // popup opens: batter must take 1st
+    ok('holding 1st is not offered', rpBtn(0, 0).disabled);
+    ok('2nd is still offered', !rpBtn(0, 1).disabled);
+    runnerPopup({ 0: 1, batter: 0 });
+    eq('runner on 2nd', inn('visiting', 0).bases[1], 0);
+    eq('batter on 1st', inn('visiting', 0).bases[0], 2);
+  });
+
+  test('the runner popup will not send a runner past a lead runner who holds', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });   // p0 on 2nd, p2 on 1st
+    play('1B');                                    // popup: three-way decision
+    rpBtn(1, 1).onclick();                          // lead runner holds 2nd
+    ok('3rd is blocked for the trailing runner', rpBtn(0, 2).disabled);
+    ok('2nd is blocked for the trailing runner', rpBtn(0, 1).disabled);
+    ok('the out options stay open', !rpBtn(0, -2).disabled);
+    clickId('rp-confirm');
+    ok('the entry is not accepted', visible('runner-popup'));
+    basesConsistent('visiting', 0);
+  });
+
+  test('two runners can both score without tripping the order check', () => {
+    sel('visiting', 0, 0);
+    play('2B');
+    play('1B'); runnerPopup({ 1: 3, batter: 0 });   // p0 scores, p2 on 1st
+    play('2B'); runnerPopup({ 0: 3, batter: 1 });   // p2 scores from 1st, p4 on 2nd
+    eq('runs', lsInput('visiting', 0).value, '2');
+    eq('batter on 2nd', inn('visiting', 0).bases[1], 4);
+    basesConsistent('visiting', 0);
+  });
+
+  // #4 — the batter used to be put on 1st before the popup opened, which erased
+  // the runner standing there and dropped him out of the popup's own runner list.
+  test('a K+WP does not erase the runner on 1st', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    play('K+WP'); runnerPopup({ 0: 1, batter: 0 }); // runner to 2nd, batter to 1st
+    eq('runner on 2nd', inn('visiting', 0).bases[1], 0);
+    eq('batter on 1st', inn('visiting', 0).bases[0], 2);
+    eq('the runner kept his advancement', ab('visiting', 0, 0).bases[1], true);
+    basesConsistent('visiting', 0);
+  });
+
+  test('the DP outcome popup blocks a runner holding the base the batter takes', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    promptPositionPlay('FC ');
+    positionPopup('6');                            // fielder's choice: batter is safe at 1st
+    ok('the runner cannot hold 1st', ocBtn(0, 'safe', 0).disabled);
+    ok('2nd is still offered', !ocBtn(0, 'safe', 1).disabled);
+    ok('out at 2nd is still offered', !ocBtn(0, 'out', 1).disabled);
+    outcomePopup({ 0: ['safe', 1], batter: ['safe', 0] });
+    eq('runner on 2nd', inn('visiting', 0).bases[1], 0);
+    eq('batter on 1st', inn('visiting', 0).bases[0], 2);
+  });
+
+  test('the DP outcome popup lets a runner hold when the batter is out', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    promptPositionPlay('DP ');
+    positionPopup('6-4-3');                        // batter is out by default on a DP
+    ok('holding 1st is allowed', !ocBtn(0, 'safe', 0).disabled);
+    outcomePopup({ 0: ['safe', 0] });
+    eq('runner still on 1st', inn('visiting', 0).bases[0], 0);
+    eq('outs', inn('visiting', 0).outs, 1);
+  });
+
+  // #4 — the steal picker used to offer a base someone was already standing on.
+  test('a steal into an occupied base is not offered', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });   // p0 on 2nd, p2 on 1st
+    key('r');
+    const labels = bpLabels();
+    ok('the lead runner can steal 3rd', labels.some(l => l.indexOf('SB3 ') === 0));
+    ok('the trailing runner is not offered 2nd', !labels.some(l => l.indexOf('SB2 ') === 0));
+    ok('the trailing runner is not offered 1st→3rd', !labels.some(l => l.indexOf('SB2+E') === 0));
+  });
+
+  // With 2nd and 3rd occupied the only legal steal is home: 2nd→3rd is blocked and
+  // so is 2nd→home on the error, which would run straight through the man on 3rd.
+  // One option left, so the picker applies it directly instead of opening.
+  test('a steal through an occupied base is not offered', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                    // p0 on 3rd
+    play('2B'); runnerPopup({ 2: 2, batter: 1 });   // p0 holds 3rd, p2 on 2nd
+    key('r');
+    eq('the runner on 3rd stole home', lsInput('visiting', 0).value, '1');
+    eq('the runner on 2nd stayed put', inn('visiting', 0).bases[1], 2);
+    eq('the runner on 2nd did not advance', ab('visiting', 2, 0).bases[2], false);
+    basesConsistent('visiting', 0);
+  });
+
+  // #4 — with 3rd occupied this used to send the runner on 2nd all the way home,
+  // inventing a run out of a stolen base that never happened.
+  test('a blocked bulk steal does not invent a run', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                    // p0 on 3rd
+    play('2B'); runnerPopup({ 2: 2, batter: 1 });   // p0 holds 3rd, p2 on 2nd
+    sel('visiting', 4, 0);
+    applyRunnerEvent('SB');
+    eq('R total', rTotal('visiting'), '');
+    eq('the runner did not reach home', ab('visiting', 2, 0).bases[3], false);
+    eq('runner still on 2nd', inn('visiting', 0).bases[1], 2);
+    eq('runner still on 3rd', inn('visiting', 0).bases[2], 0);
+  });
+
+  test('a pickoff error into an occupied base is not offered', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });   // p0 on 2nd, p2 on 1st
+    promptPickoff();
+    const labels = bpLabels();
+    ok('both runners can be picked off', labels.filter(l => /— Out$/.test(l)).length === 2);
+    ok('no error advance into 2nd', !labels.some(l => /1st — Error/.test(l)));
+    ok('the error advance from 2nd is offered', labels.some(l => /2nd — Error/.test(l)));
+  });
+
+  test('the move-runner popup does not offer an occupied base', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });   // p0 on 2nd, p2 on 1st
+    moveRunner();
+    eq('the runner on 1st is offered 3rd, home and remove', mrDests(0).join(','), '2,3,off');
+    eq('the runner on 2nd is offered 3rd, home and remove', mrDests(1).join(','), '2,3,off');
+    ok('neither is offered the base the other is on', mrDests(0).indexOf('1') === -1 && mrDests(1).indexOf('0') === -1);
+    basesConsistent('visiting', 0);
+  });
+
+  test('changing a play type cannot double up a base', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    play('K');                                     // p2 struck out
+    sel('visiting', 2, 0);
+    editPlay('1B');                                // would put p2 on an occupied 1st
+    eq('play unchanged', ab('visiting', 2, 0).play, 'K');
+    eq('runner on 1st unchanged', inn('visiting', 0).bases[0], 0);
+    eq('outs', inn('visiting', 0).outs, 1);
+    basesConsistent('visiting', 0);
+  });
+
+  test('changing a play type to a double is allowed when 2nd is open', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    play('K');
+    sel('visiting', 2, 0);
+    editPlay('2B');
+    eq('play', ab('visiting', 2, 0).play, '2B');
+    eq('batter on 2nd', inn('visiting', 0).bases[1], 2);
+    eq('runner still on 1st', inn('visiting', 0).bases[0], 0);
+    eq('outs', inn('visiting', 0).outs, 0);
+  });
+
+  /* The rewritten advanceRunners / advanceForcedRunners have to move everyone the
+     old chain of hand-written cases did. */
+
+  test('a wild pitch advances every runner one base and scores from 3rd', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                    // p0 on 3rd
+    play('1B'); runnerPopup({ 2: 2, batter: 0 });   // p0 holds 3rd, p2 on 1st
+    key('n');                                      // wild pitch
+    eq('run scored', lsInput('visiting', 0).value, '1');
+    eq('trailing runner on 2nd', inn('visiting', 0).bases[1], 2);
+    eq('3rd empty', inn('visiting', 0).bases[2], null);
+    basesConsistent('visiting', 0);
+  });
+
+  test('a bases-loaded walk forces in exactly one run', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });
+    play('1B'); runnerPopup({ 1: 2, 0: 1, batter: 0 });   // bases loaded
+    play('BB');
+    eq('run scored', lsInput('visiting', 0).value, '1');
+    eq('runner from 3rd scored', ab('visiting', 0, 0).bases[3], true);
+    eq('1st', inn('visiting', 0).bases[0], 6);
+    eq('2nd', inn('visiting', 0).bases[1], 4);
+    eq('3rd', inn('visiting', 0).bases[2], 2);
+    basesConsistent('visiting', 0);
+  });
+
+  test('a walk with 1st and 3rd occupied does not force the runner on 3rd', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                    // p0 on 3rd
+    play('1B'); runnerPopup({ 2: 2, batter: 0 });   // p0 holds 3rd, p2 on 1st
+    play('BB');
+    eq('no run scored', rTotal('visiting'), '');
+    eq('runner still on 3rd', inn('visiting', 0).bases[2], 0);
+    eq('forced runner on 2nd', inn('visiting', 0).bases[1], 2);
+    eq('batter on 1st', inn('visiting', 0).bases[0], 4);
+  });
+
+  test('a grand slam clears the bases and scores four', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });
+    play('1B'); runnerPopup({ 1: 2, 0: 1, batter: 0 });   // bases loaded
+    play('HR');
+    eq('runs', lsInput('visiting', 0).value, '4');
+    eq('RBI', ab('visiting', 6, 0).rbi, 4);
+    eq('bases empty', inn('visiting', 0).bases.filter(b => b !== null).length, 0);
+  });
 })();

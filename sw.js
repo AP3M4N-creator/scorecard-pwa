@@ -5,7 +5,7 @@
 //  - Fonts/icons are stale-while-revalidate: instant from cache, refreshed
 //    in the background.
 // Bump SHELL_VERSION only if you ever need to force-drop the whole cache.
-const SHELL_VERSION = 'v23';
+const SHELL_VERSION = 'v24';
 const CACHE = 'scorecard-' + SHELL_VERSION;
 
 const FONTS = [
