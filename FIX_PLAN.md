@@ -715,6 +715,14 @@ rules have real edge cases. Land after Phase 3.
 
 **Size:** one sitting. **Risk:** low.
 
+**Carried from `PLAN.md` #4, the one item of that plan neither shipped nor already
+recorded here** (its other five are done — see the commits from `42ae3d9` to
+`f7ff87d`): *optionally*, keep a rolling last-10 snapshots of the current game under
+a separate storage key. Belongs with #25 — both are about having something to fall
+back on when the single `baseball-scorecard` key is lost or unreadable — but it is
+insurance against a class of failure nobody has hit yet, where #25 fixes one that is
+reachable today. Do #25 regardless; do this only if a game is ever actually lost.
+
 ---
 
 ## Phase 10 — Accessibility + CSP *(not yet authorised)*
