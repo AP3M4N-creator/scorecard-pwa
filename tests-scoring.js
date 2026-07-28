@@ -381,11 +381,12 @@
   });
 
   /* =====================================================================
-     Known failures — Phase 2 (result-changing bugs)
-     Each asserts the behaviour the fix must produce.
+     Phase 2 — result-changing bugs, fixed. Promoted from xfail; each case now
+     guards the fix for the audit finding named in its comment.
      ===================================================================== */
 
-  xfail('#1', 'the strikeout popup applies to the batter who struck out, not the cell selected later', () => {
+  // #1
+  test('the strikeout popup applies to the batter who struck out, not the cell selected later', () => {
     sel('visiting', 0, 0);
     pitch('S'); pitch('S'); pitch('S');          // popup opens for batter 1
     sel('visiting', 8, 0);                       // scorer taps batter 5's cell meanwhile
@@ -395,7 +396,8 @@
     eq('outs', inn('visiting', 0).outs, 1);
   });
 
-  xfail('#2', 'a caught stealing after the 3rd out cannot make a 4th out', () => {
+  // #2
+  test('a caught stealing after the 3rd out cannot make a 4th out', () => {
     sel('visiting', 0, 0);
     play('1B'); play('K'); play('K'); play('K'); // 3 outs, runner stranded on 1st
     key('j');
@@ -403,7 +405,8 @@
     eq('stranded runner untouched', ab('visiting', 0, 0).outOnBase, null);
   });
 
-  xfail('#2', 'a pickoff after the 3rd out cannot make a 4th out', () => {
+  // #2
+  test('a pickoff after the 3rd out cannot make a 4th out', () => {
     sel('visiting', 0, 0);
     play('1B'); play('K'); play('K'); play('K');
     key('o');
@@ -412,7 +415,8 @@
     eq('stranded runner untouched', ab('visiting', 0, 0).outOnBase, null);
   });
 
-  xfail('#3', 'a stolen base after the 3rd out cannot score a run', () => {
+  // #3
+  test('a stolen base after the 3rd out cannot score a run', () => {
     sel('visiting', 0, 0);
     play('3B'); play('K'); play('K'); play('K'); // 3 outs, runner stranded on 3rd
     key('r');                                    // only SBH is offered: applied directly
@@ -420,7 +424,8 @@
     eq('runner did not reach home', ab('visiting', 0, 0).bases[3], false);
   });
 
-  xfail('#4', 'a runner told to hold is not erased by the batter taking that base', () => {
+  // #4
+  test('a runner told to hold is not erased by the batter taking that base', () => {
     sel('visiting', 0, 0);
     play('2B');                                  // p0 to 2nd
     play('2B'); runnerPopup({ 1: 1, batter: 1 }); // runner holds 2nd, batter sent to 2nd
@@ -430,7 +435,8 @@
     eq('no base holds two runners', occupied.length, new Set(occupied).size);
   });
 
-  xfail('#5', 'the game ends when the 3rd out of the top of the 9th is a caught stealing', () => {
+  // #5
+  test('the game ends when the 3rd out of the top of the 9th is a caught stealing', () => {
     lsInput('home', 0).value = '2';               // home leads 2-0
     updateLinescoreTotals('home');
     sel('visiting', 0, 8);                        // top of the 9th
@@ -440,7 +446,8 @@
     ok('game recognised as over', gameOverShown);
   });
 
-  xfail('#6', 'a tied 9th selects a visible cell in the 10th', () => {
+  // #6
+  test('a tied 9th selects a visible cell in the 10th', () => {
     gameState.visibleInnings = 9;
     updateInningVisibility();
     selectNextBatterForInning('visiting', 9);     // column 9 == the 10th inning
@@ -449,7 +456,8 @@
     ok('extra inning revealed', gameState.visibleInnings >= 10);
   });
 
-  xfail('#7', 'a double play entered with 2 outs is rejected', () => {
+  // #7
+  test('a double play entered with 2 outs is rejected', () => {
     sel('visiting', 0, 0);
     play('K'); play('K');                         // 2 outs
     promptPositionPlay('DP ');
@@ -459,7 +467,8 @@
     eq('no pitch left behind', ab('visiting', 4, 0).pitches.length, 0);
   });
 
-  xfail('#8', 'changing a play to a strikeout cannot push the inning past 3 outs', () => {
+  // #8
+  test('changing a play to a strikeout cannot push the inning past 3 outs', () => {
     sel('visiting', 0, 0);
     play('1B'); play('K'); play('K'); play('K');   // 3 outs
     sel('visiting', 0, 0);
@@ -467,18 +476,21 @@
     eq('outs', inn('visiting', 0).outs, 3);
   });
 
-  xfail('#15', 'a prefixed groundout code is recognised as an out', () => {
+  // #15
+  test('a prefixed groundout code is recognised as an out', () => {
     ['GO 6-3', 'FO 8', 'LO 7', 'PO 3'].forEach(code => ok(`isOutPlay(${JSON.stringify(code)})`, isOutPlay(code)));
   });
 
-  xfail('#15', 'a prefixed groundout records an out', () => {
+  // #15
+  test('a prefixed groundout records an out', () => {
     sel('visiting', 0, 0);
     play('GO 6-3');
     eq('outs', inn('visiting', 0).outs, 1);
     eq('out numbered on the at-bat', ab('visiting', 0, 0).out, 1);
   });
 
-  xfail('#26', 'pitches cannot be charged to a batter after the 3rd out', () => {
+  // #26
+  test('pitches cannot be charged to a batter after the 3rd out', () => {
     sel('visiting', 0, 0);
     play('K'); play('K'); play('K');
     sel('visiting', 6, 0);                         // a batter who never came up
@@ -487,7 +499,8 @@
     eq('play', ab('visiting', 6, 0).play, '');
   });
 
-  xfail('#27', 'a triple play rejected for too few runners leaves no pitch behind', () => {
+  // #27
+  test('a triple play rejected for too few runners leaves no pitch behind', () => {
     sel('visiting', 0, 0);
     play('TP 6-4-3');                              // nobody on base
     eq('play', ab('visiting', 0, 0).play, '');
@@ -495,4 +508,51 @@
     eq('outs', inn('visiting', 0).outs, 0);
   });
 
+  /* =====================================================================
+     Phase 2 — the fixes must not over-reach. A guard that refuses a legal
+     entry during a live game is worse than the bug it closes.
+     ===================================================================== */
+
+  // #15 — the other half of the fix: normalising at the input boundary, so a
+  // typed prefix never reaches state in the first place.
+  test('the position popup normalizes a typed "GO 6-3" to the canonical code', () => {
+    sel('visiting', 0, 0);
+    promptGroundout();
+    positionPopup('GO 6-3');
+    eq('play', ab('visiting', 0, 0).play, '6-3');
+    eq('outs', inn('visiting', 0).outs, 1);
+  });
+
+  // #4
+  test('a legal advance is not refused by the occupancy check', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });   // runner to 2nd, batter to 1st
+    const bases = inn('visiting', 0).bases;
+    eq('runner on 2nd', bases[1], 0);
+    eq('batter on 1st', bases[0], 2);
+    eq('outs', inn('visiting', 0).outs, 0);
+  });
+
+  // #4 — the batter is out on a sacrifice, so a runner holding 1st is no clash.
+  test('a sacrifice is not refused when a runner holds the base the batter would take', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    play('SH'); runnerPopup({ 0: 0, batter: 0 });   // runner holds, batter is out
+    eq('outs', inn('visiting', 0).outs, 1);
+    eq('runner still on 1st', inn('visiting', 0).bases[0], 0);
+  });
+
+  // #4 — a refusal has to be recoverable: the popup stays open to be re-answered.
+  test('after a refused destination the scorer can pick another and confirm', () => {
+    sel('visiting', 0, 0);
+    play('2B');                                    // p0 on 2nd
+    play('2B');
+    runnerPopup({ 1: 1, batter: 1 });               // refused — both want 2nd
+    ok('popup still open', visible('runner-popup'));
+    runnerPopup({ 1: 3 });                         // send the runner home instead
+    eq('runner scored', ab('visiting', 0, 0).bases[3], true);
+    eq('batter on 2nd', inn('visiting', 0).bases[1], 2);
+    eq('outs', inn('visiting', 0).outs, 0);
+  });
 })();

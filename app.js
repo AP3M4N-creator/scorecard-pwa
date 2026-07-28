@@ -489,11 +489,28 @@ function advanceForcedRunners(team, innIdx, reason) {
   }
 }
 
+// Scorers type "GO 6-3" / "FO 8"; everything downstream matches canonical codes
+// ("6-3", "F8"). New entries are normalized at the input boundary by
+// normalizePlayCode, so a prefixed code only reaches state from a game saved
+// before that existed — isOutPlay still has to recognise those.
+const PREFIXED_OUT_RE = /^(GO|FO|LO|PO)\s+\S/i;
+const OUT_PREFIX_CANON = { GO: '', FO: 'F', LO: 'L', PO: 'P' };
+
 function isOutPlay(play) {
   return ['K','ꓘ','GO','SAC','DP','FC','SF','SH','IF','TP'].includes(play) ||
     /^F\d/.test(play) || /^P\d/.test(play) || /^\d+-\d/.test(play) || /^L\d/.test(play) ||
     /^\d+U?$/i.test(play) || /^U\d+$/i.test(play) ||
-    /^DP /.test(play) || /^FC /.test(play) || /^TP /.test(play);
+    /^DP /.test(play) || /^FC /.test(play) || /^TP /.test(play) ||
+    PREFIXED_OUT_RE.test(play);
+}
+
+// "GO 6-3" → "6-3", "FO 8" → "F8", "LO 7" → "L7", "PO 3" → "P3". Anything else
+// (including "DP 6-4-3" and the quick-button codes) passes through untouched.
+function normalizePlayCode(code) {
+  const raw = String(code == null ? '' : code).trim();
+  const m = /^(GO|FO|LO|PO)\s+(.+)$/i.exec(raw);
+  if (!m) return raw;
+  return OUT_PREFIX_CANON[m[1].toUpperCase()] + m[2].trim();
 }
 
 function isHitPlay(play) {
@@ -509,6 +526,79 @@ function hasRunnersOnBase(team, innIdx) {
   return inn.bases[0] !== null || inn.bases[1] !== null || inn.bases[2] !== null;
 }
 
+/* ------------------------------------------------------------------------
+   Entry guards (audit findings #1, #4, #7, #27)
+   ------------------------------------------------------------------------ */
+
+// The cell a popup is deciding for. Popups resolve their target when they OPEN,
+// not when the scorer presses a button — tapping another cell in between used to
+// apply the play to the wrong batter (#1).
+function currentTarget() {
+  if (!selectedCell) return null;
+  return {
+    team: selectedCell.dataset.team,
+    pIdx: parseInt(selectedCell.dataset.p),
+    innIdx: parseInt(selectedCell.dataset.inn)
+  };
+}
+
+// #4: two runners can't share a base. True when pIdx may occupy `base` — either
+// it's empty or he's already standing on it. Base 3 is home; any number score.
+function baseFreeFor(inn, base, pIdx) {
+  return base > 2 || inn.bases[base] === null || inn.bases[base] === pIdx;
+}
+
+let playRejectTimer = null;
+
+// Brief, non-blocking notice for a refused entry. A rejected play has to say so:
+// silently dropping it is how a scorer ends up trusting a wrong card.
+function showPlayReject(msg) {
+  if (typeof document === 'undefined') return;
+  let el = document.getElementById('play-reject');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'play-reject';
+    el.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);background:var(--accent,#c62828);color:#fff;padding:10px 18px;border-radius:6px;z-index:400;font-family:var(--heading);font-size:13px;font-weight:700;letter-spacing:0.5px;text-align:center;max-width:80vw;box-shadow:0 4px 20px rgba(0,0,0,0.35);';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.display = 'block';
+  if (playRejectTimer) clearTimeout(playRejectTimer);
+  playRejectTimer = setTimeout(() => { playRejectTimer = null; el.style.display = 'none'; }, 2200);
+}
+
+// Popups that own the current entry get a backdrop, so a tap meant for the popup
+// can't land on the grid and move the selection underneath it (#1, #29).
+const BACKDROP_GUARDED = ['k-popup', 'pos-popup'];
+
+function showPopupBackdrop() {
+  if (typeof document === 'undefined') return;
+  let bd = document.getElementById('popup-backdrop');
+  if (!bd) {
+    bd = document.createElement('div');
+    bd.id = 'popup-backdrop';
+    bd.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:180;background:rgba(26,39,68,0.15);';
+    bd.onclick = function(e) {
+      if (e && e.stopPropagation) e.stopPropagation();
+      // Swallow the tap. If whatever it was guarding is already gone, get out of
+      // the way rather than leaving the app unclickable.
+      const stillOpen = BACKDROP_GUARDED.some(id => {
+        const p = document.getElementById(id);
+        return p && p.style.display && p.style.display !== 'none';
+      });
+      if (!stillOpen) hidePopupBackdrop();
+    };
+    document.body.appendChild(bd);
+  }
+  bd.style.display = 'block';
+}
+
+function hidePopupBackdrop() {
+  if (typeof document === 'undefined') return;
+  const bd = document.getElementById('popup-backdrop');
+  if (bd) bd.style.display = 'none';
+}
+
 function countRunnersScored(team, innIdx, prevRunners) {
   const players = gameState.teams[team].players;
   let scored = 0;
@@ -521,14 +611,35 @@ function countRunnersScored(team, innIdx, prevRunners) {
   return scored;
 }
 
-function applyPlay(play) {
-  if (!selectedCell) return;
-  const team = selectedCell.dataset.team;
-  const pIdx = parseInt(selectedCell.dataset.p);
-  const innIdx = parseInt(selectedCell.dataset.inn);
+// `target` is the cell this play belongs to. Popups pass the cell they captured
+// when they opened; everything else falls back to the current selection (#1).
+function applyPlay(play, target) {
+  const t = target || currentTarget();
+  if (!t) return;
+  const team = t.team;
+  const pIdx = t.pIdx;
+  const innIdx = t.innIdx;
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   const inn = getInnState(team, innIdx);
   if (inn.outs >= 3 || ab.play) return;
+
+  // #7: with 2 outs the inning ends on the first out, so a double play is not a
+  // legal entry. Reject before the at-bat is touched — no play, no result pitch.
+  if (play === 'DP' || /^DP /.test(play)) {
+    if (inn.outs >= 2) {
+      showPlayReject('Only one out left — record the single out, not a DP.');
+      return;
+    }
+  }
+  // #27: a triple play needs two runners to double off. Same early reject, so a
+  // rejected entry doesn't leave a result pitch behind.
+  if (play === 'TP' || /^TP /.test(play)) {
+    const onBase = [inn.bases[0], inn.bases[1], inn.bases[2]].filter(b => b !== null).length;
+    if (onBase < 2) {
+      showPlayReject('A triple play needs two runners on base.');
+      return;
+    }
+  }
 
   // Save undo snapshot
   const prevTab = document.querySelector('.tab-btn.active')?.dataset.tab;
@@ -582,11 +693,13 @@ function applyPlay(play) {
     if (isKWP) {
       ab.bases[0] = true; inn.bases[0] = pIdx;
       const batterLbl = getBatterLabel(team, pIdx, innIdx);
+      // batterTakesBase is false here: the batter was already placed on 1st above,
+      // so he shows up as the runner-on-1st row and is counted there.
       showRunnerPopup(team, innIdx, 1, function(choices) {
         applyChosenAdvancements(team, innIdx, choices, batterLbl);
         ab.rbi = countRunnersScored(team, innIdx, prevRunners);
         finishPlay(team, pIdx, innIdx, snapshot);
-      });
+      }, { batterTakesBase: false, batterPIdx: pIdx });
       return;
     }
 
@@ -599,7 +712,12 @@ function applyPlay(play) {
       if (isHitOrError) {
         if (choices.batterDest !== undefined && choices.batterDest > 0) {
           for (let s = 0; s <= choices.batterDest; s++) ab.bases[s] = true;
-          if (choices.batterDest < 3) inn.bases[choices.batterDest] = pIdx;
+          // Backstop for #4 — the popup refuses a colliding destination, so this
+          // only fires on an imported or hand-edited state. Keep the runner who
+          // is already standing there rather than erasing him off the bases.
+          if (choices.batterDest < 3 && baseFreeFor(inn, choices.batterDest, pIdx)) {
+            inn.bases[choices.batterDest] = pIdx;
+          }
         } else {
           placeBatter(ab, inn, play, pIdx);
         }
@@ -615,7 +733,7 @@ function applyPlay(play) {
         ab.rbi = countRunnersScored(team, innIdx, prevRunners);
       }
       finishPlay(team, pIdx, innIdx, snapshot);
-    });
+    }, { batterTakesBase: isHitOrError, batterPIdx: pIdx });
     return;
   }
 
@@ -636,9 +754,7 @@ function applyPlay(play) {
   } else if (play === 'SH' || play === 'SAC') {
     inn.outs++; ab.out = inn.outs; ab.outsRecorded = 1;
   } else if (play === 'TP' || /^TP /.test(play)) {
-    // Triple play requires at least 2 runners on base
-    const rCount = [inn.bases[0], inn.bases[1], inn.bases[2]].filter(b => b !== null).length;
-    if (rCount < 2) { ab.play = ''; return; }
+    // Runner count already checked at entry, before any pitch was pushed (#27).
     showRunnerOutcomePopup(team, innIdx, play, true, function(outcomes) {
       applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes);
       ab.rbi = countRunnersScored(team, innIdx, prevRunners);
@@ -669,9 +785,13 @@ function applyPlay(play) {
 }
 
 function placeBatter(ab, inn, play, pIdx) {
-  if (play === '1B' || play === 'E' || isErrorPlay(play)) { ab.bases[0] = true; inn.bases[0] = pIdx; if (isErrorPlay(play)) ab.reachedOnError = true; }
-  else if (play === '2B') { ab.bases[0] = true; ab.bases[1] = true; inn.bases[1] = pIdx; }
-  else if (play === '3B') { ab.bases[0] = true; ab.bases[1] = true; ab.bases[2] = true; inn.bases[2] = pIdx; }
+  // The `baseFreeFor` guards are the #4 backstop: the runner popup refuses a
+  // colliding destination up front, so reaching one here means the state came
+  // from an import or a hand edit. Mark the batter's at-bat either way, but don't
+  // erase the runner already on that base.
+  if (play === '1B' || play === 'E' || isErrorPlay(play)) { ab.bases[0] = true; if (baseFreeFor(inn, 0, pIdx)) inn.bases[0] = pIdx; if (isErrorPlay(play)) ab.reachedOnError = true; }
+  else if (play === '2B') { ab.bases[0] = true; ab.bases[1] = true; if (baseFreeFor(inn, 1, pIdx)) inn.bases[1] = pIdx; }
+  else if (play === '3B') { ab.bases[0] = true; ab.bases[1] = true; ab.bases[2] = true; if (baseFreeFor(inn, 2, pIdx)) inn.bases[2] = pIdx; }
 }
 
 function applyChosenAdvancements(team, innIdx, choices, reason) {
@@ -702,6 +822,9 @@ function applyChosenAdvancements(team, innIdx, choices, reason) {
       renderDiamond(team, r, rc);
       renderOut(team, r, rc);
     } else {
+      // #4 backstop: refuse the move rather than erase whoever is on `dest`. The
+      // runner keeps the base he is on; the popup validates before we get here.
+      if (!baseFreeFor(inn, dest, r)) return;
       for (let step = fromBase + 1; step <= dest; step++) {
         rab.bases[step] = true;
         setAdvReason(rab, step, rsn);
@@ -927,6 +1050,8 @@ function applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes) {
       inn.bases[fromBase] = null;
       runnersOutThisPlay.push(r);
     } else if (oc.action === 'safe') {
+      // #4 backstop — see applyChosenAdvancements.
+      if (!baseFreeFor(inn, oc.dest, r)) return;
       for (let step = fromBase + 1; step <= oc.dest; step++) {
         rab.bases[step] = true;
         setAdvReason(rab, step, playLabel);
@@ -959,7 +1084,7 @@ function applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes) {
   } else {
     const batterDest = outcomes.batter.dest !== undefined ? outcomes.batter.dest : 0;
     for (let s = 0; s <= batterDest; s++) ab.bases[s] = true;
-    if (batterDest < 3) inn.bases[batterDest] = pIdx;
+    if (batterDest < 3 && baseFreeFor(inn, batterDest, pIdx)) inn.bases[batterDest] = pIdx;
   }
   ab.outsRecorded = totalOuts;
   if (dpOutNums.length >= 2) {
@@ -970,6 +1095,27 @@ function applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes) {
   renderDiamond(team, pIdx, innIdx);
   renderOut(team, pIdx, innIdx);
   renderPlayText(team, pIdx, innIdx);
+}
+
+// Does the half-inning that just ended (or the run that just scored) end the
+// game? Returns true when the summary has been scheduled, so the caller knows not
+// to also schedule the next half-inning.
+//
+// Lives out here because the 3rd out isn't always a batter: a caught stealing or
+// a pickoff ends the inning too, and those paths never reached finishPlay, so a
+// game ending on one just rolled on into the bottom of the 9th (#5).
+function checkGameOver(team, innIdx) {
+  const inn = getInnState(team, innIdx);
+  const realInn = getRealInning(team, innIdx);
+  const vR = parseInt(document.querySelector('input[data-ls="visiting"][data-stat="r"]')?.value) || 0;
+  const hR = parseInt(document.querySelector('input[data-ls="home"][data-stat="r"]')?.value) || 0;
+  const isGameOver = (team === 'home' && realInn >= 8 && inn.outs >= 3 && vR !== hR) ||
+                     (team === 'visiting' && realInn >= 8 && inn.outs >= 3 && hR > vR);
+  if (!isGameOver || gameOverShown) return false;
+  gameOverShown = true;
+  if (pendingTransitionTimer) clearTimeout(pendingTransitionTimer);
+  pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; showGameSummary(); }, 1000);
+  return true;
 }
 
 function finishPlay(team, pIdx, innIdx, snapshot) {
@@ -1002,16 +1148,7 @@ function finishPlay(team, pIdx, innIdx, snapshot) {
     if (inn.bases[2] !== null) lob++;
     inn.lob = lob;
     updateLinescoreTotals(team);
-    // Check for game over
-    const realInn = getRealInning(team, innIdx);
-    const vR = parseInt(document.querySelector('input[data-ls="visiting"][data-stat="r"]')?.value) || 0;
-    const hR = parseInt(document.querySelector('input[data-ls="home"][data-stat="r"]')?.value) || 0;
-    const isGameOver = (team === 'home' && realInn >= 8 && inn.outs >= 3 && vR !== hR) ||
-                       (team === 'visiting' && realInn >= 8 && inn.outs >= 3 && hR > vR);
-    if (isGameOver && !gameOverShown) {
-      gameOverShown = true;
-      pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; showGameSummary(); }, 1000);
-    } else {
+    if (!checkGameOver(team, innIdx)) {
       pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; switchToNextHalf(team, innIdx); }, 600);
     }
   } else {
@@ -1032,7 +1169,12 @@ function finishPlay(team, pIdx, innIdx, snapshot) {
 }
 
 /* Runner advancement popup */
-function showRunnerPopup(team, innIdx, defaultAdv, callback) {
+// opts.batterTakesBase — whether the batter ends this play standing on a base
+// (a hit or error, not a sacrifice or an out). Needed to catch the batter landing
+// on a base a runner is holding (#4).
+// opts.batterPIdx — the batter this popup belongs to, so the row is labelled from
+// the captured target rather than whatever cell happens to be selected (#1).
+function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
   const inn = getInnState(team, innIdx);
   const baseNames = ['1st','2nd','3rd','Home'];
   const runners = [];
@@ -1082,7 +1224,9 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback) {
   const batterDefaultBase = defaultAdv > 0 && defaultAdv <= 3 ? defaultAdv - 1 : -1;
   if (batterDefaultBase >= 0 && batterDefaultBase < 3) {
     choices.batterDest = undefined;
-    const batterName = selectedCell ? getActivePlayerName(selectedCell.dataset.team, parseInt(selectedCell.dataset.p), parseInt(selectedCell.dataset.inn)) : 'Batter';
+    const batterName = (opts && opts.batterPIdx !== undefined)
+      ? getActivePlayerName(team, opts.batterPIdx, innIdx)
+      : (selectedCell ? getActivePlayerName(selectedCell.dataset.team, parseInt(selectedCell.dataset.p), parseInt(selectedCell.dataset.inn)) : 'Batter');
     html += `<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid #ddd;padding-top:8px">`;
     html += `<span style="font-size:11px;font-weight:600;min-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${batterName}</span>`;
     html += `<span style="font-size:10px;color:#999;min-width:24px">Batter→</span>`;
@@ -1118,19 +1262,52 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback) {
     };
   });
 
+  function flashRow(baseKey) {
+    const row = popup.querySelector(`.rp-btn[data-base="${baseKey}"]`)?.closest('div')?.parentElement;
+    if (row) { row.style.outline = '2px solid var(--accent)'; setTimeout(() => row.style.outline = '', 800); }
+  }
+
   document.getElementById('rp-confirm').onclick = function() {
     // Check all runners have a selection
     const allSelected = runners.every(r => choices[r.base] !== undefined);
     if (!allSelected) {
       // Flash unselected rows
       runners.forEach(r => {
-        if (choices[r.base] === undefined) {
-          const row = popup.querySelector(`.rp-btn[data-base="${r.base}"]`)?.closest('div')?.parentElement;
-          if (row) { row.style.outline = '2px solid var(--accent)'; setTimeout(() => row.style.outline = '', 800); }
-        }
+        if (choices[r.base] === undefined) flashRow(r.base);
       });
       return;
     }
+
+    // #4: refuse a set of destinations that would put two men on one base. The
+    // old code took the last write and the overwritten runner vanished off the
+    // bases — still marked up on his at-bat, but unable to score.
+    const claimed = new Map(); // base -> row key to flash on collision
+    const inPopup = new Set(runners.map(r => r.pIdx));
+    // Someone already placed this play and not up for a decision here — the K+WP
+    // batter goes to 1st before the popup opens — still holds his base.
+    for (let b = 0; b < 3; b++) {
+      if (inn.bases[b] !== null && !inPopup.has(inn.bases[b])) claimed.set(b, null);
+    }
+    const collisions = [];
+    runners.forEach(r => {
+      const dest = choices[r.base];
+      if (dest < 0 || dest > 2) return;    // thrown out, or scored — off the bases
+      if (claimed.has(dest)) collisions.push(r.base);
+      else claimed.set(dest, r.base);
+    });
+    if (opts && opts.batterTakesBase) {
+      const bDest = choices.batterDest !== undefined ? choices.batterDest : batterDefaultBase;
+      if (bDest >= 0 && bDest <= 2) {
+        if (claimed.has(bDest)) collisions.push('batter');
+        else claimed.set(bDest, 'batter');
+      }
+    }
+    if (collisions.length) {
+      collisions.forEach(flashRow);
+      showPlayReject('Two runners can\'t share a base — pick another destination.');
+      return;
+    }
+
     popup.style.display = 'none';
     callback(choices);
   };
@@ -1286,6 +1463,12 @@ function markNextInningLeadoff(team, innIdx) {
 }
 
 function selectNextBatterForInning(team, colIdx) {
+  // #6: extra-inning columns are display:none until +EI is pressed. After a tied
+  // 9th the app selected a cell nobody could see, so reveal the column first.
+  if (colIdx >= (gameState.visibleInnings || 9)) {
+    gameState.visibleInnings = Math.min(colIdx + 1, INNINGS);
+    updateInningVisibility();
+  }
   const leadoffP = gameState.nextLeadoff?.[team]?.[colIdx];
   if (leadoffP !== undefined) {
     const cell = document.querySelector(`.at-bat-cell[data-team="${team}"][data-p="${leadoffP}"][data-inn="${colIdx}"]`);
@@ -1314,6 +1497,10 @@ function addPitch(type) {
   const innIdx = parseInt(selectedCell.dataset.inn);
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   if (ab.play) return;
+  // #26: the half-inning is over — there is nobody at the plate to charge a pitch
+  // to. Without this, 4 balls here counted toward the pitch count and then
+  // applyPlay silently dropped the walk on its own outs guard.
+  if (getInnState(team, innIdx).outs >= 3) return;
   if (!ab.pitches) ab.pitches = [];
   const before = getPitchCount(ab.pitches);
   if (before.balls >= 4 || before.strikes >= 3) return;
@@ -1403,11 +1590,16 @@ function checkAutoTrigger(team, pIdx, innIdx) {
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   if (ab.play) return;
   const count = getPitchCount(ab.pitches || []);
-  if (count.balls >= 4) applyPlay('BB');
-  else if (count.strikes >= 3) showStrikeoutPopup();
+  // Pass the batter explicitly: this is the man who just reached 4 balls / 3
+  // strikes, whatever the scorer taps next (#1).
+  const target = { team, pIdx, innIdx };
+  if (count.balls >= 4) applyPlay('BB', target);
+  else if (count.strikes >= 3) showStrikeoutPopup(target);
 }
 
-function showStrikeoutPopup() {
+function showStrikeoutPopup(target) {
+  const t = target || currentTarget();
+  if (!t) return;
   let popup = document.getElementById('k-popup');
   if (!popup) {
     popup = document.createElement('div');
@@ -1419,9 +1611,16 @@ function showStrikeoutPopup() {
       + '<button id="k-looking" style="padding:10px 24px;font-size:16px;font-weight:700;font-family:var(--heading);background:var(--navy);color:var(--gold);border:none;border-radius:6px;cursor:pointer;letter-spacing:1px">ꓘ<br><span style=font-size:10px>LOOKING</span></button>'
       + '</div>';
     document.body.appendChild(popup);
-    document.getElementById('k-swinging').onclick = function() { popup.style.display = 'none'; applyPlay('K'); };
-    document.getElementById('k-looking').onclick = function() { popup.style.display = 'none'; applyPlay('ꓘ'); };
   }
+  // Rebound on every open so the handlers apply to the batter captured above,
+  // not to whatever cell is selected when the button is finally pressed (#1).
+  document.getElementById('k-swinging').onclick = function() {
+    popup.style.display = 'none'; hidePopupBackdrop(); applyPlay('K', t);
+  };
+  document.getElementById('k-looking').onclick = function() {
+    popup.style.display = 'none'; hidePopupBackdrop(); applyPlay('ꓘ', t);
+  };
+  showPopupBackdrop();
   popup.style.display = 'block';
 }
 
@@ -1564,6 +1763,9 @@ function promptSBBase() {
 function applySBAtBase(team, innIdx, fromBase, withError) {
   const inn = getInnState(team, innIdx);
   const players = gameState.teams[team].players;
+  // #3: the half-inning is over — a stranded runner can't steal, least of all
+  // steal home and put a run on the board.
+  if (inn.outs >= 3) return;
   if (inn.bases[fromBase] === null) return;
   const pIdx = selectedCell ? parseInt(selectedCell.dataset.p) : 0;
   pushUndo(team, pIdx, innIdx);
@@ -1601,6 +1803,8 @@ function promptCSBase() {
 function applyCSAtBase(team, innIdx, fromBase) {
   const inn = getInnState(team, innIdx);
   const players = gameState.teams[team].players;
+  // #2: no 4th out — the guard applyRunnerEvent has always had.
+  if (inn.outs >= 3) return;
   if (inn.bases[fromBase] === null) return;
   const pIdx = selectedCell ? parseInt(selectedCell.dataset.p) : 0;
   pushUndo(team, pIdx, innIdx);
@@ -1621,7 +1825,10 @@ function applyCSAtBase(team, innIdx, fromBase) {
     if (!gameState.nextLeadoff) gameState.nextLeadoff = {};
     if (!gameState.nextLeadoff[team]) gameState.nextLeadoff[team] = {};
     gameState.nextLeadoff[team][nextCol] = pIdx;
-    pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; switchToNextHalf(team, innIdx); }, 600);
+    updateLinescoreTotals(team);
+    if (!checkGameOver(team, innIdx)) {
+      pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; switchToNextHalf(team, innIdx); }, 600);
+    }
   }
   updatePlayerStats(team);
   updateSituation();
@@ -1649,6 +1856,8 @@ function promptPickoff() {
 function applyPickoff(team, innIdx, atBase, withError) {
   const inn = getInnState(team, innIdx);
   const players = gameState.teams[team].players;
+  // #2: no 4th out, and no advancing a stranded runner on the error variant.
+  if (inn.outs >= 3) return;
   if (inn.bases[atBase] === null) return;
   const pIdx = selectedCell ? parseInt(selectedCell.dataset.p) : 0;
   pushUndo(team, pIdx, innIdx);
@@ -1677,7 +1886,10 @@ function applyPickoff(team, innIdx, atBase, withError) {
       if (!gameState.nextLeadoff) gameState.nextLeadoff = {};
       if (!gameState.nextLeadoff[team]) gameState.nextLeadoff[team] = {};
       gameState.nextLeadoff[team][nextCol] = pIdx;
-      pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; switchToNextHalf(team, innIdx); }, 600);
+      updateLinescoreTotals(team);
+      if (!checkGameOver(team, innIdx)) {
+        pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; switchToNextHalf(team, innIdx); }, 600);
+      }
     }
   }
   updatePlayerStats(team);
@@ -1921,11 +2133,10 @@ function editPlayType() {
   });
   document.getElementById('ep-cancel').onclick = function() { popup.style.display = 'none'; };
   document.getElementById('ep-confirm').onclick = function() {
-    const custom = document.getElementById('ep-custom').value.trim();
+    // Normalize a typed "GO 6-3" the same way the position popup does (#15).
+    const custom = normalizePlayCode(document.getElementById('ep-custom').value.trim());
     const newPlay = custom || chosen;
     if (!newPlay || newPlay === ab.play) { popup.style.display = 'none'; return; }
-    popup.style.display = 'none';
-    pushUndo(team, pIdx, innIdx);
     const oldPlay = ab.play;
     const wasOut = isOutPlay(oldPlay) || oldPlay === 'K' || oldPlay === 'ꓘ';
     const nowOut = isOutPlay(newPlay) || newPlay === 'K' || newPlay === 'ꓘ';
@@ -1934,6 +2145,14 @@ function editPlayType() {
     const wasWalk = ['BB','IBB','HBP','CI'].includes(oldPlay);
     const nowWalk = ['BB','IBB','HBP','CI'].includes(newPlay);
     const inn = getInnState(team, innIdx);
+    // #8: turning an on-base play into an out used to push the inning to 4 outs.
+    // Refuse and leave the popup open rather than corrupting the half-inning.
+    if (!wasOut && nowOut && inn.outs >= 3) {
+      showPlayReject('The inning already has 3 outs — clear a play first.');
+      return;
+    }
+    popup.style.display = 'none';
+    pushUndo(team, pIdx, innIdx);
     // Adjust outs when changing between out and non-out
     if (wasOut && !nowOut) {
       const outsToRemove = ab.outsRecorded || 1;
@@ -2689,7 +2908,11 @@ function newGame() {
 function printScorecard() { window.print(); }
 
 /* Position play popup input */
-function showPositionPopup(prefix, placeholder) {
+function showPositionPopup(prefix, placeholder, target) {
+  // Capture the cell now — typing the fielders takes long enough for the scorer
+  // to tap somewhere else first (#1).
+  const t = target || currentTarget();
+  if (!t) return;
   let popup = document.getElementById('pos-popup');
   if (!popup) {
     popup = document.createElement('div');
@@ -2705,6 +2928,7 @@ function showPositionPopup(prefix, placeholder) {
   const input = document.getElementById('pos-input');
   input.value = '';
   input.placeholder = placeholder || '7';
+  showPopupBackdrop();
   popup.style.display = 'flex';
   popup.dataset.prefix = prefix;
   setTimeout(() => input.focus(), 10);
@@ -2714,11 +2938,15 @@ function showPositionPopup(prefix, placeholder) {
       e.preventDefault();
       const val = input.value.trim();
       popup.style.display = 'none';
+      hidePopupBackdrop();
       input.blur();
-      if (val) applyPlay(prefix + val);
+      // Normalize here so only canonical codes reach state — a scorer typing
+      // "GO 6-3" gets "6-3", which the rest of the app recognises as an out (#15).
+      if (val) applyPlay(normalizePlayCode(prefix + val), t);
     } else if (e.key === 'Escape') {
       e.preventDefault();
       popup.style.display = 'none';
+      hidePopupBackdrop();
       input.blur();
     }
   };
