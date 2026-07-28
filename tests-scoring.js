@@ -101,6 +101,11 @@
      made the audit harness take ~10 minutes. */
   const PLAYERS = POSITIONS * ROWS_PER_POS;
   const dirtyCols = new Set();
+  const POPUP_IDS = [
+    'runner-popup', 'outcome-popup', 'base-picker', 'edit-play-popup',
+    'move-runner-popup', 'pos-popup', 'k-popup', 'spray-popup', 'er-review-popup',
+    'pitcher-popup', 'recompute-popup', 'popup-backdrop', 'play-reject'
+  ];
 
   function touch(col) {
     dirtyCols.add(col);
@@ -134,6 +139,14 @@
       }
     }
     dirtyCols.clear();
+
+    // The app leaves a popup open on purpose when it refuses an entry, so it can
+    // be re-answered — and several cases end on exactly that. Close everything, or
+    // the next case inherits a stale popup and reads it as one of its own.
+    POPUP_IDS.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
 
     rawAll('input[data-ls]').forEach(i => { i.value = ''; });
     ['visiting', 'home'].forEach(t => { updateLinescoreTotals(t); updatePlayerStats(t); updatePitcherStats(t); });
@@ -271,8 +284,11 @@
   // setPitcher then hides, so go through both rather than calling setPitcher cold.
   function usePitcher(i) { changePitcher(); setPitcher(i); }
 
-  // "Change Play Type" popup: pick a play from the grid, then Apply.
-  function editPlay(newPlay) {
+  // "Change Play Type" popup: pick a play from the grid, then Apply. `picks` is
+  // for the advancement popup the change re-opens when there are runners on base —
+  // same shape as runnerPopup's. Omit it when the change can't prompt (nobody on,
+  // a plain K, a home run) or when the case expects the change to be refused.
+  function editPlay(newPlay, picks) {
     editPlayType();
     const popup = document.getElementById('edit-play-popup');
     if (!visible('edit-play-popup')) fail('edit-play popup is not open');
@@ -280,6 +296,19 @@
     if (!btn) fail(`edit-play popup has no ${newPlay} button`);
     btn.onclick();
     clickId('ep-confirm');
+    if (picks) runnerPopup(picks);
+    else if (visible('runner-popup')) fail('the change re-opened the runner popup and the case did not answer it');
+  }
+
+  // The same popup's free-text field, for the position plays that have no button
+  // (a groundout, a double play). `outcomes` answers the DP/FC/TP outcome popup.
+  function editPlayCustom(text, outcomes, picks) {
+    editPlayType();
+    if (!visible('edit-play-popup')) fail('edit-play popup is not open');
+    document.getElementById('ep-custom').value = text;
+    clickId('ep-confirm');
+    if (outcomes) outcomePopup(outcomes);
+    if (picks) runnerPopup(picks);
   }
 
   /* =====================================================================
@@ -1070,6 +1099,10 @@
     eq('play unchanged', ab('visiting', 2, 0).play, 'K');
     eq('runner on 1st unchanged', onB('visiting', 0, 0), 0);
     eq('outs', inn('visiting', 0).outs, 1);
+    // The refusal is judged after the old play has been taken off the card, so the
+    // rollback has to put all of it back — the out log included.
+    eq('out log intact', inn('visiting', 0).outsLog.length, 1);
+    eq('the out number is still on his cell', ab('visiting', 2, 0).out, 1);
     basesConsistent('visiting', 0);
   });
 
@@ -1078,10 +1111,10 @@
     play('1B');                                    // p0 on 1st
     play('K');
     sel('visiting', 2, 0);
-    editPlay('2B');
+    editPlay('2B', { 0: 2, batter: 1 });           // the change re-asks the runners
     eq('play', ab('visiting', 2, 0).play, '2B');
     eq('batter on 2nd', onB('visiting', 0, 1), 2);
-    eq('runner still on 1st', onB('visiting', 0, 0), 0);
+    eq('the runner was sent to 3rd', onB('visiting', 0, 2), 0);
     eq('outs', inn('visiting', 0).outs, 0);
   });
 
@@ -1314,11 +1347,73 @@
     eq('two runs', lsInput('visiting', 0).value, '2');
     sel('visiting', 2, 0);
     editPlay('K');
-    eq('the batter is not on a base', JSON.stringify(inn('visiting', 0).bases), '[null,null,null]');
+    eq('the batter is not on a base', onB('visiting', 0, 0), 0);
     eq('one out', inn('visiting', 0).outs, 1);
-    // The runner he drove in stays home — his own cell still shows four bases, and
-    // only re-prompting for that runner (not this phase) would send him back.
-    eq('the run he drove in stands', lsInput('visiting', 0).value, '1');
+    // The rest of #22: the home run's advancement comes back off too, so the
+    // runner it brought round is back on the base he was standing on and the run
+    // is off the board. A strikeout advances nobody, so there is nothing to re-ask.
+    eq('the runner he drove in goes back to 1st', ab('visiting', 0, 0).bases[3], false);
+    eq('no runs', lsInput('visiting', 0).value, '');
+    eq('no RBI', ab('visiting', 2, 0).rbi, 0);
+  });
+
+  /* The rest of #22. A change of play type used to adjust the batter's own bases
+     and out and nothing else: the runners it had moved stayed where the old play
+     put them, and the new play never asked where they should go instead. */
+
+  test('a hit rewritten as a strikeout takes back the bases it gave', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st
+    play('1B'); runnerPopup({ 0: 2, batter: 0 });     // p0 sent to 3rd, p2 on 1st
+    sel('visiting', 2, 0);
+    editPlay('K');                                   // a strikeout advances nobody
+    eq('the runner goes back to 1st', onB('visiting', 0, 0), 0);
+    eq('nobody on 3rd', onB('visiting', 0, 2), null);
+    eq('the batter is off the bases', occupants('visiting', 0).join(','), '0');
+    eq('one out', inn('visiting', 0).outs, 1);
+    eq('his cell shows only the base he earned', JSON.stringify(ab('visiting', 0, 0).bases), '[true,false,false,false]');
+  });
+
+  test('a hit rewritten as a sacrifice re-asks where the runner went', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });     // p0 to 2nd, p2 on 1st
+    sel('visiting', 2, 0);
+    // The single's advancement comes off first, so the popup asks from 1st — and
+    // this time the sacrifice moves him to 2nd rather than the single doing it.
+    editPlay('SH', { 0: 1 });
+    eq('the runner is on 2nd', onB('visiting', 0, 1), 0);
+    eq('the batter is out', inn('visiting', 0).outs, 1);
+    eq('nobody else on base', occupants('visiting', 0).join(','), '0');
+    // The advance is stamped to the new play, so clearing it takes it back again.
+    eq('stamped to the batter who sacrificed', JSON.stringify(ab('visiting', 0, 0).advSrc[1]), '{"p":2,"col":0}');
+  });
+
+  test('a strikeout rewritten as a double play is judged on the outs left', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st
+    play('K'); play('K');                            // 2 outs
+    sel('visiting', 2, 0);
+    // Legal: this cell's own out comes off first, leaving one out and a runner to
+    // double off. Entered as a DP it makes both outs, ending the inning.
+    editPlayCustom('DP 6-4-3', { 0: ['out', 1], batter: ['out'] });
+    eq('play', ab('visiting', 2, 0).play, 'DP 6-4-3');
+    eq('three outs', inn('visiting', 0).outs, 3);
+    eq('out log', inn('visiting', 0).outsLog.length, 3);
+    eq('the runner is off the bases', occupants('visiting', 0).length, 0);
+    eq('IP', pStat('visiting', 0, 'ip'), '1');
+  });
+
+  test('a double play with no room for its second out is refused and rolled back', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st
+    play('K'); play('K');                            // 2 outs, made by p2 and p4
+    sel('visiting', 0, 0);
+    editPlayCustom('DP 6-4-3');                      // p0's single made neither out
+    eq('play unchanged', ab('visiting', 0, 0).play, '1B');
+    eq('outs unchanged', inn('visiting', 0).outs, 2);
+    eq('out log intact', inn('visiting', 0).outsLog.length, 2);
+    eq('the runner is still on 1st', onB('visiting', 0, 0), 0);
   });
 
   // #23 — the zero for a scoreless completed inning was looked up by real inning

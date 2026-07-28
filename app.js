@@ -700,6 +700,34 @@ function revertAdvancesFrom(team, realInn, srcP, srcCol) {
   }
 }
 
+// Take a plate appearance's effects back off the inning: the outs it made (its
+// batter's own and any runner it doubled off) and the bases it handed out. Both
+// halves of #21. `fallbackOuts` is how many outs to subtract when there is no log
+// to consult (a game saved before Phase 3 that couldn't be backfilled).
+//
+// The batter's own at-bat record is the caller's to clear — clearing a cell,
+// keeping its pitches and changing its play type each keep a different amount of
+// it — but the effects on everybody *else* are identical, and used to be
+// reimplemented (or forgotten) separately in each.
+function takeBackPlay(team, col, pIdx, fallbackOuts) {
+  const inn = getInnState(team, col);
+  const players = gameState.teams[team].players;
+  // Read the runner outs before the log entries go: after this the only record
+  // that they happened is the `out` / `outOnBase` marks on the runners' own cells.
+  const runnerOuts = outsFromPlay(inn, pIdx, col).filter(o => o.pIdx !== pIdx || o.col !== col);
+  removeOutsFromPlay(team, col, pIdx, col, fallbackOuts);
+  for (const o of runnerOuts) {
+    if (o.pIdx == null) continue;
+    const rab = players[o.pIdx].atBats[o.col];
+    rab.out = 0; rab.outOnBase = null;
+    renderDiamond(team, o.pIdx, o.col);
+    renderOut(team, o.pIdx, o.col);
+  }
+  // The bases it handed out go back too. A base a runner stole, or took on a wild
+  // pitch, isn't this play's to take away.
+  revertAdvancesFrom(team, getRealInning(team, col), pIdx, col);
+}
+
 // The at-bat cell a runner on base is running from — his own record, where his
 // advancement is written. Reads the base entry; nothing searches for it.
 function runnerAtBat(team, runner) {
@@ -1060,6 +1088,27 @@ function countRunnersScored(team, prev) {
   return scored;
 }
 
+// Can `play` legally be entered into this half-inning as it stands? Returns the
+// reason it can't, or null. Both cases would otherwise be recorded short: the
+// outs that run past three are refused by `recordOut`, so the inning ends up
+// under-reported rather than wrong-in-an-obvious-way (#7, #27).
+//
+// Called before the at-bat is touched on a new entry, and after the old play has
+// been taken back on an edit — an edited cell's own outs are not in its way.
+function playEntryReject(team, innIdx, play) {
+  const inn = getInnState(team, innIdx);
+  if (play === 'DP' || /^DP /.test(play)) {
+    // With 2 outs the inning ends on the first out, so a double play isn't legal.
+    if (inn.outs >= 2) return 'Only one out left — record the single out, not a DP.';
+  }
+  if (play === 'TP' || /^TP /.test(play)) {
+    const onBase = inn.bases.filter(b => b !== null).length;
+    if (onBase < 2) return 'A triple play needs two runners on base.';
+    if (inn.outs >= 1) return 'Not enough outs left for a triple play.';
+  }
+  return null;
+}
+
 // `target` is the cell this play belongs to. Popups pass the cell they captured
 // when they opened; everything else falls back to the current selection (#1).
 function applyPlay(play, target) {
@@ -1072,30 +1121,9 @@ function applyPlay(play, target) {
   const inn = getInnState(team, innIdx);
   if (inn.outs >= 3 || ab.play) return;
 
-  // #7: with 2 outs the inning ends on the first out, so a double play is not a
-  // legal entry. Reject before the at-bat is touched — no play, no result pitch.
-  if (play === 'DP' || /^DP /.test(play)) {
-    if (inn.outs >= 2) {
-      showPlayReject('Only one out left — record the single out, not a DP.');
-      return;
-    }
-  }
-  // #27: a triple play needs two runners to double off. Same early reject, so a
-  // rejected entry doesn't leave a result pitch behind.
-  if (play === 'TP' || /^TP /.test(play)) {
-    const onBase = [inn.bases[0], inn.bases[1], inn.bases[2]].filter(b => b !== null).length;
-    if (onBase < 2) {
-      showPlayReject('A triple play needs two runners on base.');
-      return;
-    }
-    // Same shape as the #7 DP reject: recordOut refuses the outs that would run
-    // past three, so a TP entered with an out already recorded would silently
-    // under-report the inning. Deferred from Phase 2, free here.
-    if (inn.outs >= 1) {
-      showPlayReject('Not enough outs left for a triple play.');
-      return;
-    }
-  }
+  // Reject before the at-bat is touched — no play, no result pitch.
+  const reject = playEntryReject(team, innIdx, play);
+  if (reject) { showPlayReject(reject); return; }
 
   // Save undo snapshot
   const prevTab = document.querySelector('.tab-btn.active')?.dataset.tab;
@@ -1120,6 +1148,26 @@ function applyPlay(play, target) {
   ab.pitcher = getEffectivePitcher(team, innIdx);
   if (ab.rbi === undefined) ab.rbi = 0;
 
+  applyPlayEffects(team, pIdx, innIdx, play, prev, function() {
+    finishPlay(team, pIdx, innIdx, snapshot);
+  });
+}
+
+/* -------------------------------------------- what a play does to the card ---
+   Where the batter ends up, which outs it makes, where it sends the runners —
+   for a play whose code is already written on the cell. `prev` is the inning as
+   it stood before the play, for the RBI count; `done` runs once everything has
+   resolved, including any popup, so the caller decides what "finished" means.
+
+   Split out of `applyPlay` because `editPlayType` has to do exactly this and used
+   to do a fraction of it: it adjusted the batter's own bases and outs and never
+   asked where the runners went (#22). Rewriting a single as a double left them
+   standing where the single had put them. */
+function applyPlayEffects(team, pIdx, innIdx, play, prev, done) {
+  const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
+  const inn = getInnState(team, innIdx);
+  const src = { pIdx, col: innIdx };
+
   // Plays that have their own outcome popup (DP/FC/TP) — handled below
   const hasOwnPopup = play === 'DP' || /^DP /.test(play) || play === 'FC' || /^FC /.test(play) || play === 'TP' || /^TP /.test(play);
   // HR always scores everyone automatically — no popup needed
@@ -1135,10 +1183,10 @@ function applyPlay(play, target) {
 
     // Walks: auto-advance forced runners, no popup
     if (isWalk) {
-      advanceForcedRunners(team, innIdx, play, { pIdx, col: innIdx });
+      advanceForcedRunners(team, innIdx, play, src);
       ab.bases[0] = true; setRunnerOn(inn, 0, runnerRef(pIdx, innIdx));
       ab.rbi = countRunnersScored(team, prev);
-      finishPlay(team, pIdx, innIdx, snapshot);
+      done();
       return;
     }
 
@@ -1149,12 +1197,12 @@ function applyPlay(play, target) {
     if (isKWP) {
       const batterLbl = getBatterLabel(team, pIdx, innIdx);
       showRunnerPopup(team, innIdx, 1, function(choices) {
-        applyChosenAdvancements(team, innIdx, choices, batterLbl, { pIdx, col: innIdx });
+        applyChosenAdvancements(team, innIdx, choices, batterLbl, src);
         const bDest = choices.batterDest !== undefined ? choices.batterDest : 0;
         for (let s = 0; s <= bDest; s++) ab.bases[s] = true;
         setRunnerOn(inn, bDest, runnerRef(pIdx, innIdx));
         ab.rbi = countRunnersScored(team, prev);
-        finishPlay(team, pIdx, innIdx, snapshot);
+        done();
       }, { batterTakesBase: true, batterPIdx: pIdx });
       return;
     }
@@ -1163,7 +1211,7 @@ function applyPlay(play, target) {
     const defaultAdv = play === '3B' ? 3 : play === '2B' ? 2 : (isHitOrError || isSac) ? 1 : 0;
     const batterLbl = getBatterLabel(team, pIdx, innIdx);
     showRunnerPopup(team, innIdx, defaultAdv, function(choices) {
-      applyChosenAdvancements(team, innIdx, choices, batterLbl, { pIdx, col: innIdx });
+      applyChosenAdvancements(team, innIdx, choices, batterLbl, src);
       // Place batter based on play type
       if (isHitOrError) {
         if (choices.batterDest !== undefined && choices.batterDest > 0) {
@@ -1179,7 +1227,7 @@ function applyPlay(play, target) {
       if (!isErrorPlay(play)) {
         ab.rbi = countRunnersScored(team, prev);
       }
-      finishPlay(team, pIdx, innIdx, snapshot);
+      done();
     }, { batterTakesBase: isHitOrError, batterPIdx: pIdx });
     return;
   }
@@ -1189,9 +1237,9 @@ function applyPlay(play, target) {
   if (isHitOrError) {
     placeBatter(ab, inn, play, pIdx, innIdx);
   } else if (isHR) {
-    const runnersOn = [inn.bases[0], inn.bases[1], inn.bases[2]].filter(b => b !== null).length;
+    const runnersOn = inn.bases.filter(b => b !== null).length;
     const lbl = getBatterLabel(team, pIdx, innIdx);
-    advanceRunners(team, innIdx, 4, lbl, { pIdx, col: innIdx });
+    advanceRunners(team, innIdx, 4, lbl, src);
     ab.bases = [true, true, true, true];
     ab.rbi = runnersOn + 1;
   } else if (play === 'BB' || play === 'HBP' || play === 'IBB' || play === 'CI') {
@@ -1199,11 +1247,12 @@ function applyPlay(play, target) {
   } else if (play === 'SF' || play === 'SH' || play === 'SAC') {
     recordBatterOut(team, innIdx, pIdx, ab);
   } else if (play === 'TP' || /^TP /.test(play)) {
-    // Runner count already checked at entry, before any pitch was pushed (#27).
+    // Runner count already checked by playEntryReject, before any pitch was
+    // pushed (#27).
     showRunnerOutcomePopup(team, innIdx, play, true, function(outcomes) {
       applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes);
       ab.rbi = countRunnersScored(team, prev);
-      finishPlay(team, pIdx, innIdx, snapshot);
+      done();
     });
     return;
   } else if (play === 'DP' || /^DP /.test(play) || play === 'FC' || /^FC /.test(play)) {
@@ -1212,7 +1261,7 @@ function applyPlay(play, target) {
       showRunnerOutcomePopup(team, innIdx, play, isDP, function(outcomes) {
         applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes);
         ab.rbi = countRunnersScored(team, prev);
-        finishPlay(team, pIdx, innIdx, snapshot);
+        done();
       });
       return;
     }
@@ -1233,7 +1282,7 @@ function applyPlay(play, target) {
     // Infield fly is an automatic out
     recordBatterOut(team, innIdx, pIdx, ab);
   }
-  finishPlay(team, pIdx, innIdx, snapshot);
+  done();
 }
 
 function placeBatter(ab, inn, play, pIdx, col) {
@@ -2628,73 +2677,73 @@ function editPlayType() {
     const custom = normalizePlayCode(document.getElementById('ep-custom').value.trim());
     const newPlay = custom || chosen;
     if (!newPlay || newPlay === ab.play) { popup.style.display = 'none'; return; }
-    const oldPlay = ab.play;
-    const wasOut = isOutPlay(oldPlay) || oldPlay === 'K' || oldPlay === 'ꓘ';
-    const nowOut = isOutPlay(newPlay) || newPlay === 'K' || newPlay === 'ꓘ';
-    const wasHit = isHitPlay(oldPlay);
-    const nowHit = isHitPlay(newPlay);
-    const wasWalk = ['BB','IBB','HBP','CI'].includes(oldPlay);
-    const nowWalk = ['BB','IBB','HBP','CI'].includes(newPlay);
+    const realInn = getRealInning(team, innIdx);
     const inn = getInnState(team, innIdx);
+    const nowOut = isOutPlay(newPlay) || newPlay === 'K' || newPlay === 'ꓘ';
     // #8: turning an on-base play into an out used to push the inning to 4 outs.
-    // Refuse and leave the popup open rather than corrupting the half-inning.
-    if (!wasOut && nowOut && inn.outs >= 3) {
+    // Checked here rather than after the take-back below because it costs nothing
+    // to work out in advance, and the popup stays open on a refusal: the outs this
+    // cell's own play made are about to come off, so they aren't in its way.
+    const myOuts = outsFromPlay(inn, pIdx, innIdx).length || (ab.out ? (ab.outsRecorded || 1) : 0);
+    if (nowOut && Math.max(0, inn.outs - myOuts) >= 3) {
       showPlayReject('The inning already has 3 outs — clear a play first.');
       return;
     }
+    popup.style.display = 'none';
+    pushUndo(team, pIdx, innIdx);
+    const prev = captureInning(team, innIdx);
+
+    /* Take the old play off the card, all of it. This used to adjust the batter's
+       own bases and out and stop, so the runners it had moved stayed where it put
+       them and the runners it doubled off stayed out (#22). Everything the play
+       caused comes off, and then the new play is entered into the state that
+       leaves — the same state a scorer would have been looking at. */
+    takeBackPlay(team, innIdx, pIdx, myOuts);
+    removeRunnerFromBases(inn, pIdx);
+    ab.play = '';
+    ab.bases = [false, false, false, false];
+    ab.advReason = ['','','','']; ab.advSrc = null;
+    ab.out = 0; ab.outsRecorded = 0; ab.dpOuts = null; ab.outOnBase = null;
+    ab.rbi = 0; ab.reachedOnError = false;
+    recomputeInning(team, realInn);
+
+    // Now that the cell is empty, is the new play a legal entry here? These need
+    // the taken-back state to judge (a DP is legal with 2 outs if one of them was
+    // this cell's), so a refusal has to put back what the take-back removed —
+    // which is what the snapshot pushed above is for.
+    const rollback = function(msg) {
+      restoreSnapshot(playHistory.pop());
+      showPlayReject(msg);
+    };
+    const reject = playEntryReject(team, innIdx, newPlay);
+    if (reject) { rollback(reject); return; }
     // #4: the new play has to have a base to put the batter on. Refuse the change
-    // rather than evicting the runner standing there — same shape as the guard
-    // above, checked before anything is touched.
-    if (!nowOut && (nowHit || nowWalk) && newPlay !== 'HR') {
+    // rather than evicting the runner standing there.
+    if (!nowOut && (isHitPlay(newPlay) || ['BB','IBB','HBP','CI'].includes(newPlay)) && newPlay !== 'HR') {
       const HIT_DEST = { '1B': 0, 'E': 0, '2B': 1, '3B': 2 };
       const bDest = HIT_DEST[newPlay] !== undefined ? HIT_DEST[newPlay] : 0;
       if (!baseFreeFor(inn, bDest, runnerRef(pIdx, innIdx))) {
-        showPlayReject('Another runner is on ' + BASE_NAMES[bDest] + ' — move him first.');
+        rollback('Another runner is on ' + BASE_NAMES[bDest] + ' — move him first.');
         return;
       }
     }
-    popup.style.display = 'none';
-    pushUndo(team, pIdx, innIdx);
-    // The batter comes off whatever base he was standing on before the new play
-    // decides where he belongs, so a home run doesn't sweep him along with the
-    // runners below. Every other base write here is a recompute input, not a
-    // placement — `recomputeInning` at the end derives who is where.
-    removeRunnerFromBases(inn, pIdx);
 
-    // The out log, which the recompute counts.
-    if (wasOut && !nowOut) {
-      removeOutsFromPlay(team, innIdx, pIdx, innIdx, ab.outsRecorded || 1);
-      ab.out = 0; ab.outsRecorded = 0; ab.dpOuts = null;
-    } else if (!wasOut && nowOut) {
-      recordBatterOut(team, innIdx, pIdx, ab);
-    }
-
-    // The batter's own cell.
-    if (nowOut) {
-      ab.bases = [false, false, false, false]; ab.outOnBase = null;
-    } else if (nowHit || nowWalk) {
-      ab.bases = [false, false, false, false];
-      if (newPlay === 'HR') {
-        // #22: this used to fill the batter's four bases and stop, leaving the
-        // runners standing on the bases a home run had just cleared — a 3-run
-        // homer that scored one. They come round with him, and the RBI follows.
-        const runnersOn = [inn.bases[0], inn.bases[1], inn.bases[2]].filter(b => b !== null).length;
-        advanceRunners(team, innIdx, 4, getBatterLabel(team, pIdx, innIdx), { pIdx, col: innIdx });
-        ab.bases = [true, true, true, true];
-        ab.rbi = runnersOn + 1;
-      } else if (newPlay === '1B' || newPlay === 'E' || nowWalk) { ab.bases[0] = true; }
-      else if (newPlay === '2B') { ab.bases[0] = true; ab.bases[1] = true; }
-      else if (newPlay === '3B') { ab.bases[0] = true; ab.bases[1] = true; ab.bases[2] = true; }
-    }
     ab.play = newPlay;
-    renderPlayText(team, pIdx, innIdx);
-    renderOut(team, pIdx, innIdx);
-    renderDiamond(team, pIdx, innIdx);
-    recomputeInning(team, getRealInning(team, innIdx));
-    updatePlayerStats(team);
-    updatePitcherStats(team);
-    updateSituation();
-    autoSave();
+    // The same dispatch a fresh entry runs, so the runners get re-asked (a single
+    // rewritten as a double sends them further) and a home run brings them round.
+    // The pitches and the pitcher faced are left as they were: this is a change of
+    // what the play was, not a re-pitching of the at-bat.
+    applyPlayEffects(team, pIdx, innIdx, newPlay, prev, function() {
+      renderPlayText(team, pIdx, innIdx);
+      renderOut(team, pIdx, innIdx);
+      renderDiamond(team, pIdx, innIdx);
+      renderRBI(team, pIdx, innIdx);
+      recomputeInning(team, realInn);
+      updatePlayerStats(team);
+      updatePitcherStats(team);
+      updateSituation();
+      autoSave();
+    });
   };
 }
 
@@ -2819,14 +2868,13 @@ function clearPlayKeepPitches() {
   //
   // No snapshot is needed. Clear the batter's own record, take back the outs and
   // the advancement the play produced, and let `recomputeInning` derive the rest.
-  removeOutsFromPlay(team, innIdx, pIdx, innIdx, ab.outsRecorded || (ab.out ? 1 : 0));
+  takeBackPlay(team, innIdx, pIdx, ab.outsRecorded || (ab.out ? 1 : 0));
   ab.play = '';
   ab.bases = [false, false, false, false];
   ab.out = 0; ab.outsRecorded = 0; ab.rbi = 0; ab.hitLoc = null;
   ab.dpOuts = null; ab.outOnBase = null;
   ab.advReason = ['','','','']; ab.reachedOnError = false; ab.seq = 0;
   ab.advSrc = null;
-  revertAdvancesFrom(team, getRealInning(team, innIdx), pIdx, innIdx);
   // Re-apply saved pitches on the batter's at-bat
   ab.pitches = savedPitches;
   renderDiamond(team, pIdx, innIdx);
@@ -3004,21 +3052,13 @@ function clearSelectedCell() {
     playHistory.splice(histIdx, 1);
   } else {
     if (histIdx !== -1) playHistory.splice(histIdx, 1);
-    const inn = getInnState(team, innIdx);
     const players = gameState.teams[team].players;
-    // #21: the outs this play produced — the batter's own and any runner it
-    // doubled off. The old code subtracted `ab.outsRecorded` and left the runner
-    // outs standing, because the loop that was meant to revert them subtracted
-    // nothing (`inn.outs = Math.max(0, inn.outs)`).
-    const runnerOuts = outsFromPlay(inn, pIdx, innIdx).filter(o => o.pIdx !== pIdx || o.col !== innIdx);
-    removeOutsFromPlay(team, innIdx, pIdx, innIdx, ab.outsRecorded || (ab.out ? 1 : 0));
-    for (const o of runnerOuts) {
-      if (o.pIdx == null) continue;
-      const rab = players[o.pIdx].atBats[o.col];
-      rab.out = 0; rab.outOnBase = null;
-      renderDiamond(team, o.pIdx, o.col);
-      renderOut(team, o.pIdx, o.col);
-    }
+    // #21: the outs this play produced and the bases it handed out both come off.
+    // The old code subtracted `ab.outsRecorded`, left the runner it doubled off
+    // recorded as out (the loop meant to revert those subtracted nothing —
+    // `inn.outs = Math.max(0, inn.outs)`), and left the runners it moved where
+    // the play had put them.
+    takeBackPlay(team, innIdx, pIdx, ab.outsRecorded || (ab.out ? 1 : 0));
     ab.bases = [false, false, false, false];
     ab.play = '';
     ab.out = 0;
@@ -3042,9 +3082,6 @@ function clearSelectedCell() {
     }
     ab.subChange = false;
     ab.seq = 0;
-    // #21's other half: the runners this play moved go back where they were. The
-    // out it made came off above; the bases it handed out come off here.
-    revertAdvancesFrom(team, getRealInning(team, innIdx), pIdx, innIdx);
     renderDiamond(team, pIdx, innIdx);
     renderOut(team, pIdx, innIdx);
     renderPitches(team, pIdx, innIdx);
