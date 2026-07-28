@@ -487,6 +487,101 @@ function renumberOuts(team, innIdx) {
   }
 }
 
+/* ------------------------------------------------- recomputing an inning ---
+   An inning's derived state — the out count, who is standing on which base, the
+   runs on the linescore, LOB — is a function of the at-bat records and the out
+   log. It used to be *patched*: every mutator adjusted the parts it believed it
+   had changed, and each one forgot something different. Clearing an older play
+   left its runner outs standing (#21). Changing a play type adjusted the batter's
+   own bases and nothing else (#22). LOB had two writers that disagreed (#16).
+   `fillLinescoreZeros` wrote the right zero into the wrong inning (#23).
+
+   So mutators now fix the at-bat records they own and call this. Nothing else
+   writes `inn.outs`, `inn.bases` or `inn.lob` for a finished edit — grep
+   `inn.outs =` / `inn.bases\[` / `.lob =` and the hits are here, plus the three
+   runner helpers and `removeOutsFromPlay`, which this reads back.
+
+   Batting around spreads one real inning across several columns. They all describe
+   the same inning, so they all get the same outs and bases: `overflowToNextColumn`
+   has always copied them forward at the moment it inserts a column, and this keeps
+   the copies in step however the edit arrived — the divergence Phase 3 left open. */
+function recomputeInning(team, realInn) {
+  if (realInn == null || realInn < 0 || realInn >= INNINGS) return;
+  const cols = getColumnsForInning(team, realInn);
+  if (!cols.length) return;
+  const players = gameState.teams[team].players;
+
+  // Outs: the log is the record. Renumber first — an out removed from the middle
+  // leaves a gap, and the card read "1" and "3" for a two-out inning.
+  renumberOuts(team, cols[0]);
+  const outs = Math.min(3, inningOutsLog(team, realInn).length);
+
+  // Bases: a runner is on base when his cell says he reached, hasn't scored and
+  // wasn't put out on the bases. The base he's on is the last one marked. This is
+  // the derivation Phase 6 hinges on; `getRunnerCol` points advancement at the
+  // plate appearance he's actually running from, which is what makes it hold.
+  const bases = [null, null, null];
+  for (const col of cols) {
+    for (let p = 0; p < players.length; p++) {
+      const ab = players[p].atBats[col];
+      if (!ab || !ab.play || !ab.bases[0] || ab.bases[3] || ab.outOnBase != null) continue;
+      let b = 0;
+      for (let i = 2; i >= 0; i--) if (ab.bases[i]) { b = i; break; }
+      if (bases[b] !== null && bases[b] !== p) {
+        // Two live plate appearances claiming one base. Recomputing can't make
+        // that true, so keep the first and say so loudly — the policy
+        // `setRunnerOn` uses for a colliding placement. Reachable from an
+        // imported or hand-edited game, not from playing one.
+        console.warn(`recomputeInning: ${team} inning ${realInn + 1} — runner ${bases[b]} and runner ${p} both on ${BASE_NAMES[b]}`);
+        continue;
+      }
+      bases[b] = p;
+    }
+  }
+
+  // One definition of LOB (#16): the runners left standing when the half-inning
+  // ends. Nothing is left on base until it does, so an inning in progress is 0.
+  const lob = outs >= 3 ? bases.filter(r => r !== null).length : 0;
+
+  for (const col of cols) {
+    const inn = getInnState(team, col);
+    inn.outs = outs;
+    // In place — callers hold `inn.bases` across a recompute.
+    for (let b = 0; b < 3; b++) inn.bases[b] = bases[b];
+    inn.lob = lob;
+  }
+
+  // Runs on the line, by real inning, then the R/H/LOB totals.
+  updateInningRuns(team, cols[cols.length - 1]);
+}
+
+// Has anybody batted in this inning? Distinguishes "0 runs" from "not played" —
+// an inning with no records has nothing to derive, and its linescore cell may have
+// been filled in by hand.
+function inningHasRecords(team, realInn) {
+  const players = gameState.teams[team].players;
+  for (const col of getColumnsForInning(team, realInn)) {
+    for (const player of players) {
+      const ab = player.atBats[col];
+      if (ab && (ab.play || (ab.pitches && ab.pitches.length))) return true;
+    }
+  }
+  return false;
+}
+
+// A team's LOB is the per-inning figures summed. Once per *real* inning: a
+// batted-around inning has the same LOB on each of its columns.
+function teamLOB(team) {
+  let total = 0;
+  for (let ri = 0; ri < INNINGS; ri++) {
+    const cols = getColumnsForInning(team, ri);
+    if (!cols.length) continue;
+    const inn = gameState.innings && gameState.innings[team] && gameState.innings[team][cols[0]];
+    if (inn && inn.lob) total += inn.lob;
+  }
+  return total;
+}
+
 function getActivePlayer(team, pIdx, innIdx) {
   const sp = Math.floor(pIdx / ROWS_PER_POS) * ROWS_PER_POS;
   const subp = sp + 1;
@@ -1410,16 +1505,14 @@ function checkGameOver(team, innIdx) {
 // opts.advanceBatter — only a completed plate appearance moves the selection on.
 // A steal or a wild pitch leaves the same batter standing at the plate.
 function afterStateChange(team, innIdx, opts) {
+  // Outs, bases, runs and LOB all come back out of the records here, so a play
+  // that patched them inconsistently is corrected before anything reads them.
+  recomputeInning(team, getRealInning(team, innIdx));
   const inn = getInnState(team, innIdx);
   const endsHalfInning = inn.outs >= 3;
-  updateInningRuns(team, innIdx);
   updatePlayerStats(team);
   updatePitcherStats(team);   // also recomputes the provisional-ER badges
   if (endsHalfInning) {
-    let lob = 0;
-    for (let b = 0; b < 3; b++) if (inn.bases[b] !== null) lob++;
-    inn.lob = lob;
-    updateLinescoreTotals(team);
     if (!checkGameOver(team, innIdx)) {
       scheduleTransition(() => switchToNextHalf(team, innIdx), 600);
     }
@@ -2001,15 +2094,12 @@ function updateSituation() {
   // (count, batter, LOB now handled in the panel loop above)
 
   // LOB
+  // #32: `#sit-lob` isn't in index.html, so this has never rendered; Phase 9
+  // deletes it. Reads the one LOB definition meanwhile, rather than a per-column
+  // sum that would double-count a batted-around inning if the element came back.
   const lobEl = document.getElementById('sit-lob');
   if (lobEl) {
-    let totalLOB = 0;
-    ['visiting', 'home'].forEach(t => {
-      for (let i = 0; i < INNINGS; i++) {
-        const innState = gameState.innings[t] && gameState.innings[t][i];
-        if (innState && innState.lob) totalLOB += innState.lob;
-      }
-    });
+    const totalLOB = teamLOB('visiting') + teamLOB('home');
     lobEl.textContent = totalLOB > 0 ? `LOB: ${totalLOB}` : '';
   }
 }
@@ -2381,7 +2471,11 @@ function restoreSnapshot(snap) {
     renderPitchCount(team, p, innIdx);
     renderPitcherChange(team, p, innIdx);
   }
-  updateInningRuns(team, innIdx);
+  // `prevInn` has already been reinstated above, so this mostly confirms it. It
+  // also covers what the snapshot can't: `prevRunners` captures one column, and a
+  // batted-around inning lives in two, so the other column's copy of the outs and
+  // bases would otherwise stay as the undone play left it.
+  recomputeInning(team, getRealInning(team, innIdx));
   updateSprayMini();
   const cell = document.querySelector(`.at-bat-cell[data-team="${team}"][data-p="${pIdx}"][data-inn="${innIdx}"]`);
   if (cell) selectCell(cell);
@@ -2486,37 +2580,44 @@ function editPlayType() {
     }
     popup.style.display = 'none';
     pushUndo(team, pIdx, innIdx);
-    // Adjust outs when changing between out and non-out
+    // The batter comes off whatever base he was standing on before the new play
+    // decides where he belongs, so a home run doesn't sweep him along with the
+    // runners below. Every other base write here is a recompute input, not a
+    // placement — `recomputeInning` at the end derives who is where.
+    removeRunnerFromBases(inn, pIdx);
+
+    // The out log, which the recompute counts.
     if (wasOut && !nowOut) {
       removeOutsFromPlay(team, innIdx, pIdx, innIdx, ab.outsRecorded || 1);
       ab.out = 0; ab.outsRecorded = 0; ab.dpOuts = null;
-      renumberOuts(team, innIdx);
     } else if (!wasOut && nowOut) {
       recordBatterOut(team, innIdx, pIdx, ab);
-      // Remove batter from bases
-      removeRunnerFromBases(inn, pIdx);
-      ab.bases = [false, false, false, false];
     }
-    // Adjust bases when changing between hit types
+
+    // The batter's own cell.
     if (nowOut) {
-      removeRunnerFromBases(inn, pIdx);
       ab.bases = [false, false, false, false]; ab.outOnBase = null;
     } else if (nowHit || nowWalk) {
-      // Clear old base position
-      removeRunnerFromBases(inn, pIdx);
       ab.bases = [false, false, false, false];
-      if (newPlay === '1B' || newPlay === 'E' || nowWalk) { ab.bases[0] = true; setRunnerOn(inn, 0, pIdx); }
-      else if (newPlay === '2B') { ab.bases[0] = true; ab.bases[1] = true; setRunnerOn(inn, 1, pIdx); }
-      else if (newPlay === '3B') { ab.bases[0] = true; ab.bases[1] = true; ab.bases[2] = true; setRunnerOn(inn, 2, pIdx); }
-      else if (newPlay === 'HR') { ab.bases = [true, true, true, true]; }
+      if (newPlay === 'HR') {
+        // #22: this used to fill the batter's four bases and stop, leaving the
+        // runners standing on the bases a home run had just cleared — a 3-run
+        // homer that scored one. They come round with him, and the RBI follows.
+        const runnersOn = [inn.bases[0], inn.bases[1], inn.bases[2]].filter(b => b !== null).length;
+        advanceRunners(team, innIdx, 4, getBatterLabel(team, pIdx, innIdx));
+        ab.bases = [true, true, true, true];
+        ab.rbi = runnersOn + 1;
+      } else if (newPlay === '1B' || newPlay === 'E' || nowWalk) { ab.bases[0] = true; }
+      else if (newPlay === '2B') { ab.bases[0] = true; ab.bases[1] = true; }
+      else if (newPlay === '3B') { ab.bases[0] = true; ab.bases[1] = true; ab.bases[2] = true; }
     }
     ab.play = newPlay;
     renderPlayText(team, pIdx, innIdx);
     renderOut(team, pIdx, innIdx);
     renderDiamond(team, pIdx, innIdx);
+    recomputeInning(team, getRealInning(team, innIdx));
     updatePlayerStats(team);
     updatePitcherStats(team);
-    updateInningRuns(team, innIdx);
     updateSituation();
     autoSave();
   };
@@ -2655,15 +2756,12 @@ function clearPlayKeepPitches() {
     const inn = getInnState(team, innIdx);
     Object.assign(inn, JSON.parse(JSON.stringify(lastUndo.prevInn)));
   } else {
-    const inn = getInnState(team, innIdx);
     removeOutsFromPlay(team, innIdx, pIdx, innIdx, ab.outsRecorded || (ab.out ? 1 : 0));
-    removeRunnerFromBases(inn, pIdx);
     ab.play = '';
     ab.bases = [false, false, false, false];
     ab.out = 0; ab.outsRecorded = 0; ab.rbi = 0; ab.hitLoc = null;
     ab.dpOuts = null; ab.outOnBase = null;
     ab.advReason = ['','','','']; ab.reachedOnError = false; ab.seq = 0;
-    renumberOuts(team, innIdx);
   }
   // Re-apply saved pitches on the batter's at-bat
   ab.pitches = savedPitches;
@@ -2673,7 +2771,7 @@ function clearPlayKeepPitches() {
   renderPitches(team, pIdx, innIdx);
   renderPitchCount(team, pIdx, innIdx);
   renderPitcherChange(team, pIdx, innIdx);
-  updateInningRuns(team, innIdx);
+  recomputeInning(team, getRealInning(team, innIdx));
   updateSprayMini();
   updatePlayerStats(team);
   updatePitcherStats(team);
@@ -2871,7 +2969,6 @@ function clearSelectedCell() {
     // nothing (`inn.outs = Math.max(0, inn.outs)`).
     const runnerOuts = outsFromPlay(inn, pIdx, innIdx).filter(o => o.pIdx !== pIdx || o.col !== innIdx);
     removeOutsFromPlay(team, innIdx, pIdx, innIdx, ab.outsRecorded || (ab.out ? 1 : 0));
-    removeRunnerFromBases(inn, pIdx);
     for (const o of runnerOuts) {
       if (o.pIdx == null) continue;
       const rab = players[o.pIdx].atBats[o.col];
@@ -2901,7 +2998,6 @@ function clearSelectedCell() {
     }
     ab.subChange = false;
     ab.seq = 0;
-    renumberOuts(team, innIdx);
     renderDiamond(team, pIdx, innIdx);
     renderOut(team, pIdx, innIdx);
     renderPitches(team, pIdx, innIdx);
@@ -2911,7 +3007,11 @@ function clearSelectedCell() {
   }
 
   renderPitcherChange(team, pIdx, innIdx);
-  updateInningRuns(team, innIdx);
+  // Both branches above touch only the at-bat records (and the out log); the
+  // inning's outs, bases, runs and LOB come back out of them here. The restore
+  // branch reinstates `prevInn` wholesale, so a recompute over it is a no-op
+  // unless the snapshot and the records disagree — in which case the records win.
+  recomputeInning(team, getRealInning(team, innIdx));
   updateSprayMini();
   updateSituation();
   updatePlayerStats(team);
@@ -2936,16 +3036,25 @@ function highlightLinescore(team, innIdx) {
   }
 }
 
+// A completed half-inning that scored nothing shows a 0, not a blank.
+//
+// #23: this looked the input up by real inning and then wrote state by *column*
+// index, so after batting around the DOM read ["0","",…] and the state
+// ["","0",…]. Usually the next updateLinescoreTotals put it right; a save landing
+// in between persisted a zero against the wrong inning. Walk real innings, so
+// there is one index in play. (The old `realInn >= INNINGS` check ran after the
+// lookup it was meant to guard, and columnMap never holds a value that large.)
 function fillLinescoreZeros() {
   ['visiting', 'home'].forEach(team => {
-    for (let i = 0; i < INNINGS; i++) {
-      const realInn = getRealInning(team, i);
+    for (let realInn = 0; realInn < INNINGS; realInn++) {
+      const cols = getColumnsForInning(team, realInn);
+      if (!cols.length) continue;
       const inp = document.querySelector(`input[data-ls="${team}"][data-inn="${realInn}"]`);
-      if (!inp || realInn >= INNINGS) continue;
-      const inn = getInnState(team, i);
+      if (!inp) continue;
+      const inn = getInnState(team, cols[cols.length - 1]);
       if (inn.outs >= 3 && inp.value === '') {
         inp.value = '0';
-        gameState.linescore[team].innings[i] = '0';
+        gameState.linescore[team].innings[realInn] = '0';
       }
     }
   });
@@ -2964,25 +3073,13 @@ function updateLinescoreTotals(team) {
   if (rInp) rInp.value = r || '';
   gameState.linescore[team].r = r;
   updateLinescoreHits(team);
-  // Total LOB
-  let totalLob = 0;
-  const players = gameState.teams[team].players;
-  for (let col = 0; col < INNINGS; col++) {
-    let innLob = 0;
-    for (const player of players) {
-      const ab = player.atBats[col];
-      if (!ab || !ab.play) continue;
-      if (ab.bases[0] && !ab.bases[3] && ab.outOnBase == null) innLob++;
-    }
-    for (const oa of getOverflowForInning(team, col)) {
-      if (!oa.atBat.play) continue;
-      if (oa.atBat.bases[0] && !oa.atBat.bases[3] && oa.atBat.outOnBase == null) innLob++;
-    }
-    if (gameState.innings && gameState.innings[team] && gameState.innings[team][col]) {
-      gameState.innings[team][col].lob = innLob;
-    }
-    totalLob += innLob;
-  }
+  // #16: this used to be the *second* writer of `inn.lob`, and the two disagreed.
+  // Its own scan counted every at-bat that reached and hadn't scored, in every
+  // column including innings still in progress — so LOB climbed as runners reached
+  // and fell as they scored, and it counted a runner two plays before anyone was
+  // left on anything. `recomputeInning` settles the figure when the half-inning
+  // ends; this only adds them up.
+  const totalLob = teamLOB(team);
   gameState.linescore[team].lob = totalLob;
   const lobInp = document.querySelector(`input[data-ls="${team}"][data-stat="lob"]`);
   if (lobInp) lobInp.value = totalLob || '';
@@ -3263,6 +3360,14 @@ function applyState() {
     });
     const eInp = document.querySelector(`input[data-ls="${team}"][data-stat="e"]`);
     if (eInp) eInp.value = gameState.linescore[team].e || '';
+    // Re-derive every inning somebody batted in, so a game saved by an older build
+    // — or hand-edited, or imported — comes back consistent with its own records.
+    // A save from before LOB had one definition carries the old inflating scan's
+    // figures, and this is what corrects them. Innings nobody batted in are left
+    // exactly as saved: there is nothing to derive, and the cell may be hand-typed.
+    for (let ri = 0; ri < INNINGS; ri++) {
+      if (inningHasRecords(team, ri)) recomputeInning(team, ri);
+    }
     updateLinescoreTotals(team);
     updatePlayerStats(team);
     updatePitcherStats(team);
@@ -3860,17 +3965,6 @@ function rebuildPlayLog() {
     }
   }
   refreshPlayLogDisplay();
-}
-
-/* LOB Calculation (Feature 6) */
-function calculateLOB(team, innIdx) {
-  const inn = getInnState(team, innIdx);
-  if (inn.outs < 3) return 0;
-  let lob = 0;
-  if (inn.bases[0] !== null) lob++;
-  if (inn.bases[1] !== null) lob++;
-  if (inn.bases[2] !== null) lob++;
-  return lob;
 }
 
 /* Game Timer (Feature 13) */

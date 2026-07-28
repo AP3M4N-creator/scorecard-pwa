@@ -186,6 +186,7 @@
   }
   function lsInput(team, i) { return document.querySelector(`input[data-ls="${team}"][data-inn="${i}"]`); }
   function rTotal(team) { return document.querySelector(`input[data-ls="${team}"][data-stat="r"]`).value; }
+  function lobTotal(team) { return document.querySelector(`input[data-ls="${team}"][data-stat="lob"]`).value; }
 
   function visible(id) {
     const el = document.getElementById(id);
@@ -1149,5 +1150,168 @@
     basePicker(0);                                 // CS the trailing runner off 1st
     eq('outs', inn('visiting', 0).outs, 3);
     eq('one runner stranded', inn('visiting', 0).lob, 1);
+  });
+
+  /* =====================================================================
+     Phase 6 — recompute instead of patch.
+
+     Outs, bases, runs and LOB are derived from the at-bat records and the out
+     log by `recomputeInning`, which every mutator ends with. The cases below are
+     the ones the per-mutator patching got wrong.
+     ===================================================================== */
+
+  // #16 — LOB had two writers. `updateLinescoreTotals` scanned every at-bat that
+  // had reached and not scored, in innings still being played, so it climbed as
+  // runners reached and dropped as they scored. Nobody is left on base until the
+  // half-inning is over.
+  test('LOB is nothing until the half-inning ends', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    eq('no LOB with a man on and the inning live', inn('visiting', 0).lob, 0);
+    eq('no LOB on the linescore either', lobTotal('visiting'), '');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });
+    eq('still none with two on', inn('visiting', 0).lob, 0);
+    play('K'); play('K'); play('K');
+    eq('two stranded once it ends', inn('visiting', 0).lob, 2);
+    eq('and on the linescore', lobTotal('visiting'), '2');
+  });
+
+  test('a runner who scores is not left on base', () => {
+    sel('visiting', 0, 0);
+    play('3B');
+    play('1B'); runnerPopup({ 2: 3, batter: 0 });   // run scores, batter on 1st
+    play('K'); play('K'); play('K');
+    eq('run scored', lsInput('visiting', 0).value, '1');
+    eq('one stranded, not two', inn('visiting', 0).lob, 1);
+    eq('linescore LOB', lobTotal('visiting'), '1');
+  });
+
+  test('LOB accumulates across innings', () => {
+    sel('visiting', 0, 0);
+    play('1B'); play('K'); play('K'); play('K');
+    flushTimers();                                  // to the bottom of the 1st
+    sel('visiting', 0, 1);                          // top of the 2nd
+    play('2B');
+    play('1B'); runnerPopup({ 1: 2, batter: 0 });
+    play('K'); play('K'); play('K');
+    eq('1st inning', inn('visiting', 0).lob, 1);
+    eq('2nd inning', inn('visiting', 1).lob, 2);
+    eq('three left on for the game', lobTotal('visiting'), '3');
+  });
+
+  // #22 — the change wrote the batter's four bases and stopped, so the runners a
+  // home run had just cleared were still standing on their bases: a three-run
+  // homer that scored one.
+  test('changing a play to a home run brings the runners round with him', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });    // p0 on 2nd, p2 on 1st
+    play('K');                                       // p4 strikes out
+    sel('visiting', 4, 0);
+    editPlay('HR');
+    eq('three runs', lsInput('visiting', 0).value, '3');
+    eq('three RBI', ab('visiting', 4, 0).rbi, 3);
+    eq('lead runner scored', ab('visiting', 0, 0).bases[3], true);
+    eq('trailing runner scored', ab('visiting', 2, 0).bases[3], true);
+    eq('bases empty', JSON.stringify(inn('visiting', 0).bases), '[null,null,null]');
+    eq('the out came off', inn('visiting', 0).outs, 0);
+  });
+
+  test('changing a home run back to a strikeout empties the bases again', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    sel('visiting', 2, 0);
+    play('HR');
+    eq('two runs', lsInput('visiting', 0).value, '2');
+    sel('visiting', 2, 0);
+    editPlay('K');
+    eq('the batter is not on a base', JSON.stringify(inn('visiting', 0).bases), '[null,null,null]');
+    eq('one out', inn('visiting', 0).outs, 1);
+    // The runner he drove in stays home — his own cell still shows four bases, and
+    // only re-prompting for that runner (not this phase) would send him back.
+    eq('the run he drove in stands', lsInput('visiting', 0).value, '1');
+  });
+
+  // #23 — the zero for a scoreless completed inning was looked up by real inning
+  // and written to state by column index. After batting around those differ, and a
+  // save landing before the next totals pass persisted the zero one inning out.
+  test('the auto-zero for a scoreless inning is stored against the real inning', () => {
+    sel('visiting', 0, 0);
+    for (let i = 0; i < 9; i++) play('BB');          // bats around, spills into col 1
+    eq('column 1 is still the 1st inning', getRealInning('visiting', 1), 0);
+    play('K'); play('K'); play('K');                 // ends the 1st
+    flushTimers();
+    eq('the 2nd inning is column 2', getRealInning('visiting', 2), 1);
+    sel('visiting', 0, 2);
+    play('K'); play('K'); play('K');                 // scoreless 2nd
+    const ls = gameState.linescore.visiting.innings;
+    eq('the zero is on the 2nd inning', ls[1], '0');
+    eq('nothing written past the innings played', ls[2], '');
+  });
+
+  // The Phase 3 known limitation: a batted-around inning keeps outs on every one
+  // of its columns, and an edit in the earlier column used to move only that
+  // column's count. The recompute writes the whole inning.
+  test('clearing a play in the earlier column of a batted-around inning fixes the whole inning', () => {
+    sel('visiting', 0, 0);
+    play('K');                                       // out 1, column 0
+    for (let i = 0; i < 8; i++) play('BB');           // fills column 0, spills to col 1
+    eq('overflowed', curCol(), 1);
+    play('K');                                        // out 2, column 1
+    eq('outs on the overflow column', inn('visiting', 1).outs, 2);
+    eq('outs on the first column', inn('visiting', 0).outs, 2);
+    sel('visiting', 0, 0);
+    clearSelectedCell();                              // clear the strikeout in column 0
+    eq('one out left, first column', inn('visiting', 0).outs, 1);
+    eq('one out left, overflow column', inn('visiting', 1).outs, 1);
+    eq('log for the inning', inningOutsLog('visiting', 0).length, 1);
+    eq('IP', pStat('visiting', 0, 'ip'), '0.1');
+  });
+
+  // Clearing an older play took its outs off the log in Phase 3; the inning's
+  // bases had to be patched by hand, and a runner the play had put on stayed on.
+  test('clearing an older play takes its runner off the bases', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st
+    play('K'); play('K');                            // two outs after it
+    sel('visiting', 0, 0);
+    clearSelectedCell();
+    eq('bases empty', JSON.stringify(inn('visiting', 0).bases), '[null,null,null]');
+    eq('outs untouched', inn('visiting', 0).outs, 2);
+  });
+
+  // Loading a game re-derives every inning that has records, which is what fixes a
+  // save written while LOB still had two disagreeing writers.
+  test('a stale LOB on a saved inning is corrected from the records', () => {
+    sel('visiting', 0, 0);
+    play('1B'); play('K'); play('K'); play('K');
+    inn('visiting', 0).lob = 7;                     // what an older build could store
+    recomputeInning('visiting', 0);
+    eq('corrected from the records', inn('visiting', 0).lob, 1);
+  });
+
+  // The load-time recompute is scoped to innings with records: an empty inning has
+  // nothing to derive and its linescore cell may have been filled in by hand.
+  test('an inning nobody batted in has no records to recompute from', () => {
+    ok('the 5th is empty', !inningHasRecords('visiting', 4));
+    sel('visiting', 0, 0);
+    play('1B');
+    ok('the 1st has records', inningHasRecords('visiting', 0));
+    sel('visiting', 2, 0);
+    pitch('B');
+    ok('pitches alone count as records', inningHasRecords('visiting', 0));
+  });
+
+  // A recompute that disagreed with a live play would be a regression, not a fix:
+  // on the ordinary path it has to reproduce exactly what the play just did.
+  test('recomputing an inning mid-play changes nothing', () => {
+    sel('visiting', 0, 0);
+    play('K');
+    play('1B');
+    play('2B'); runnerPopup({ 0: 2, batter: 1 });
+    const before = JSON.stringify([inn('visiting', 0).outs, inn('visiting', 0).bases, inn('visiting', 0).lob]);
+    recomputeInning('visiting', 0);
+    eq('inning state unchanged', JSON.stringify([inn('visiting', 0).outs, inn('visiting', 0).bases, inn('visiting', 0).lob]), before);
+    eq('runs unchanged', lsInput('visiting', 0).value, '');
   });
 })();
