@@ -177,6 +177,12 @@
 
   function ab(team, p, col) { return gameState.teams[team].players[p].atBats[col]; }
   function inn(team, col) { return getInnState(team, col); }
+  // Pitcher stats live on the *fielding* team's rows: when visiting bats, the
+  // home pitchers are the ones charged.
+  function pStat(battingTeam, i, field) {
+    const t = battingTeam === 'visiting' ? 'home' : 'visiting';
+    return document.querySelector(`input[data-team="${t}"][data-pitcher="${i}"][data-field="${field}"]`).value;
+  }
   function lsInput(team, i) { return document.querySelector(`input[data-ls="${team}"][data-inn="${i}"]`); }
   function rTotal(team) { return document.querySelector(`input[data-ls="${team}"][data-stat="r"]`).value; }
 
@@ -236,6 +242,10 @@
     input.value = text;
     input.onkeydown({ key: 'Enter', preventDefault() {} });
   }
+
+  // Pitching change. changePitcher() is what creates #pitcher-popup, which
+  // setPitcher then hides, so go through both rather than calling setPitcher cold.
+  function usePitcher(i) { changePitcher(); setPitcher(i); }
 
   // "Change Play Type" popup: pick a play from the grid, then Apply.
   function editPlay(newPlay) {
@@ -554,5 +564,221 @@
     eq('runner scored', ab('visiting', 0, 0).bases[3], true);
     eq('batter on 2nd', inn('visiting', 0).bases[1], 2);
     eq('outs', inn('visiting', 0).outs, 0);
+  });
+
+  /* =====================================================================
+     Phase 3 — one way to record an out.
+
+     Every out now goes through recordOut and lands in `inn.outsLog`, and
+     pitcher IP counts those entries instead of re-deriving outs from the
+     batter's at-bat. Closes #10 (IP missing every out that isn't the batter's
+     own) and the out-count half of #21, and moves the leadoff rule onto
+     `inn.lastPA`.
+     ===================================================================== */
+
+  // #10
+  test('a caught stealing charges the pitcher a third of an inning', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    promptCSBase();                                // only one runner — applies directly
+    eq('outs', inn('visiting', 0).outs, 1);
+    eq('IP', pStat('visiting', 0, 'ip'), '0.1');
+  });
+
+  // #10
+  test('a pickoff charges the pitcher a third of an inning', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    promptPickoff();
+    basePicker(0);                                 // PO 1st — out
+    eq('outs', inn('visiting', 0).outs, 1);
+    eq('IP', pStat('visiting', 0, 'ip'), '0.1');
+  });
+
+  // #10
+  test('a runner thrown out advancing on a single charges the pitcher an out', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    play('1B'); runnerPopup({ 0: -2, batter: 0 });  // runner out at 2nd, batter safe at 1st
+    eq('outs', inn('visiting', 0).outs, 1);
+    eq('runner out on the way to 2nd', ab('visiting', 0, 0).outOnBase, 2);
+    eq('IP', pStat('visiting', 0, 'ip'), '0.1');
+    eq('hits allowed', pStat('visiting', 0, 'h'), '2');
+  });
+
+  // #10 — the batter's own out was already counted; this guards against the
+  // outsLog pass double-counting it.
+  test('three strikeouts charge exactly one full inning', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K'); play('K');
+    eq('out log length', inn('visiting', 0).outsLog.length, 3);
+    eq('IP', pStat('visiting', 0, 'ip'), '1');
+  });
+
+  test('a double play charges two outs and two thirds of an inning', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    promptPositionPlay('DP ');
+    positionPopup('6-4-3');
+    outcomePopup({ 0: ['out', 1], batter: ['out'] });
+    eq('outs', inn('visiting', 0).outs, 2);
+    eq('outs charged to the batter', ab('visiting', 2, 0).outsRecorded, 2);
+    eq('out log length', inn('visiting', 0).outsLog.length, 2);
+    eq('IP', pStat('visiting', 0, 'ip'), '0.2');
+  });
+
+  test('an out is logged against the pitcher who was on the mound for it', () => {
+    sel('visiting', 0, 0);
+    play('K');                                     // starter gets this one
+    usePitcher(1);                                 // reliever in
+    play('K');
+    eq('starter IP', pStat('visiting', 0, 'ip'), '0.1');
+    eq('reliever IP', pStat('visiting', 1, 'ip'), '0.1');
+  });
+
+  // A runner's hit belongs to the pitcher he batted against, not to whoever is on
+  // the mound when he's thrown out. The CS/PO paths used to overwrite it.
+  test('a caught stealing does not move the runner\'s hit to the new pitcher', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // single off the starter
+    usePitcher(1);
+    promptCSBase();
+    eq('starter charged the hit', pStat('visiting', 0, 'h'), '1');
+    eq('reliever charged no hit', pStat('visiting', 1, 'h'), '');
+    eq('reliever charged the out', pStat('visiting', 1, 'ip'), '0.1');
+  });
+
+  // #7's other half: the leadoff rule is "the batter after the last completed
+  // plate appearance", which the old `out === 3` search could not see.
+  test('the inning after a double-play-ending inning leads off with the next batter', () => {
+    sel('visiting', 0, 0);
+    play('K');                                     // p0 out
+    play('1B');                                    // p2 on 1st
+    promptPositionPlay('DP ');                     // p4 grounds into a DP
+    positionPopup('6-4-3');
+    outcomePopup({ 0: ['out', 1], batter: ['out'] });
+    eq('outs', inn('visiting', 0).outs, 3);
+    flushTimers();
+    eq('leadoff for the next inning', gameState.nextLeadoff.visiting[1], 6);
+  });
+
+  test('the inning after a caught-stealing-ending inning leads off with the batter at the plate', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K');                          // p0, p2 out
+    play('1B');                                    // p4 on 1st, p6 now up
+    promptCSBase();
+    eq('outs', inn('visiting', 0).outs, 3);
+    flushTimers();
+    eq('leadoff for the next inning', gameState.nextLeadoff.visiting[1], 6);
+  });
+
+  test('the inning after a pickoff-ending inning leads off with the batter at the plate', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K');
+    play('1B');                                    // p4 on 1st, p6 now up
+    promptPickoff();
+    basePicker(0);
+    eq('outs', inn('visiting', 0).outs, 3);
+    flushTimers();
+    eq('leadoff for the next inning', gameState.nextLeadoff.visiting[1], 6);
+  });
+
+  // #21 — clearing an older play has to give back every out it made, not just the
+  // batter's. The old code left the doubled-off runner recorded as out.
+  test('clearing an older double play gives back both of its outs', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    promptPositionPlay('DP ');
+    positionPopup('6-4-3');
+    outcomePopup({ 0: ['out', 1], batter: ['out'] });
+    sel('visiting', 4, 0);
+    play('K');                                     // a later play, so the DP is not the newest
+    eq('outs before the clear', inn('visiting', 0).outs, 3);
+    sel('visiting', 2, 0);
+    clearSelectedCell();                           // clear the DP
+    eq('outs', inn('visiting', 0).outs, 1);
+    eq('out log length', inn('visiting', 0).outsLog.length, 1);
+    eq('runner no longer out', ab('visiting', 0, 0).out, 0);
+    eq('IP', pStat('visiting', 0, 'ip'), '0.1');
+  });
+
+  // The surviving outs get renumbered, so the card can't show "1" and "3" for a
+  // two-out inning.
+  test('clearing the middle out renumbers the outs after it', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K'); play('K');
+    sel('visiting', 2, 0);
+    clearSelectedCell();                           // clear the 2nd out
+    eq('outs', inn('visiting', 0).outs, 2);
+    eq('first out', ab('visiting', 0, 0).out, 1);
+    eq('the 3rd out is now the 2nd', ab('visiting', 4, 0).out, 2);
+    eq('IP', pStat('visiting', 0, 'ip'), '0.2');
+  });
+
+  // Deferred from Phase 2, free with recordOut: a triple play with an out already
+  // recorded can't fit, and recordOut would silently drop the overflow.
+  test('a triple play entered with an out already recorded is rejected', () => {
+    sel('visiting', 0, 0);
+    play('K');                                     // 1 out
+    play('1B'); play('1B'); runnerPopup({ 0: 1, batter: 0 });
+    promptPositionPlay('TP ');
+    positionPopup('6-4-3');
+    eq('play not recorded', ab('visiting', 6, 0).play, '');
+    eq('outs', inn('visiting', 0).outs, 1);
+    eq('no pitch left behind', ab('visiting', 6, 0).pitches.length, 0);
+  });
+
+  // Batting around continues one real inning across two columns. Each column logs
+  // the outs made while it was the active one, so the inning's outs are those logs
+  // concatenated — count them twice and a 3-out inning reads as more.
+  test('an inning batted around charges exactly one inning', () => {
+    sel('visiting', 0, 0);
+    play('K');                                     // 1 out
+    for (let i = 0; i < 8; i++) play('BB');         // fills all 9 spots, forces runs
+    eq('overflowed to the next column', curCol(), 1);
+    eq('same real inning', getRealInning('visiting', 1), 0);
+    play('K'); play('K');                          // outs 2 and 3, in column 1
+    eq('outs', inn('visiting', 1).outs, 3);
+    eq('IP', pStat('visiting', 0, 'ip'), '1');
+  });
+
+  test('undo reverts a caught stealing, out log included', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    promptCSBase();
+    undoLastPlay();
+    eq('outs', inn('visiting', 0).outs, 0);
+    eq('out log length', inn('visiting', 0).outsLog.length, 0);
+    eq('runner back on 1st', inn('visiting', 0).bases[0], 0);
+    eq('IP', pStat('visiting', 0, 'ip'), '');
+  });
+
+  test('undo reverts a double play, both outs included', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    promptPositionPlay('DP ');
+    positionPopup('6-4-3');
+    outcomePopup({ 0: ['out', 1], batter: ['out'] });
+    undoLastPlay();
+    eq('outs', inn('visiting', 0).outs, 0);
+    eq('out log length', inn('visiting', 0).outsLog.length, 0);
+    eq('runner back on 1st', inn('visiting', 0).bases[0], 0);
+    eq('batter has no play', ab('visiting', 2, 0).play, '');
+    eq('IP', pStat('visiting', 0, 'ip'), '');
+  });
+
+  // A game saved before Phase 3 has no out log; IP has to come back from the
+  // per-at-bat `out` fields rather than reading blank.
+  test('a game saved without an out log is backfilled on load', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K');
+    collectState();                                 // mutates gameState in place
+    const saved = JSON.parse(JSON.stringify(gameState));
+    saved.innings.visiting.forEach(i => { delete i.outsLog; delete i.lastPA; });
+    const merged = mergeStateDefaults(saved);
+    eq('log rebuilt', merged.innings.visiting[0].outsLog.length, 2);
+    eq('first out', merged.innings.visiting[0].outsLog[0].n, 1);
+    eq('second out', merged.innings.visiting[0].outsLog[1].n, 2);
+    eq('pitcher carried over', merged.innings.visiting[0].outsLog[0].pitcher, 0);
   });
 })();

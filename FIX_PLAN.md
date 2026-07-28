@@ -6,10 +6,11 @@ finding, so this document stands alone — phases below refer to findings by num
 
 **Decisions confirmed by Adam, 2026-07-28** (see *Decisions* below).
 
-> ## ▶ This pass: Phases 1 + 2 — both ✅ **done**
-> Test harness, then every result-changing bug fixed surgically. **Stopped here
-> for review.** Phases 3–10 are planned but **not** authorised yet.
-> Suite: **47 passing, 0 known failures** (`npm test`).
+> ## ▶ Phases 1, 2 and 3 — all ✅ **done**
+> Test harness, then every result-changing bug fixed surgically, then the
+> `recordOut` chokepoint. **Stopped here for review.** Phases 4–10 are planned but
+> **not** authorised yet.
+> Suite: **64 passing, 0 known failures** (`npm test`).
 
 **How this is ordered.** The 34 findings collapse into 9 root causes. Fixing
 causes retires whole families at once — but three of the six result-changing bugs
@@ -190,11 +191,11 @@ cases only covered via `isOutPlay`.
 has the same shape as #7 — `applyRunnerOutcomes` caps at 3 outs, so the extra outs
 are silently dropped and the card under-reports. Not fixed here because only DP was
 authorised in *Decisions*. One line next to the #7 reject, or free with Phase 3's
-`recordOut`.
+`recordOut`. → **closed in Phase 3.**
 
 ---
 
-## Phase 3 — One way to record an out *(not yet authorised)*
+## Phase 3 — One way to record an out ✅ **done**
 
 Retires RC-B, so the Phase 2 guards stop being load-bearing.
 
@@ -221,6 +222,66 @@ and say so in the UI.
 advancing on a single; a DP charges exactly 2 outs and 0.2 IP; leadoff correct
 after a DP-ending and a CS-ending inning.
 **Size:** half a day. **Risk:** medium — touches every out path.
+
+### Shipped
+
+**64 passing, 0 known failures.** 17 new cases, no xfails — every finding this
+phase closes was already asserted or is asserted now.
+
+New in `app.js`: `recordOut()` (the chokepoint), `recordBatterOut()` (the
+batter-out shorthand the old inline `inn.outs++; ab.out = …; ab.outsRecorded = 1`
+became), `inningOutsLog()`, `outsFromPlay()`, `removeOutsFromPlay()`,
+`renumberOuts()` and `backfillOutsLog()`. New state: `inn.outsLog`, `inn.lastPA`,
+`ab.seq`, `gameState.playSeq`. **Every `inn.outs` mutation in the file is now
+inside `recordOut` or `removeOutsFromPlay`** — grep `\.outs++` to confirm.
+
+Notes where the implementation differs from the outline above:
+
+- **Log entries carry `srcP`/`srcCol` as well as `pIdx`/`col`.** `pIdx`/`col` is the
+  at-bat cell the out is *shown* on (the runner's own cell for a base out);
+  `srcP`/`srcCol` is the cell whose play *caused* it. That second pair is what
+  closes #21: clearing a double play now removes both of its outs, where the old
+  code subtracted `ab.outsRecorded` and left the doubled-off runner recorded as
+  out. `applyChosenAdvancements` took a 5th `src` argument so a runner thrown out
+  advancing is attributed to the batter's PA.
+- **`outsLog` is not copied forward into batting-around columns.** `inn.outs` still
+  is (that's the 3-out ceiling), but each column logs only the outs made while it
+  was the active one, and `inningOutsLog()` concatenates the columns of a real
+  inning. Copying it forward the way `outs` is copied would have double-counted
+  every pre-overflow out. A test bats around with one out already recorded and
+  asserts IP reads exactly `1`.
+- **`markNextInningLeadoff` keeps the old `out === 3` search as a fallback.**
+  `lastPA` can't be backfilled reliably from a pre-Phase-3 save (the batting order
+  can wrap inside a single column, so "highest position with a play" isn't the last
+  PA), so an old game keeps its old — sometimes wrong — leadoff rather than losing
+  the order entirely. New games never hit the fallback.
+- **The ad-hoc `nextLeadoff` writes in `applyCSAtBase`/`applyPickoff` are gone,**
+  along with the "don't overwrite if already set" guard in `markNextInningLeadoff`
+  that existed to protect them. `lastPA` gets all three cases right on its own.
+- **`rab.pitcher = getEffectivePitcher(…)` is deleted from both the CS and PO
+  paths.** Those lines existed to make IP work under the old scheme, and they
+  moved the runner's *hit and run* onto whoever happened to be on the mound for the
+  steal attempt. The out's pitcher now lives in the log entry, so `rab.pitcher`
+  goes back to meaning "the pitcher this batter faced." Asserted.
+- **`updatePitcherStats` was missing from three callers** — `applyCSAtBase`,
+  `applyPickoff`, `applyRunnerEvent`. #10 was two bugs: IP wasn't counted *and*
+  wasn't recomputed after a runner event even if it had been.
+- **Removing an out renumbers the survivors,** log entries and the visible out
+  badges both. Clearing the 2nd out of an inning used to leave the card reading
+  "1" and "3" for two outs.
+- **The deferred triple-play case from Phase 2 is closed here** (the plan called it
+  "free with Phase 3's `recordOut`" — it isn't quite free, since `recordOut`
+  *refuses* the overflow outs rather than dropping them silently, which still
+  under-reports). A TP entered with an out already recorded is now rejected at
+  entry, exactly like the #7 DP reject.
+- **A DP entered with nobody on base** now records its second out as a log entry
+  with `pIdx: null` and stamps `dpOuts`, instead of `inn.outs = Math.min(inn.outs +
+  2, 3)`. Still a nonsense entry; at least the out count and IP are right.
+
+**Known limitation, deferred to Phase 6.** After batting around, recording or
+clearing an out in the *earlier* column of the inning updates that column's count
+and log, not the active column's. `inn.outs` has always diverged this way, so this
+is not a regression — but `recomputeInning()` is what actually fixes it.
 
 ---
 
@@ -404,20 +465,21 @@ asked for already exists (app.js:3994). A strict CSP still requires converting
 |---|---|---|---|---|
 | 1 Test harness | — | 1 sitting | none | ✅ **done** |
 | 2 Surgical result bugs | 1, 2, 3, 4†, 5, 6, 7, 8, 15, 26, 27 | 1–2 sittings | low | ✅ **done** |
-| 3 `recordOut` chokepoint | 2, 7, 8, 10, 21† | half day | medium | planned |
+| 3 `recordOut` chokepoint | 2, 7, 8, 10, 21† | half day | medium | ✅ **done** |
 | 4 Runner placement chokepoint | 4 | 1 sitting | low-med | planned |
 | 5 Runner events via `finishPlay` | 3, 5, 13†, 20 | half day | medium | planned |
 | 6 Recompute instead of patch | 16, 21, 22, 23 | multi-session | med-high | planned |
 | 7 PA identity + delete dead state | 9, 19, 24, 30 | multi-session | high | planned |
 | 8a Box-score rule fixes | 11, 12, 13, 14, 17 | 1–2 sittings | low | planned |
-| 8b W/L/SV real implementation | 18 | multi-session | medium | planned (needs Phase 3) |
+| 8b W/L/SV real implementation | 18 | multi-session | medium | planned (unblocked — Phase 3 shipped `ab.seq` + `outsLog`) |
 | 9 Silent failures / escaping / dead code | 25, 28, 31, 32, 33, 34 | 1 sitting | low | planned |
 | 10 a11y + CSP | — | — | low | planned |
 
 † partially in that phase, completed later.
 
 8a and 9 are independent of the structural work and can be pulled forward whenever
-there's a spare sitting. 8b needs Phase 3. Phase 7 goes last of the structural phases.
+there's a spare sitting. 8b's dependency on Phase 3 is satisfied. Phase 7 goes last
+of the structural phases.
 
 ---
 
