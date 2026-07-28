@@ -6,11 +6,16 @@ finding, so this document stands alone — phases below refer to findings by num
 
 **Decisions confirmed by Adam, 2026-07-28** (see *Decisions* below).
 
-> ## ▶ Phases 1–5 — all ✅ **done**
+> ## ▶ Phases 1–6 — all ✅ **done**
 > Test harness, then every result-changing bug fixed surgically, then the
 > `recordOut` chokepoint, then the runner-placement chokepoint, then the single
-> post-play exit. **Stopped here for review.** Phases 6–10 are planned but **not**
-> authorised yet. Suite: **89 passing, 0 known failures** (`npm test`).
+> post-play exit, then derived state recomputed rather than patched. **Stopped here
+> for review.** Phases 7–10 are planned but **not** authorised yet. Suite:
+> **109 passing, 0 known failures** (`npm test`).
+>
+> Phase 6 also closed the run-losing half of **#9** (Phase 7's) — its recompute is
+> unsound without it — and a `clearPlayKeepPitches` bug the audit missed. It carried
+> `editPlayType`'s runner re-prompt (the rest of #22) forward to Phase 7.
 
 **How this is ordered.** The 34 findings collapse into 9 root causes. Fixing
 causes retires whole families at once — but three of the six result-changing bugs
@@ -419,7 +424,7 @@ Notes where the implementation differs from the outline above:
 
 ---
 
-## Phase 6 — Recompute instead of patch *(not yet authorised)*
+## Phase 6 — Recompute instead of patch ✅ **done**
 
 - Add `recomputeInning(team, realInn)`: rebuild `outs`, `bases`, runs, LOB and the
   linescore cell for every column of that real inning from the at-bat records alone.
@@ -440,6 +445,82 @@ Notes where the implementation differs from the outline above:
 **Closes:** 16, 21, 22, 23. **Size:** multi-session — highest value, fiddliest.
 **Risk:** medium-high. Do right after Phase 3; `outsLog` makes it verifiable.
 
+### Shipped
+
+**109 passing, 0 known failures.** 22 new cases, 13 of which fail on `ec69919`.
+
+New in `app.js`: `recomputeInning()`, `teamLOB()`, `inningHasRecords()`,
+`markAdvance()`, `revertAdvancesFrom()`. New state: `ab.advSrc`. Deleted:
+`calculateLOB`. **Every `inn.outs`, `inn.bases` and `inn.lob` write for a finished
+edit is now inside `recomputeInning`** — grep `inn.outs =` / `inn.bases\[` /
+`.lob =`; the remaining hits are `recordOut` / `removeOutsFromPlay` (which
+`recomputeInning` reads back), the three runner helpers, and
+`overflowToNextColumn`'s copy at the moment it inserts a column.
+
+**The hinge held — after a one-line fix it required.** 24 play sequences were driven
+in jsdom with the derivation checked against `inn.bases` after every step. It held
+everywhere except a batted-around inning, where it found two runners on one base
+and a missing run: `getRunnerCol` scanned the inning's columns forward and returned
+a batter's **first** plate appearance, so his second single's advancement was
+written onto his first single's cell, which already showed four bases. A man on base
+can't be at the plate, so any earlier PA of his in that inning is closed — he scored
+on it or was put out on it. Scanning backward for the last one is correct, and it
+closes the run-losing half of **#9** (`ec69919`), three phases before Phase 7
+retires the function. Phase 6 is unsound without it.
+
+Notes where the implementation differs from the outline above:
+
+- **The partial-revert loop was already gone** — Phase 3 replaced it with
+  `outsFromPlay` / `removeOutsFromPlay`. What #21 had left was the *other* symptom
+  in its description: "runners the play advanced keep their advancement." That
+  needed the same provenance treatment the out log got. `markAdvance` stamps a
+  runner's advancement with the plate appearance responsible, `revertAdvancesFrom`
+  takes back exactly those segments, and a base he stole or took on a wild pitch
+  stays his. `advSrc` is written only when something stamps it, so it costs nothing
+  on an at-bat that advanced nobody, and a pre-`advSrc` save keeps the old behaviour
+  rather than guessing which play moved whom.
+- **A revert can collide, and is refused when it does.** Clear the single that drove
+  a man in and the base he'd go back to may be held by a batter from a *later* play —
+  which only happened because this one did. There is no honest answer to that, so he
+  keeps what he was given and the refusal is logged, naming both runners. Same policy
+  as `setRunnerOn`. The cleared batter's own base does not count as occupied: he is
+  coming off the card with his play, so a runner does go back onto it.
+- **`afterStateChange` recomputes too,** not just the four mutators. Every play now
+  ends with the invariant re-established, so a path that patched inconsistently is
+  corrected before anything reads it. On the ordinary path the recompute is a no-op —
+  a case asserts exactly that, because a recompute that *disagreed* with a live play
+  would be a regression rather than a fix.
+- **A batted-around inning gets the recomputed state on every one of its columns.**
+  That closes the known limitation Phase 3 recorded: recording or clearing an out in
+  the earlier column used to move only that column's count. `outsLog` stays
+  per-column (concatenated by `inningOutsLog`) — copying it forward would
+  double-count.
+- **Loading a game re-derives every inning that has records.** A save written while
+  LOB still had two writers carries the old scan's inflated figures, and this is what
+  corrects them. Innings nobody batted in are left exactly as saved: there is nothing
+  to derive from, and the linescore cell may have been filled in by hand — which is
+  why `inningHasRecords` exists rather than a blanket loop.
+- **`clearPlayKeepPitches` never cleared the play.** Not in the 34 findings; found
+  while rewiring it. It rebuilt the inning from "the last undo snapshot" three lines
+  after taking that snapshot itself, so it restored the state onto itself and the
+  branch that does the clearing was unreachable — "Clear Play (Keep Pitches)" dropped
+  the result pitch and left the play, the runner and the out where they were. It
+  needs no snapshot under this phase: clear the batter's record, take back the outs
+  and the advancement, recompute.
+- **`editPlayType`'s runner re-prompt is still open.** The phase required the `HR`
+  case (the runners come round with him, and the RBI follows) and that is done. What
+  remains of #22 is the general case: rewriting a single as a double doesn't re-ask
+  where the runners went, and rewriting a hit as an out doesn't take back the
+  advancement it gave — reverting without re-prompting would freeze runners at their
+  pre-play bases, which is wrong in the other direction. `adjustRBI` and the clear
+  paths are the escape hatches meanwhile. → **carried to Phase 7**, which reworks
+  plate-appearance identity in the same code.
+- **The dead `#sit-lob` sum (#32) now reads the one LOB definition.** Still dead —
+  Phase 9 deletes it — but a per-column sum would have double-counted a batted-around
+  inning if the element ever came back.
+- **`.claude/launch.json`** serves the app for browser verification, with the server
+  inline in the config so there is no new file and nothing to install.
+
 ---
 
 ## Phase 7 — Batting-around plate-appearance identity *(not yet authorised)*
@@ -450,6 +531,8 @@ Retires RC-E and `getRunnerCol` entirely.
   then knows which *cell* the runner came from, so a batter's second PA in a
   batted-around inning is unambiguous.
 - Delete `getRunnerCol` (416) and its ~20 call sites; read `.col` from the base entry.
+  Phase 6 made its *return value* correct (last PA, not first) — this deletes the
+  search itself, which the base entry makes unnecessary.
 - Widen the undo snapshot: `prevRunners` captures only `atBats[innIdx]` today
   (538, 1790). Snapshot every column of the real inning.
 - Call `updateColumnHeaders` from `applyState` so real inning numbers survive a
@@ -457,7 +540,12 @@ Retires RC-E and `getRunnerCol` entirely.
 - Delete `overflowAtBats` and its 11 read sites (101, 106, 1151, 1169, 2166, 2186,
   2416, 2787, 2855, 3089, 3584).
 
-**Closes:** 9, 19, 24, 30.
+- **Carried from Phase 6:** `editPlayType`'s runner re-prompt, the rest of #22.
+  Rewriting a single as a double must re-ask where the runners went; rewriting a hit
+  as an out must take back the advancement it gave. `revertAdvancesFrom` is the
+  mechanism for the second half; the first needs the popup re-opened on the edit.
+
+**Closes:** 9 (remainder), 19, 22 (remainder), 24, 30.
 **Migration:** old saves hold bare ints in `inn.bases`. Upgrade in
 `mergeStateDefaults` (2519): `n → { p: n, col: <first PA column in that inning> }`
 — today's `getRunnerCol` semantics, correct for every save that didn't bat around.
@@ -574,8 +662,8 @@ asked for already exists (app.js:3994). A strict CSP still requires converting
 | 3 `recordOut` chokepoint | 2, 7, 8, 10, 21† | half day | medium | ✅ **done** |
 | 4 Runner placement chokepoint | 4 | 1 sitting | low-med | ✅ **done** |
 | 5 Runner events via `finishPlay` | 3, 5, 13†, 20 | half day | medium | ✅ **done** |
-| 6 Recompute instead of patch | 16, 21, 22, 23 | multi-session | med-high | planned |
-| 7 PA identity + delete dead state | 9, 19, 24, 30 | multi-session | high | planned |
+| 6 Recompute instead of patch | 16, 21, 22†, 23, 9† | multi-session | med-high | ✅ **done** |
+| 7 PA identity + delete dead state | 9†, 19, 22†, 24, 30 | multi-session | high | planned |
 | 8a Box-score rule fixes | 11, 12, 13, 14, 17 | 1–2 sittings | low | planned |
 | 8b W/L/SV real implementation | 18 | multi-session | medium | planned (unblocked — Phase 3 shipped `ab.seq` + `outsLog`) |
 | 9 Silent failures / escaping / dead code | 25, 28, 31, 32, 33, 34 | 1 sitting | low | planned |
@@ -585,14 +673,17 @@ asked for already exists (app.js:3994). A strict CSP still requires converting
 
 8a and 9 are independent of the structural work and can be pulled forward whenever
 there's a spare sitting. 8b's dependency on Phase 3 is satisfied. Phase 7 goes last
-of the structural phases.
+of the structural phases, and now carries two hand-offs from Phase 6: the rest of
+#9 (delete `getRunnerCol`, whose *return value* is already correct) and the rest of
+#22 (`editPlayType`'s runner re-prompt).
 
 ---
 
 # Appendix A — Findings index
 
-From the 2026-07-28 audit. **Verified** = reproduced in a jsdom harness driving the
-real `index.html`; **reasoned** = from code reading only. Severity: **GAME** = wrong
+From the 2026-07-28 audit, plus #35 found later during the fixes. **Verified** =
+reproduced in a jsdom harness driving the real `index.html`; **reasoned** = from code
+reading only. Severity: **GAME** = wrong
 game result on the card · **STATS** = result OK, box score wrong · **STATE** =
 corruption or data-loss risk · **DEAD** = orphaned code.
 
@@ -606,21 +697,21 @@ corruption or data-loss risk · **DEAD** = orphaned code.
 | 6 | GAME | After a tied 9th the app selects column 9, which is `hidden-inning` (`display:none`) until `+EI` is pressed; nothing auto-raises `visibleInnings`. *Repro: complete 9 tied innings → `selectedCell` is visiting p0 col9, hidden.* **Verified** | `selectNextBatterForInning` 1288, `updateInningVisibility` 3201, styles.css:544 |
 | 7 | GAME | DP entered with 2 outs records **2** outs and sets `ab.out = 2`, so IP reads 1.1 for a 3-out inning and no at-bat carries `out === 3` — `markNextInningLeadoff` bails and the next inning starts at the top of the order. *Repro: 2 strikeouts, then DP.* **Verified** | 658; `markNextInningLeadoff` 1275 |
 | 8 | GAME | "Change Play Type" can push the inning past 3 outs. *Repro: leadoff single, 3 strikeouts, change the single to K → `inn.outs === 4`, badge renders 4.* **Verified** | 1943 |
-| 9 | GAME | In a batted-around inning a batter's **second** PA has its runner advancement written to his **first** at-bat cell — `getRunnerCol` returns the first column in the inning where the player has a play. *Repro: bat around, leadoff man reaches again and is driven in → col 0 shows the run, col 1 stays at 1st.* **Verified** | `getRunnerCol` 416 |
+| 9 | GAME | In a batted-around inning a batter's **second** PA has its runner advancement written to his **first** at-bat cell — `getRunnerCol` returns the first column in the inning where the player has a play. *Repro: bat around, leadoff man reaches again and is driven in → col 0 shows the run, col 1 stays at 1st.* **Verified** — ✅ **fixed in Phase 6** (scans backward for the last PA; Phase 7 still deletes the function) | `getRunnerCol` 416 |
 | 10 | STATS | Pitcher IP misses every out that isn't the batter's own. The `outOnBase && !outsRecorded` skip is valid for DP/TP (summed onto the batter at 964) but wrong for standalone base outs, which never set `outsRecorded`. *Repro: CS out, PO out, and runner thrown out at 3rd on a single — all three leave IP blank.* **Verified** | `updatePitcherStats` 2831-2837, dup 2863-2868; sites 1611, 1668, 697, 1757 |
 | 11 | STATS | `reachedOnError` is never set when the batter takes an extra base on the error — the `batterDest > 0` branch skips `placeBatter`, the only setter. Run then counts as **earned** and the ER-review badge never appears. *Repro: E6 with a runner on, batter sent to 2nd → false; batter held at 1st → true.* **Verified** | 599-605; setter 672 |
 | 12 | STATS | RBI credited on a force double play (Rule 9.04(b) says none) and on a run scored via wild pitch on K+WP. *Repro: runner on 3rd scores on `DP 6-4-3` → batter credited 1 RBI.* **Verified** | 653, 587 |
 | 13 | STATS | SB+E and PO+E write `advReason = 'E'` but never set `reachedOnError`, and `inningErProvisional` doesn't look at advancement reasons — a runner who reaches on a throwing error and scores counts as earned with no review prompt. **reasoned** | 1576, 1661; `inningErProvisional` 2177 |
 | 14 | STATS | Passed ball flags only the runner on 3rd as unearned; runners moved up from 1st/2nd score as earned runs later. (Rule 9.16: PB runs unearned, WP runs earned — the WP side is correct by doing nothing.) **reasoned** | `applyRunnerEvent` 1726 |
 | 15 | STATS | `isOutPlay` rejects `GO 6-3`, `FO 8`, `LO 7`, `PO 3` — and `GO 6-3` is the first example in the Edit-Play placeholder. Such a play records no out, doesn't advance the inning, doesn't credit the pitcher, and is styled as an on-base play. Quick-buttons are fine (they emit `6-3`). **Verified** | `isOutPlay` 492, placeholder 1907, `renderPlayText` 332/366 |
-| 16 | STATS | LOB has two conflicting definitions — `finishPlay` sets it from `inn.bases` at the 3rd out, then `updateLinescoreTotals` overwrites it with an at-bat scan across all columns including innings in progress, so it inflates mid-inning and counts #4's vanished runner. A third impl is dead. **reasoned** | 998 vs 2407-2424; `calculateLOB` 3246 |
+| 16 | STATS | ✅ **fixed in Phase 6.** LOB has two conflicting definitions — `finishPlay` sets it from `inn.bases` at the 3rd out, then `updateLinescoreTotals` overwrites it with an at-bat scan across all columns including innings in progress, so it inflates mid-inning and counts #4's vanished runner. A third impl is dead. **reasoned** | 998 vs 2407-2424; `calculateLOB` 3246 |
 | 17 | STATS | SF/SH never charge an at-bat, even with the bases empty — but a sac fly requires a run to score, else it's an ordinary flyout. *Repro: SF with bases empty → AB 0.* **Verified** | `tallyAtBats` 2761 |
 | 18 | STATS | W/L/SV is a heuristic (most IP wins, most ER loses); with no ER recorded, `worstIdx` stays 0 so the losing team's row-1 pitcher always gets the L. Save test (`margin <= 3 \|\| IP >= 3`) isn't the save rule. Presented as fact in the summary. **reasoned** | `findPitcherDecisions` 3626, 3662 |
 | 19 | STATE | Undo snapshots only `atBats[innIdx]`; combined with #9, a play in a batted-around inning mutates a different column that undo won't restore. **reasoned** | 538, `pushUndo` 1790 |
 | 20 | STATE | The CS half-inning transition uses a bare `setTimeout` not assigned to `pendingTransitionTimer`, so undo's `clearTimeout` can't reach it. That global is also written from five sites with no clear-before-set. **reasoned** | 1767; sites 1013, 1015, 1026, 1624, 1680 |
-| 21 | STATE | Clearing an older play subtracts only `ab.outsRecorded`; the loop meant to revert runner outs contains a no-op (`inn.outs = Math.max(0, inn.outs)`), so those outs are never subtracted and runners the play advanced keep their advancement. **reasoned** | `clearSelectedCell` 2305-2350, no-op 2317 |
-| 22 | STATE | `editPlayType` adjusts only the batter's own bases/outs — no runner re-prompt, no out renumbering, no RBI recompute; changing a play to HR fills the batter's four bases without scoring the runners on base. **reasoned** | 1883, 1959 |
-| 23 | STATE | `fillLinescoreZeros` reads the input by real inning but writes `linescore.innings[i]` by **column** index; the `realInn >= INNINGS` check is dead (runs after the lookup). *Repro: after batting around, DOM `["0","","",""]` vs state `["","0","",""]`. Usually corrected by the next `updateLinescoreTotals`, but a save landing in between persists a zero in the wrong inning.* **Verified** | 2378-2391 |
+| 21 | STATE | ✅ **fixed** — outs in Phase 3, advancement in Phase 6. Clearing an older play subtracts only `ab.outsRecorded`; the loop meant to revert runner outs contains a no-op (`inn.outs = Math.max(0, inn.outs)`), so those outs are never subtracted and runners the play advanced keep their advancement. **reasoned** | `clearSelectedCell` 2305-2350, no-op 2317 |
+| 22 | STATE | `editPlayType` adjusts only the batter's own bases/outs — no runner re-prompt, no out renumbering, no RBI recompute; changing a play to HR fills the batter's four bases without scoring the runners on base. **reasoned** — HR case + out renumbering ✅ **fixed in Phase 6**; the runner re-prompt is open, → Phase 7 | 1883, 1959 |
+| 23 | STATE | ✅ **fixed in Phase 6.** `fillLinescoreZeros` reads the input by real inning but writes `linescore.innings[i]` by **column** index; the `realInn >= INNINGS` check is dead (runs after the lookup). *Repro: after batting around, DOM `["0","","",""]` vs state `["","0","",""]`. Usually corrected by the next `updateLinescoreTotals`, but a save landing in between persists a zero in the wrong inning.* **Verified** | 2378-2391 |
 | 24 | STATE | `updateColumnHeaders` has exactly one caller (`overflowToNextColumn`); `init` builds headers 1…15 and `applyState` never re-derives them from `columnMap`, so real inning numbers are lost on reload. **reasoned — verify by hand** | 121, caller 1219 |
 | 25 | STATE | A corrupt saved game is silently discarded (console only) and the next `autoSave` overwrites the salvageable JSON. A corrupt library key reads as "no saved games yet". **reasoned** | `loadState` 2543, `getGameLibrary` 3313 |
 | 26 | STATE | `addPitch` checks only `ab.play`, not outs, so pitches can be charged to a batter who never came up; at 4 balls `applyPlay` bails on the outs guard and the walk is silently dropped (the 4 pitches still count toward PC). *Repro: after 3 outs, 4 B taps → `pitches: ["B","B","B","B"]`, `play: ""`.* **Verified** | `addPitch` 1310, guard 531 |
@@ -632,6 +723,7 @@ corruption or data-loss risk · **DEAD** = orphaned code.
 | 32 | DEAD | `#sit-lob` doesn't exist — the LOB readout never renders. **Verified** | `updateSituation` 1480 |
 | 33 | DEAD | Unused but still serialized/present: `standings`/`STANDINGS_ROWS`, `calculateLOB`, `ab.extraOuts` (written once, never read), sub rows' own `atBats` arrays (at-bat cells only carry the starter's index). **Verified** | 39, 65, 3246, 2334 |
 | 34 | STATE | Player/pitcher names flow unescaped into `innerHTML` in six popups (the log/library/summary sinks were fixed in `f7ff87d`, these were missed). `escapeHtml` also omits `'`. **reasoned** | 815, 1068, 1087, 2021, 2931, 2978; `escapeHtml` 30 |
+| 35 | STATE | ✅ **fixed in Phase 6.** Not from the audit — found while rewiring `clearPlayKeepPitches`. It rebuilt the inning from "the last undo snapshot" three lines after its own `pushUndo`, so it restored the state onto itself and the branch that does the clearing was unreachable: **"Clear Play (Keep Pitches)" dropped the result pitch and cleared nothing else** — the play, the runner and the out all stood. *Repro: single, then Clear Play (Keep Pitches) → `play` is still `"1B"` and the batter is still on 1st.* **Verified** | `clearPlayKeepPitches` 2619 |
 
 ## Appendix B — Not implemented (design gaps, not defects)
 
