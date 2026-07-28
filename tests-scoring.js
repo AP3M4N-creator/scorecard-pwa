@@ -1280,6 +1280,126 @@
     eq('outs untouched', inn('visiting', 0).outs, 2);
   });
 
+  // #21's other half — the play's outs came off in Phase 3, but the bases it had
+  // handed the runners ahead of it stayed marked, so a runner it had driven to 2nd
+  // was still standing there with nothing on the card that put him there.
+  test('clearing an older play sends the runners it moved back', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });     // p2 singles, p0 to 2nd
+    play('K');                                       // an out after it, so it isn't the latest
+    sel('visiting', 2, 0);
+    clearSelectedCell();                             // clear p2's single
+    eq('the runner is back on 1st', inn('visiting', 0).bases[0], 0);
+    eq('nobody on 2nd', inn('visiting', 0).bases[1], null);
+    eq('his 2nd-base mark is gone', ab('visiting', 0, 0).bases[1], false);
+    eq('he keeps the base he singled to', ab('visiting', 0, 0).bases[0], true);
+    eq('the batter is gone from the card', ab('visiting', 2, 0).play, '');
+  });
+
+  test('clearing an older play leaves a base the runner stole', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st
+    promptSBBase(); basePicker(0);                    // steals 2nd — his own, not a play's
+    play('1B'); runnerPopup({ 1: 2, batter: 0 });     // p2 singles, p0 to 3rd
+    play('K');
+    sel('visiting', 2, 0);
+    clearSelectedCell();
+    eq('back on the base he stole', inn('visiting', 0).bases[1], 0);
+    eq('the stolen base is still marked', ab('visiting', 0, 0).bases[1], true);
+    eq('the advance it gave him is not', ab('visiting', 0, 0).bases[2], false);
+  });
+
+  // The base a runner would go back to can be occupied by a play that only happened
+  // because this one did. There is no honest answer to that, so he keeps what he was
+  // given rather than sharing a base — refused loudly, like any other collision.
+  test('a revert that would double up a base is refused, not forced', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st
+    play('1B'); runnerPopup({ 0: 3, batter: 0 });     // p2 singles p0 home, p2 to 1st
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });     // p4 singles, p2 to 2nd, p4 to 1st
+    play('K');                                       // so p2's single isn't the latest
+    eq('a run scored', lsInput('visiting', 0).value, '1');
+    sel('visiting', 2, 0);
+    clearSelectedCell();                             // clear the single that drove p0 in
+    // p0 would go back to 1st, but p4 is standing there off a later single.
+    eq('p0 keeps the run', ab('visiting', 0, 0).bases[3], true);
+    eq('the run stays on the board', lsInput('visiting', 0).value, '1');
+    eq('p4 keeps 1st', inn('visiting', 0).bases[0], 4);
+    eq('p2 is off the card, so 2nd is empty', inn('visiting', 0).bases[1], null);
+    eq('nobody shares a base', new Set(inn('visiting', 0).bases.filter(r => r !== null)).size, 1);
+  });
+
+  // The same shape without the third play: the cleared batter's own base is free,
+  // because he is coming off the card, so the runner does go back to it.
+  test('a runner goes back onto the base the cleared batter was standing on', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st
+    play('1B'); runnerPopup({ 0: 3, batter: 0 });     // p2 singles p0 home, p2 to 1st
+    play('K');
+    sel('visiting', 2, 0);
+    clearSelectedCell();
+    eq('p0 is back on 1st', inn('visiting', 0).bases[0], 0);
+    eq('his run came off', ab('visiting', 0, 0).bases[3], false);
+    eq('and off the linescore', lsInput('visiting', 0).value, '');
+  });
+
+  test('clearing a double play gives back both outs and the runner', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st
+    promptPositionPlay('DP ');
+    positionPopup('6-4-3');
+    outcomePopup({ 0: ['out', 1], batter: ['out'] });
+    play('K');                                       // 3rd out, so the DP isn't the latest
+    eq('three outs', inn('visiting', 0).outs, 3);
+    sel('visiting', 2, 0);
+    clearSelectedCell();                             // clear the double play
+    eq('one out left', inn('visiting', 0).outs, 1);
+    eq('the runner is back on 1st', inn('visiting', 0).bases[0], 0);
+    eq('he is not out any more', ab('visiting', 0, 0).out, 0);
+    eq('nor out on the bases', ab('visiting', 0, 0).outOnBase, null);
+  });
+
+  // Clear-and-keep-pitches rebuilt the inning from "the last undo snapshot", three
+  // lines after taking that snapshot itself — so it restored the state onto itself
+  // and cleared nothing but the result pitch.
+  test('clearing a play but keeping its pitches clears the play', () => {
+    sel('visiting', 0, 0);
+    pitch('S'); pitch('B');
+    play('1B');
+    eq('the result pitch was added', ab('visiting', 0, 0).pitches.join(''), 'SBH');
+    sel('visiting', 0, 0);
+    clearPlayKeepPitches();
+    eq('play cleared', ab('visiting', 0, 0).play, '');
+    eq('batter off the bases', inn('visiting', 0).bases[0], null);
+    eq('his own cell is blank', JSON.stringify(ab('visiting', 0, 0).bases), '[false,false,false,false]');
+    eq('the pitches he saw are kept, less the result pitch', ab('visiting', 0, 0).pitches.join(''), 'SB');
+  });
+
+  test('clearing a play but keeping its pitches gives back its out', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K');
+    sel('visiting', 2, 0);
+    clearPlayKeepPitches();
+    eq('one out left', inn('visiting', 0).outs, 1);
+    eq('out log', inn('visiting', 0).outsLog.length, 1);
+    eq('IP', pStat('visiting', 0, 'ip'), '0.1');
+  });
+
+  test('clearing a play but keeping its pitches also sends the runners back', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    sel('visiting', 2, 0);
+    pitch('S'); pitch('B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });     // p0 to 2nd
+    play('K'); play('K');                            // no longer the latest play
+    sel('visiting', 2, 0);
+    clearPlayKeepPitches();
+    eq('the runner is back on 1st', inn('visiting', 0).bases[0], 0);
+    eq('pitches kept', ab('visiting', 2, 0).pitches.join(''), 'SB');
+    eq('play cleared', ab('visiting', 2, 0).play, '');
+  });
+
   // Loading a game re-derives every inning that has records, which is what fixes a
   // save written while LOB still had two disagreeing writers.
   test('a stale LOB on a saved inning is corrected from the records', () => {

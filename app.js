@@ -606,6 +606,97 @@ function setAdvReason(ab, segIdx, reason) {
   if (!ab.advReason[segIdx]) ab.advReason[segIdx] = reason;
 }
 
+// Mark a base a runner reached on his own cell: the segment, why, and — when a
+// plate appearance sent him there — which one. `src` is that batter's cell, the
+// same {pIdx, col} pair `recordOut` carries as srcP/srcCol, and it's what lets
+// clearing a play take back exactly the advancement it caused (#21). A base taken
+// on a steal, a wild pitch or a manual move has no src: it isn't any play's to
+// give back. `advSrc` is created only when something stamps it, so an at-bat that
+// never advanced anybody costs nothing to store.
+function markAdvance(ab, segIdx, reason, src) {
+  ab.bases[segIdx] = true;
+  setAdvReason(ab, segIdx, reason);
+  if (!src) return;
+  if (!Array.isArray(ab.advSrc)) ab.advSrc = [null, null, null, null];
+  if (!ab.advSrc[segIdx]) ab.advSrc[segIdx] = { p: src.pIdx, col: src.col };
+}
+
+// Take back the advancement one plate appearance caused, across every column of
+// its inning. The runner's own cell still carries the bases he had reached before
+// it, so unmarking this play's segments drops him back to the last base still
+// marked — which is where he was standing when it happened, and where
+// `recomputeInning` will then find him.
+//
+// Only segments stamped with this play come off; a base he stole is his to keep.
+// A game saved before the stamp existed has none, so it keeps the old behaviour
+// rather than guessing which play moved whom.
+//
+// A later play may have put somebody on the base a runner would go back to — clear
+// the single that drove a man in and the batter who followed him is standing on
+// 1st. There is no honest answer to that: the later play only happened because
+// this one did. So the runner keeps what he was given, loudly, rather than making
+// two men share a base — the same policy `setRunnerOn` uses for a collision.
+function revertAdvancesFrom(team, realInn, srcP, srcCol) {
+  const players = gameState.teams[team].players;
+  const cols = getColumnsForInning(team, realInn);
+
+  // Everyone holding a base stamped to this play, with the marks the revert would
+  // leave him and the base that would put him back on.
+  const candidates = [];
+  for (const col of cols) {
+    for (let p = 0; p < players.length; p++) {
+      if (p === srcP && col === srcCol) continue;   // the batter's own cell
+      const ab = players[p].atBats[col];
+      if (!ab || !Array.isArray(ab.advSrc)) continue;
+      const segs = [];
+      for (let seg = 0; seg < 4; seg++) {
+        const s = ab.advSrc[seg];
+        if (s && s.p === srcP && s.col === srcCol) segs.push(seg);
+      }
+      if (!segs.length) continue;
+      const after = ab.bases.slice();
+      segs.forEach(seg => { after[seg] = false; });
+      candidates.push({ p, col, ab, segs, after });
+    }
+  }
+  if (!candidates.length) return;
+
+  // The bases held by runners this revert doesn't touch. The cleared cell isn't one
+  // of them — its batter is coming off the card with his play.
+  const untouched = new Set(candidates.map(c => c.p + ':' + c.col));
+  untouched.add(srcP + ':' + srcCol);
+  const occupied = [null, null, null];
+  for (const col of cols) {
+    for (let p = 0; p < players.length; p++) {
+      if (untouched.has(p + ':' + col)) continue;
+      const ab = players[p].atBats[col];
+      if (!ab || !ab.play || !ab.bases[0] || ab.bases[3] || ab.outOnBase != null) continue;
+      for (let i = 2; i >= 0; i--) if (ab.bases[i]) { occupied[i] = p; break; }
+    }
+  }
+
+  for (const c of candidates) {
+    // A runner still credited with a run after the revert isn't coming back to a
+    // base at all, so nothing can be in his way.
+    if (!c.after[3] && c.after[0]) {
+      let dest = 0;
+      for (let i = 2; i >= 0; i--) if (c.after[i]) { dest = i; break; }
+      if (occupied[dest] !== null) {
+        console.warn(`revertAdvancesFrom: ${team} inning ${realInn + 1} — runner ${c.p} keeps the base runner ${srcP}'s play gave him; runner ${occupied[dest]} is on ${BASE_NAMES[dest]}`);
+        continue;
+      }
+      occupied[dest] = c.p;
+    }
+    for (const seg of c.segs) {
+      c.ab.bases[seg] = false;
+      if (c.ab.advReason) c.ab.advReason[seg] = '';
+      c.ab.advSrc[seg] = null;
+    }
+    renderDiamond(team, c.p, c.col);
+    renderPlayText(team, c.p, c.col);
+  }
+}
+
 // When the batting order wraps (overflow column), a runner may have batted in an
 // earlier visual column for the same real inning. Return the cell his current
 // trip around the bases started from, so advancement renders on it.
@@ -629,8 +720,9 @@ function getRunnerCol(team, pIdx, innIdx) {
 
 // Everyone on base moves up `advanceBy` (1 for a wild pitch, balk or passed
 // ball; 4 for a home run). Lead runner first, so the base he vacates is already
-// free for the man behind him.
-function advanceRunners(team, innIdx, advanceBy, reason) {
+// free for the man behind him. `src` is the plate appearance responsible, when
+// there is one — a home run has one, a wild pitch doesn't.
+function advanceRunners(team, innIdx, advanceBy, reason, src) {
   const inn = getInnState(team, innIdx);
   const players = gameState.teams[team].players;
   const rsn = reason || '';
@@ -642,15 +734,12 @@ function advanceRunners(team, innIdx, advanceBy, reason) {
     const rc = getRunnerCol(team, r, innIdx);
     const rab = players[r].atBats[rc];
     if (!moveRunnerTo(inn, from, dest, r)) continue;
-    for (let step = from + 1; step <= dest; step++) {
-      rab.bases[step] = true;
-      setAdvReason(rab, step, rsn);
-    }
+    for (let step = from + 1; step <= dest; step++) markAdvance(rab, step, rsn, src);
     renderDiamond(team, r, rc);
   }
 }
 
-function advanceForcedRunners(team, innIdx, reason) {
+function advanceForcedRunners(team, innIdx, reason, src) {
   const inn = getInnState(team, innIdx);
   const players = gameState.teams[team].players;
   const rsn = reason || 'BB';
@@ -667,8 +756,7 @@ function advanceForcedRunners(team, innIdx, reason) {
     const rc = getRunnerCol(team, r, innIdx);
     const rab = players[r].atBats[rc];
     if (!moveRunnerTo(inn, from, from + 1, r)) continue;
-    rab.bases[from + 1] = true;
-    setAdvReason(rab, from + 1, rsn);
+    markAdvance(rab, from + 1, rsn, src);
     renderDiamond(team, r, rc);
   }
 }
@@ -996,7 +1084,7 @@ function applyPlay(play, target) {
 
     // Walks: auto-advance forced runners, no popup
     if (isWalk) {
-      advanceForcedRunners(team, innIdx, play);
+      advanceForcedRunners(team, innIdx, play, { pIdx, col: innIdx });
       ab.bases[0] = true; setRunnerOn(inn, 0, pIdx);
       ab.rbi = countRunnersScored(team, innIdx, prevRunners);
       finishPlay(team, pIdx, innIdx, snapshot);
@@ -1052,7 +1140,7 @@ function applyPlay(play, target) {
   } else if (isHR) {
     const runnersOn = [inn.bases[0], inn.bases[1], inn.bases[2]].filter(b => b !== null).length;
     const lbl = getBatterLabel(team, pIdx, innIdx);
-    advanceRunners(team, innIdx, 4, lbl);
+    advanceRunners(team, innIdx, 4, lbl, { pIdx, col: innIdx });
     ab.bases = [true, true, true, true];
     ab.rbi = runnersOn + 1;
   } else if (play === 'BB' || play === 'HBP' || play === 'IBB' || play === 'CI') {
@@ -1123,10 +1211,7 @@ function applyChosenAdvancements(team, innIdx, choices, reason, src) {
     const rab = players[r].atBats[rc];
     if (dest < 0) {
       const outAt = Math.abs(dest);
-      for (let step = fromBase + 1; step < outAt; step++) {
-        rab.bases[step] = true;
-        setAdvReason(rab, step, rsn);
-      }
+      for (let step = fromBase + 1; step < outAt; step++) markAdvance(rab, step, rsn, src);
       setAdvReason(rab, outAt, rsn);
       const n = recordOut(team, innIdx, {
         kind: 'runner', pIdx: r, col: rc,
@@ -1144,10 +1229,7 @@ function applyChosenAdvancements(team, innIdx, choices, reason, src) {
       // get here, so a refusal means imported or hand-edited state. The runner
       // keeps the base he is on rather than erasing whoever is on `dest`.
       if (!moveRunnerTo(inn, fromBase, dest, r)) return;
-      for (let step = fromBase + 1; step <= dest; step++) {
-        rab.bases[step] = true;
-        setAdvReason(rab, step, rsn);
-      }
+      for (let step = fromBase + 1; step <= dest; step++) markAdvance(rab, step, rsn, src);
       renderDiamond(team, r, rc);
     }
   });
@@ -1419,8 +1501,7 @@ function applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes) {
       // #4 backstop — see applyChosenAdvancements.
       if (!moveRunnerTo(inn, fromBase, oc.dest, r)) return;
       for (let step = fromBase + 1; step <= oc.dest; step++) {
-        rab.bases[step] = true;
-        setAdvReason(rab, step, playLabel);
+        markAdvance(rab, step, playLabel, { pIdx, col: innIdx });
       }
       renderDiamond(team, r, rc);
     }
@@ -2604,7 +2685,7 @@ function editPlayType() {
         // runners standing on the bases a home run had just cleared — a 3-run
         // homer that scored one. They come round with him, and the RBI follows.
         const runnersOn = [inn.bases[0], inn.bases[1], inn.bases[2]].filter(b => b !== null).length;
-        advanceRunners(team, innIdx, 4, getBatterLabel(team, pIdx, innIdx));
+        advanceRunners(team, innIdx, 4, getBatterLabel(team, pIdx, innIdx), { pIdx, col: innIdx });
         ab.bases = [true, true, true, true];
         ab.rbi = runnersOn + 1;
       } else if (newPlay === '1B' || newPlay === 'E' || nowWalk) { ab.bases[0] = true; }
@@ -2737,32 +2818,22 @@ function clearPlayKeepPitches() {
     const last = savedPitches[savedPitches.length - 1];
     if (last === 'H' || last === 'X') savedPitches.pop();
   }
-  // Use the undo snapshot to fully restore runners and inning state
-  const lastUndo = playHistory[playHistory.length - 1];
-  if (lastUndo && lastUndo.prevRunners && lastUndo.prevInn) {
-    const players = gameState.teams[team].players;
-    Object.keys(lastUndo.prevRunners).forEach(p => {
-      const pi = parseInt(p);
-      const restored = JSON.parse(JSON.stringify(lastUndo.prevRunners[pi]));
-      const target = players[pi].atBats[innIdx];
-      Object.keys(target).forEach(k => { if (!(k in restored)) delete target[k]; });
-      Object.assign(target, restored);
-      renderDiamond(team, pi, innIdx);
-      renderOut(team, pi, innIdx);
-      renderPlayText(team, pi, innIdx);
-      renderRBI(team, pi, innIdx);
-      renderPitchCount(team, pi, innIdx);
-    });
-    const inn = getInnState(team, innIdx);
-    Object.assign(inn, JSON.parse(JSON.stringify(lastUndo.prevInn)));
-  } else {
-    removeOutsFromPlay(team, innIdx, pIdx, innIdx, ab.outsRecorded || (ab.out ? 1 : 0));
-    ab.play = '';
-    ab.bases = [false, false, false, false];
-    ab.out = 0; ab.outsRecorded = 0; ab.rbi = 0; ab.hitLoc = null;
-    ab.dpOuts = null; ab.outOnBase = null;
-    ab.advReason = ['','','','']; ab.reachedOnError = false; ab.seq = 0;
-  }
+  // This used to try to rebuild the inning from "the last undo snapshot" — which,
+  // three lines after its own `pushUndo`, was the snapshot it had just taken. It
+  // restored the state onto itself and the branch below, the one that does the
+  // clearing, was unreachable: "Clear Play (Keep Pitches)" dropped the result pitch
+  // and left the play, the runner and the out exactly where they were.
+  //
+  // No snapshot is needed. Clear the batter's own record, take back the outs and
+  // the advancement the play produced, and let `recomputeInning` derive the rest.
+  removeOutsFromPlay(team, innIdx, pIdx, innIdx, ab.outsRecorded || (ab.out ? 1 : 0));
+  ab.play = '';
+  ab.bases = [false, false, false, false];
+  ab.out = 0; ab.outsRecorded = 0; ab.rbi = 0; ab.hitLoc = null;
+  ab.dpOuts = null; ab.outOnBase = null;
+  ab.advReason = ['','','','']; ab.reachedOnError = false; ab.seq = 0;
+  ab.advSrc = null;
+  revertAdvancesFrom(team, getRealInning(team, innIdx), pIdx, innIdx);
   // Re-apply saved pitches on the batter's at-bat
   ab.pitches = savedPitches;
   renderDiamond(team, pIdx, innIdx);
@@ -2986,6 +3057,7 @@ function clearSelectedCell() {
     ab.dpOuts = null;
     ab.outOnBase = null;
     ab.advReason = ['','','',''];
+    ab.advSrc = null;
     ab.reachedOnError = false;
     ab.extraOuts = 0;
     ab.pitcherChangeNum = '';
@@ -2998,6 +3070,9 @@ function clearSelectedCell() {
     }
     ab.subChange = false;
     ab.seq = 0;
+    // #21's other half: the runners this play moved go back where they were. The
+    // out it made came off above; the bases it handed out come off here.
+    revertAdvancesFrom(team, getRealInning(team, innIdx), pIdx, innIdx);
     renderDiamond(team, pIdx, innIdx);
     renderOut(team, pIdx, innIdx);
     renderPitches(team, pIdx, innIdx);
