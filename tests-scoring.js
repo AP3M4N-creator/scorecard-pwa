@@ -178,6 +178,22 @@
 
   function ab(team, p, col) { return gameState.teams[team].players[p].atBats[col]; }
   function inn(team, col) { return getInnState(team, col); }
+  // Who is standing on `base` — the player index, or null. A base entry is a
+  // `{ p, col }` ref to the plate appearance he is running from (Phase 7); most
+  // cases only care about the man, so they go through here. `onBaseFrom` is for
+  // the cases that assert *which* plate appearance it is.
+  function onB(team, col, base) {
+    const r = inn(team, col).bases[base];
+    return r === null ? null : r.p;
+  }
+  function onBaseFrom(team, col, base) {
+    const r = inn(team, col).bases[base];
+    return r === null ? null : r.p + '@' + r.col;
+  }
+  // The players on base, as indices, for the "nobody shares a base" check.
+  function occupants(team, col) {
+    return inn(team, col).bases.filter(b => b !== null).map(b => b.p);
+  }
   // Pitcher stats live on the *fielding* team's rows: when visiting bats, the
   // home pitchers are the ones charged.
   function pStat(battingTeam, i, field) {
@@ -290,7 +306,7 @@
   test('a single puts the batter on 1st and advances the selection', () => {
     sel('visiting', 0, 0);
     play('1B');
-    eq('runner on 1st', inn('visiting', 0).bases[0], 0);
+    eq('runner on 1st', onB('visiting', 0, 0), 0);
     eq('batter reached 1st', ab('visiting', 0, 0).bases[0], true);
     eq('result pitch recorded', ab('visiting', 0, 0).pitches.length, 1);
     eq('next batter selected', curP(), 2);
@@ -319,7 +335,7 @@
     sel('visiting', 0, 0);
     pitch('B'); pitch('B'); pitch('B'); pitch('B');
     eq('play', ab('visiting', 0, 0).play, 'BB');
-    eq('runner on 1st', inn('visiting', 0).bases[0], 0);
+    eq('runner on 1st', onB('visiting', 0, 0), 0);
     eq('pitch count', ab('visiting', 0, 0).pitches.length, 4);
   });
 
@@ -362,8 +378,8 @@
     play('1B');
     key('r');
     basePicker(0, '');                 // SB2 (1st -> 2nd), no error
-    eq('1st empty', inn('visiting', 0).bases[0], null);
-    eq('runner on 2nd', inn('visiting', 0).bases[1], 0);
+    eq('1st empty', onB('visiting', 0, 0), null);
+    eq('runner on 2nd', onB('visiting', 0, 1), 0);
     eq('R total', rTotal('visiting'), '');
   });
 
@@ -372,7 +388,7 @@
     play('1B');
     key('j');                          // only one runner: applied without a picker
     eq('outs', inn('visiting', 0).outs, 1);
-    eq('1st empty', inn('visiting', 0).bases[0], null);
+    eq('1st empty', onB('visiting', 0, 0), null);
     eq('runner marked out on the way to 2nd', ab('visiting', 0, 0).outOnBase, 1);
   });
 
@@ -381,7 +397,7 @@
     play('1B');
     key('u');
     eq('play cleared', ab('visiting', 0, 0).play, '');
-    eq('bases cleared', inn('visiting', 0).bases[0], null);
+    eq('bases cleared', onB('visiting', 0, 0), null);
     eq('outs', inn('visiting', 0).outs, 0);
   });
 
@@ -441,9 +457,8 @@
     sel('visiting', 0, 0);
     play('2B');                                  // p0 to 2nd
     play('2B'); runnerPopup({ 1: 1, batter: 1 }); // runner holds 2nd, batter sent to 2nd
-    const bases = inn('visiting', 0).bases;
-    ok('the runner who held 2nd is still on a base', bases.indexOf(0) !== -1);
-    const occupied = bases.filter(b => b !== null);
+    const occupied = occupants('visiting', 0);
+    ok('the runner who held 2nd is still on a base', occupied.indexOf(0) !== -1);
     eq('no base holds two runners', occupied.length, new Set(occupied).size);
   });
 
@@ -540,9 +555,8 @@
     sel('visiting', 0, 0);
     play('1B');                                    // p0 on 1st
     play('1B'); runnerPopup({ 0: 1, batter: 0 });   // runner to 2nd, batter to 1st
-    const bases = inn('visiting', 0).bases;
-    eq('runner on 2nd', bases[1], 0);
-    eq('batter on 1st', bases[0], 2);
+    eq('runner on 2nd', onB('visiting', 0, 1), 0);
+    eq('batter on 1st', onB('visiting', 0, 0), 2);
     eq('outs', inn('visiting', 0).outs, 0);
   });
 
@@ -552,7 +566,7 @@
     play('1B');                                    // p0 on 1st
     play('SH'); runnerPopup({ 0: 0, batter: 0 });   // runner holds, batter is out
     eq('outs', inn('visiting', 0).outs, 1);
-    eq('runner still on 1st', inn('visiting', 0).bases[0], 0);
+    eq('runner still on 1st', onB('visiting', 0, 0), 0);
   });
 
   // #4 — a refusal has to be recoverable: the popup stays open to be re-answered.
@@ -564,7 +578,7 @@
     ok('popup still open', visible('runner-popup'));
     runnerPopup({ 1: 3 });                         // send the runner home instead
     eq('runner scored', ab('visiting', 0, 0).bases[3], true);
-    eq('batter on 2nd', inn('visiting', 0).bases[1], 2);
+    eq('batter on 2nd', onB('visiting', 0, 1), 2);
     eq('outs', inn('visiting', 0).outs, 0);
   });
 
@@ -757,7 +771,7 @@
     eq('six runs so far', lsInput('visiting', 0).value, '6');
     eq('leadoff man scored on his first PA', ab('visiting', 0, 0).bases[3], true);
     play('BB'); play('BB'); play('BB');             // p0 back on 1st, then forced round
-    eq('leadoff man is on 3rd on his second PA', inn('visiting', 1).bases[2], 0);
+    eq('leadoff man is on 3rd on his second PA', onB('visiting', 1, 2), 0);
     play('BB');                                     // forces him home again
     eq('he scored on his second PA too', ab('visiting', 0, 1).bases[3], true);
     eq('ten runs', lsInput('visiting', 0).value, '10');
@@ -771,7 +785,7 @@
     undoLastPlay();
     eq('outs', inn('visiting', 0).outs, 0);
     eq('out log length', inn('visiting', 0).outsLog.length, 0);
-    eq('runner back on 1st', inn('visiting', 0).bases[0], 0);
+    eq('runner back on 1st', onB('visiting', 0, 0), 0);
     eq('IP', pStat('visiting', 0, 'ip'), '');
   });
 
@@ -784,7 +798,7 @@
     undoLastPlay();
     eq('outs', inn('visiting', 0).outs, 0);
     eq('out log length', inn('visiting', 0).outsLog.length, 0);
-    eq('runner back on 1st', inn('visiting', 0).bases[0], 0);
+    eq('runner back on 1st', onB('visiting', 0, 0), 0);
     eq('batter has no play', ab('visiting', 2, 0).play, '');
     eq('IP', pStat('visiting', 0, 'ip'), '');
   });
@@ -835,7 +849,7 @@
   }
   // Nothing should ever leave two runners listed on one base, whatever was entered.
   function basesConsistent(team, col) {
-    const occupied = inn(team, col).bases.filter(b => b !== null);
+    const occupied = occupants(team, col);
     eq('no base holds two runners', occupied.length, new Set(occupied).size);
   }
 
@@ -846,8 +860,8 @@
     ok('holding 1st is not offered', rpBtn(0, 0).disabled);
     ok('2nd is still offered', !rpBtn(0, 1).disabled);
     runnerPopup({ 0: 1, batter: 0 });
-    eq('runner on 2nd', inn('visiting', 0).bases[1], 0);
-    eq('batter on 1st', inn('visiting', 0).bases[0], 2);
+    eq('runner on 2nd', onB('visiting', 0, 1), 0);
+    eq('batter on 1st', onB('visiting', 0, 0), 2);
   });
 
   test('the runner popup will not send a runner past a lead runner who holds', () => {
@@ -870,7 +884,7 @@
     play('1B'); runnerPopup({ 1: 3, batter: 0 });   // p0 scores, p2 on 1st
     play('2B'); runnerPopup({ 0: 3, batter: 1 });   // p2 scores from 1st, p4 on 2nd
     eq('runs', lsInput('visiting', 0).value, '2');
-    eq('batter on 2nd', inn('visiting', 0).bases[1], 4);
+    eq('batter on 2nd', onB('visiting', 0, 1), 4);
     basesConsistent('visiting', 0);
   });
 
@@ -880,8 +894,8 @@
     sel('visiting', 0, 0);
     play('1B');                                    // p0 on 1st
     play('K+WP'); runnerPopup({ 0: 1, batter: 0 }); // runner to 2nd, batter to 1st
-    eq('runner on 2nd', inn('visiting', 0).bases[1], 0);
-    eq('batter on 1st', inn('visiting', 0).bases[0], 2);
+    eq('runner on 2nd', onB('visiting', 0, 1), 0);
+    eq('batter on 1st', onB('visiting', 0, 0), 2);
     eq('the runner kept his advancement', ab('visiting', 0, 0).bases[1], true);
     basesConsistent('visiting', 0);
   });
@@ -895,8 +909,8 @@
     ok('2nd is still offered', !ocBtn(0, 'safe', 1).disabled);
     ok('out at 2nd is still offered', !ocBtn(0, 'out', 1).disabled);
     outcomePopup({ 0: ['safe', 1], batter: ['safe', 0] });
-    eq('runner on 2nd', inn('visiting', 0).bases[1], 0);
-    eq('batter on 1st', inn('visiting', 0).bases[0], 2);
+    eq('runner on 2nd', onB('visiting', 0, 1), 0);
+    eq('batter on 1st', onB('visiting', 0, 0), 2);
   });
 
   test('the DP outcome popup lets a runner hold when the batter is out', () => {
@@ -906,7 +920,7 @@
     positionPopup('6-4-3');                        // batter is out by default on a DP
     ok('holding 1st is allowed', !ocBtn(0, 'safe', 0).disabled);
     outcomePopup({ 0: ['safe', 0] });
-    eq('runner still on 1st', inn('visiting', 0).bases[0], 0);
+    eq('runner still on 1st', onB('visiting', 0, 0), 0);
     eq('outs', inn('visiting', 0).outs, 1);
   });
 
@@ -931,7 +945,7 @@
     play('2B'); runnerPopup({ 2: 2, batter: 1 });   // p0 holds 3rd, p2 on 2nd
     key('r');
     eq('the runner on 3rd stole home', lsInput('visiting', 0).value, '1');
-    eq('the runner on 2nd stayed put', inn('visiting', 0).bases[1], 2);
+    eq('the runner on 2nd stayed put', onB('visiting', 0, 1), 2);
     eq('the runner on 2nd did not advance', ab('visiting', 2, 0).bases[2], false);
     basesConsistent('visiting', 0);
   });
@@ -946,8 +960,8 @@
     applyRunnerEvent('SB');
     eq('R total', rTotal('visiting'), '');
     eq('the runner did not reach home', ab('visiting', 2, 0).bases[3], false);
-    eq('runner still on 2nd', inn('visiting', 0).bases[1], 2);
-    eq('runner still on 3rd', inn('visiting', 0).bases[2], 0);
+    eq('runner still on 2nd', onB('visiting', 0, 1), 2);
+    eq('runner still on 3rd', onB('visiting', 0, 2), 0);
   });
 
   test('a pickoff error into an occupied base is not offered', () => {
@@ -979,7 +993,7 @@
     sel('visiting', 2, 0);
     editPlay('1B');                                // would put p2 on an occupied 1st
     eq('play unchanged', ab('visiting', 2, 0).play, 'K');
-    eq('runner on 1st unchanged', inn('visiting', 0).bases[0], 0);
+    eq('runner on 1st unchanged', onB('visiting', 0, 0), 0);
     eq('outs', inn('visiting', 0).outs, 1);
     basesConsistent('visiting', 0);
   });
@@ -991,8 +1005,8 @@
     sel('visiting', 2, 0);
     editPlay('2B');
     eq('play', ab('visiting', 2, 0).play, '2B');
-    eq('batter on 2nd', inn('visiting', 0).bases[1], 2);
-    eq('runner still on 1st', inn('visiting', 0).bases[0], 0);
+    eq('batter on 2nd', onB('visiting', 0, 1), 2);
+    eq('runner still on 1st', onB('visiting', 0, 0), 0);
     eq('outs', inn('visiting', 0).outs, 0);
   });
 
@@ -1005,8 +1019,8 @@
     play('1B'); runnerPopup({ 2: 2, batter: 0 });   // p0 holds 3rd, p2 on 1st
     key('n');                                      // wild pitch
     eq('run scored', lsInput('visiting', 0).value, '1');
-    eq('trailing runner on 2nd', inn('visiting', 0).bases[1], 2);
-    eq('3rd empty', inn('visiting', 0).bases[2], null);
+    eq('trailing runner on 2nd', onB('visiting', 0, 1), 2);
+    eq('3rd empty', onB('visiting', 0, 2), null);
     basesConsistent('visiting', 0);
   });
 
@@ -1018,9 +1032,9 @@
     play('BB');
     eq('run scored', lsInput('visiting', 0).value, '1');
     eq('runner from 3rd scored', ab('visiting', 0, 0).bases[3], true);
-    eq('1st', inn('visiting', 0).bases[0], 6);
-    eq('2nd', inn('visiting', 0).bases[1], 4);
-    eq('3rd', inn('visiting', 0).bases[2], 2);
+    eq('1st', onB('visiting', 0, 0), 6);
+    eq('2nd', onB('visiting', 0, 1), 4);
+    eq('3rd', onB('visiting', 0, 2), 2);
     basesConsistent('visiting', 0);
   });
 
@@ -1030,9 +1044,9 @@
     play('1B'); runnerPopup({ 2: 2, batter: 0 });   // p0 holds 3rd, p2 on 1st
     play('BB');
     eq('no run scored', rTotal('visiting'), '');
-    eq('runner still on 3rd', inn('visiting', 0).bases[2], 0);
-    eq('forced runner on 2nd', inn('visiting', 0).bases[1], 2);
-    eq('batter on 1st', inn('visiting', 0).bases[0], 4);
+    eq('runner still on 3rd', onB('visiting', 0, 2), 0);
+    eq('forced runner on 2nd', onB('visiting', 0, 1), 2);
+    eq('batter on 1st', onB('visiting', 0, 0), 4);
   });
 
   test('a grand slam clears the bases and scores four', () => {
@@ -1290,8 +1304,8 @@
     play('K');                                       // an out after it, so it isn't the latest
     sel('visiting', 2, 0);
     clearSelectedCell();                             // clear p2's single
-    eq('the runner is back on 1st', inn('visiting', 0).bases[0], 0);
-    eq('nobody on 2nd', inn('visiting', 0).bases[1], null);
+    eq('the runner is back on 1st', onB('visiting', 0, 0), 0);
+    eq('nobody on 2nd', onB('visiting', 0, 1), null);
     eq('his 2nd-base mark is gone', ab('visiting', 0, 0).bases[1], false);
     eq('he keeps the base he singled to', ab('visiting', 0, 0).bases[0], true);
     eq('the batter is gone from the card', ab('visiting', 2, 0).play, '');
@@ -1305,7 +1319,7 @@
     play('K');
     sel('visiting', 2, 0);
     clearSelectedCell();
-    eq('back on the base he stole', inn('visiting', 0).bases[1], 0);
+    eq('back on the base he stole', onB('visiting', 0, 1), 0);
     eq('the stolen base is still marked', ab('visiting', 0, 0).bases[1], true);
     eq('the advance it gave him is not', ab('visiting', 0, 0).bases[2], false);
   });
@@ -1325,9 +1339,9 @@
     // p0 would go back to 1st, but p4 is standing there off a later single.
     eq('p0 keeps the run', ab('visiting', 0, 0).bases[3], true);
     eq('the run stays on the board', lsInput('visiting', 0).value, '1');
-    eq('p4 keeps 1st', inn('visiting', 0).bases[0], 4);
-    eq('p2 is off the card, so 2nd is empty', inn('visiting', 0).bases[1], null);
-    eq('nobody shares a base', new Set(inn('visiting', 0).bases.filter(r => r !== null)).size, 1);
+    eq('p4 keeps 1st', onB('visiting', 0, 0), 4);
+    eq('p2 is off the card, so 2nd is empty', onB('visiting', 0, 1), null);
+    eq('nobody shares a base', new Set(occupants('visiting', 0)).size, 1);
   });
 
   // The same shape without the third play: the cleared batter's own base is free,
@@ -1339,7 +1353,7 @@
     play('K');
     sel('visiting', 2, 0);
     clearSelectedCell();
-    eq('p0 is back on 1st', inn('visiting', 0).bases[0], 0);
+    eq('p0 is back on 1st', onB('visiting', 0, 0), 0);
     eq('his run came off', ab('visiting', 0, 0).bases[3], false);
     eq('and off the linescore', lsInput('visiting', 0).value, '');
   });
@@ -1355,7 +1369,7 @@
     sel('visiting', 2, 0);
     clearSelectedCell();                             // clear the double play
     eq('one out left', inn('visiting', 0).outs, 1);
-    eq('the runner is back on 1st', inn('visiting', 0).bases[0], 0);
+    eq('the runner is back on 1st', onB('visiting', 0, 0), 0);
     eq('he is not out any more', ab('visiting', 0, 0).out, 0);
     eq('nor out on the bases', ab('visiting', 0, 0).outOnBase, null);
   });
@@ -1371,7 +1385,7 @@
     sel('visiting', 0, 0);
     clearPlayKeepPitches();
     eq('play cleared', ab('visiting', 0, 0).play, '');
-    eq('batter off the bases', inn('visiting', 0).bases[0], null);
+    eq('batter off the bases', onB('visiting', 0, 0), null);
     eq('his own cell is blank', JSON.stringify(ab('visiting', 0, 0).bases), '[false,false,false,false]');
     eq('the pitches he saw are kept, less the result pitch', ab('visiting', 0, 0).pitches.join(''), 'SB');
   });
@@ -1395,7 +1409,7 @@
     play('K'); play('K');                            // no longer the latest play
     sel('visiting', 2, 0);
     clearPlayKeepPitches();
-    eq('the runner is back on 1st', inn('visiting', 0).bases[0], 0);
+    eq('the runner is back on 1st', onB('visiting', 0, 0), 0);
     eq('pitches kept', ab('visiting', 2, 0).pitches.join(''), 'SB');
     eq('play cleared', ab('visiting', 2, 0).play, '');
   });
