@@ -512,7 +512,7 @@ single-double-homer across the three rows of spot 1 splitting 1/1 · 1/1 · 1/1/
 | M6 ✅ | A pitcher who records **no outs shows blank IP**, not `0.0` — `s.outs > 0 ? fullInnings : ''`. Run/ER attribution across a mid-inning change is otherwise **correct** (`ab.pitcher` is frozen at entry). | [app.js:4047] |
 | M7 ✅ | **Manually-entered `BB`/`K` leave the pitch count inconsistent.** A `BB` tapped on a 3-ball count stays at 3 pitches (the `push('B')` only fires when `pitches.length === 0`); a `K` tapped by button pushes `'X'`, which `getPitchCount` reads as 0 strikes and `renderPitches` draws as nothing — so the cell shows "1 pitch" over an empty pitch track. | [app.js:1382–1392], [app.js:2327] |
 | L1 ✅ | `WP`/`PB`/`BK` with the bases empty record nothing but still **push an undo entry** (2 no-op undos to press through). | [app.js:2748] |
-| L2 | A play refused because the inning already has 3 outs **returns silently** — no `showPlayReject`, unlike every other refusal. | [app.js:1368] |
+| L2 ✅ | A play refused because the inning already has 3 outs **returns silently** — no `showPlayReject`, unlike every other refusal. | [app.js:1368] |
 | L3 | A **balk** is visible only as a `BK` advancement label on the runner's diamond; no BK count on the pitcher line. | [app.js:2809] |
 | L4 | Batting around in the **15th column can't overflow** (`nextCol >= INNINGS` returns), leaving the selection on a filled cell and further batters silently unenterable. | [app.js:2211] |
 | L5 | A home half **never played stays blank** rather than showing `X`. | [app.js:3394] |
@@ -678,6 +678,38 @@ message, and a passed ball pressed after a home run cleared the bases, which is 
 same empty state arrived at mid-inning. Reverting the guard fails three of them and
 nothing else.
 
+### L2 — a play refused for the 3rd out returns silently — ✅ **FIXED**
+`applyPlay` [app.js:1574], `INNING_OVER` [app.js:1388]
+
+**What was done.** The refusal now speaks, in one sentence held in one place. The
+finding named `applyPlay`, but the bare `return` on `outs >= 3` was in **six** entry
+points — `applyPlay`, `addPitch`, `applySBAtBase`, `applyCSAtBase`, `applyPickoff` and
+`applyRunnerEvent` — and they are all the same refusal of the same rule; leaving five
+of them mute would have been the inconsistency the finding is about, one layer down.
+`editPlayType` already had the sentence as a literal, so it reads the constant too and
+the seven can't drift.
+
+The stranded-runner paths are the ones this matters most on. After the 3rd out the
+runners are still standing on the bases (correctly — they were left there), so the CS,
+SB and pickoff pickers still *offer* them; the scorer picks a runner off a live-looking
+list and the app does nothing at all. Appendix B lists exactly those three as "refused",
+which they were — silently.
+
+`applyPlay`'s guard also covered `ab.play`, and that half got its own message rather
+than the outs one: a filled cell isn't a rejected entry, it's the scorer reaching for
+Change Play Type. It is also the cell a full card strands the selection on, which is
+why **L4** leans on it.
+
+Left silent deliberately: pressing CS/SB/PO with the bases *empty* opens no picker and
+says nothing. That is the L1 shape without L1's defect — no undo entry is banked — and
+D11 scoped its toast to `WP`/`PB`/`BK`, so it is noted here rather than changed.
+
+Verified: 3 new cases and 3 amended (274 passed · 0 failed) — a play and a pitch after
+the 3rd out, a play tapped onto a filled cell, and the three existing "no 4th out" cases
+each gaining the assertion that the refusal is now visible. Those three are the finding
+met from the other side: every one of them passed while the app said nothing. Reverting
+the toasts fails all six and nothing else.
+
 **Not defects — design gaps, listed so they aren't re-found:**
 
 - **L6** Force out vs tag out isn't distinguished — the popup offers "Out at *N*"
@@ -717,7 +749,7 @@ is where those rows were when the finding was written.
 | **M6** ✅ | med | A pitcher with 0 outs shows blank IP, not `0.0` | updatePitcherStats [4047] | single, then mid-inning `usePitcher(1)` → starter IP `''` |
 | **M7** ✅ | med | Manually-entered `BB`/`K` leave the pitch count inconsistent (3-ball walk; `K` as an `'X'` pitch with 0 strikes) | [1382], [2327] | `pitch('B')×3; play('BB')` → 3 pitches. `play('K')` cold → `pitches===['X']`, `getPitchCount` 0/0 |
 | **L1** ✅ | low | `WP`/`PB`/`BK` with bases empty record nothing but push an undo entry | applyRunnerEvent [2748] | `applyRunnerEvent('BK')` with nobody on → `playHistory.length` +1, card unchanged |
-| **L2** | low | A play refused for 3 outs gives no feedback | applyPlay [1368] | enter a play in a 3-out inning → silent return |
+| **L2** ✅ | low | A play refused for 3 outs gives no feedback | applyPlay [1368] | enter a play in a 3-out inning → silent return |
 | **L3** | low | Balk isn't counted on the pitcher line | [2809] | — |
 | **L4** | low | Bat-around in the 15th column can't overflow; further batters silently unenterable | overflowToNextColumn [2211] | 9 × `play('BB')` in col 14 → selection stuck on a filled cell |
 | **L5** | low | A home half never played stays blank rather than `X` | fillLinescoreZeros [3394] | visitor wins in the top of the 9th → home 9th cell blank |

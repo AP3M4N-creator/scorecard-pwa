@@ -558,6 +558,7 @@
     key('j');
     eq('outs', inn('visiting', 0).outs, 3);
     eq('stranded runner untouched', ab('visiting', 0, 0).outOnBase, null);
+    ok('and the refusal says so (L2)', visible('play-reject'));
   });
 
   // #2
@@ -568,6 +569,7 @@
     basePicker(0, '');                           // PO 1st — Out
     eq('outs', inn('visiting', 0).outs, 3);
     eq('stranded runner untouched', ab('visiting', 0, 0).outOnBase, null);
+    ok('and the refusal says so (L2)', visible('play-reject'));
   });
 
   // #3
@@ -577,6 +579,43 @@
     key('r');                                    // only SBH is offered: applied directly
     eq('R total', rTotal('visiting'), '');
     eq('runner did not reach home', ab('visiting', 0, 0).bases[3], false);
+    ok('and the refusal says so (L2)', visible('play-reject'));
+  });
+
+  // L2 — a play refused for the 3rd out returned bare, so a scorer who entered it saw
+  // the card take nothing and say nothing. Every entry path now gives the same reason,
+  // and the stranded-runner paths above are the same refusal reached another way.
+  test('a play entered after the 3rd out is refused out loud', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K'); play('K');
+    sel('visiting', 9, 0);                       // the 4th batter, inning already over
+    play('1B');
+    eq('nothing recorded', ab('visiting', 9, 0).play, '');
+    ok('the refusal is shown', visible('play-reject'));
+    ok('and it names the outs',
+      document.getElementById('play-reject').textContent.indexOf('3 outs') >= 0);
+  });
+
+  test('a pitch charged after the 3rd out is refused out loud', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K'); play('K');
+    sel('visiting', 9, 0);
+    pitch('B');
+    eq('no pitch charged', ab('visiting', 9, 0).pitches.length, 0);
+    ok('the refusal is shown', visible('play-reject'));
+  });
+
+  // The other half of the same bare return: a filled cell is not an entry point. It is
+  // also where a full card leaves the selection (L4), so silence here is a dead app.
+  test('a play tapped onto a cell that already has one says so', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    sel('visiting', 0, 0);                       // back onto the filled cell
+    play('2B');
+    eq('the single stands', ab('visiting', 0, 0).play, '1B');
+    ok('the refusal is shown', visible('play-reject'));
+    ok('and it points at the change',
+      document.getElementById('play-reject').textContent.indexOf('change or clear') >= 0);
   });
 
   // #4

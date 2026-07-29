@@ -1383,6 +1383,10 @@ function showPlayToast(msg, tone) {
 function showPlayReject(msg) { showPlayToast(msg, 'reject'); }
 function showPlayNotice(msg) { showPlayToast(msg, 'notice'); }
 
+// Every entry path ends at the same wall once the half-inning is over, so they say
+// the same thing about it (L2). One constant, because six copies of a sentence drift.
+const INNING_OVER = 'The inning already has 3 outs — clear a play first.';
+
 // Popups that own the current entry get a backdrop, so a tap meant for the popup
 // can't land on the grid and move the selection underneath it (#1, #29).
 const BACKDROP_GUARDED = ['k-popup', 'pos-popup', 'runner-popup', 'outcome-popup'];
@@ -1576,7 +1580,13 @@ function applyPlay(play, target) {
   const innIdx = t.innIdx;
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   const inn = getInnState(team, innIdx);
-  if (inn.outs >= 3 || ab.play) return;
+  // L2: both of these used to return bare. A refused play that says nothing is how a
+  // scorer ends up believing a card that doesn't hold what they entered — the reason
+  // every *other* refusal in this function speaks.
+  if (inn.outs >= 3) { showPlayReject(INNING_OVER); return; }
+  // Not an entry point: this cell is filled, and what the scorer wants is Change Play
+  // Type. It is also the dead end a full card leaves the selection on (L4).
+  if (ab.play) { showPlayReject('That cell already has a play — change or clear it first.'); return; }
 
   // Reject before the at-bat is touched — no play, no result pitch.
   const reject = playEntryReject(team, innIdx, play);
@@ -2673,7 +2683,7 @@ function addPitch(type) {
   // #26: the half-inning is over — there is nobody at the plate to charge a pitch
   // to. Without this, 4 balls here counted toward the pitch count and then
   // applyPlay silently dropped the walk on its own outs guard.
-  if (getInnState(team, innIdx).outs >= 3) return;
+  if (getInnState(team, innIdx).outs >= 3) { showPlayReject(INNING_OVER); return; }
   if (!ab.pitches) ab.pitches = [];
   const before = getPitchCount(ab.pitches);
   if (before.balls >= 4 || before.strikes >= 3) return;
@@ -2963,8 +2973,9 @@ function promptSBBase() {
 function applySBAtBase(team, innIdx, fromBase, withError) {
   const inn = getInnState(team, innIdx);
   // #3: the half-inning is over — a stranded runner can't steal, least of all
-  // steal home and put a run on the board.
-  if (inn.outs >= 3) return;
+  // steal home and put a run on the board. The picker still offers him, because he
+  // is still standing there, so the refusal has to explain itself (L2).
+  if (inn.outs >= 3) { showPlayReject(INNING_OVER); return; }
   if (inn.bases[fromBase] === null) return;
   const rn = inn.bases[fromBase];
   const dest = withError ? Math.min(fromBase + 2, 3) : fromBase + 1;
@@ -3008,7 +3019,7 @@ function promptCSBase() {
 function applyCSAtBase(team, innIdx, fromBase) {
   const inn = getInnState(team, innIdx);
   // #2: no 4th out — the guard applyRunnerEvent has always had.
-  if (inn.outs >= 3) return;
+  if (inn.outs >= 3) { showPlayReject(INNING_OVER); return; }
   if (inn.bases[fromBase] === null) return;
   const pIdx = selectedCell ? parseInt(selectedCell.dataset.p) : 0;
   pushUndo(team, pIdx, innIdx);
@@ -3056,7 +3067,7 @@ function promptPickoff() {
 function applyPickoff(team, innIdx, atBase, withError) {
   const inn = getInnState(team, innIdx);
   // #2: no 4th out, and no advancing a stranded runner on the error variant.
-  if (inn.outs >= 3) return;
+  if (inn.outs >= 3) { showPlayReject(INNING_OVER); return; }
   if (inn.bases[atBase] === null) return;
   const rn = inn.bases[atBase];
   // Same as applySBAtBase: the picker won't offer a blocked advance, so this catches
@@ -3137,7 +3148,7 @@ function applyRunnerEvent(type) {
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
   const inn = getInnState(team, innIdx);
-  if (inn.outs >= 3) return;
+  if (inn.outs >= 3) { showPlayReject(INNING_OVER); return; }
   // L1: with the bases empty every branch below is a no-op, and the old code ran
   // them all anyway — after pushing an undo snapshot. Two presses of BK left two
   // dead presses of Undo between the scorer and the last play that really happened.
@@ -3346,7 +3357,7 @@ function editPlayType() {
     // cell's own play made are about to come off, so they aren't in its way.
     const myOuts = outsFromPlay(inn, pIdx, innIdx).length || (ab.out ? (ab.outsRecorded || 1) : 0);
     if (nowOut && Math.max(0, inn.outs - myOuts) >= 3) {
-      showPlayReject('The inning already has 3 outs — clear a play first.');
+      showPlayReject(INNING_OVER);
       return;
     }
     popup.style.display = 'none';
