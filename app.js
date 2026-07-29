@@ -97,9 +97,30 @@ const POSITIONS = 9;
 const ROWS_PER_POS = 2;
 const INNINGS = 15;
 const PITCHER_ROWS = 8;
+const DEFAULT_REGULATION = 9;
 
 let selectedCell = null;
 let gameState = createEmptyState();
+
+/* How long a regulation game is for THIS card. Nine unless the scorer says
+   otherwise — a doubleheader, a youth game or softball is often six or seven,
+   and the game-over checks used to compare against a literal 8 ("the 9th real
+   inning, zero-based"), so a 7-inning game rolled straight on into an 8th. */
+function regulationInnings() {
+  const n = parseInt(gameState && gameState.rules && gameState.rules.regulationInnings);
+  return (n >= 1 && n <= INNINGS) ? n : DEFAULT_REGULATION;
+}
+
+/* Zero-based index of the last regulation inning — what the game-over
+   comparisons actually want. */
+function lastRegulationIdx() { return regulationInnings() - 1; }
+
+/* How many inning columns the card is showing. Falls back to regulation rather
+   than to a literal 9, so a 7-inning game with no stored value doesn't briefly
+   claim nine columns. */
+function visibleInningCount() {
+  return gameState.visibleInnings || regulationInnings();
+}
 
 // Identity column->inning map sized to INNINGS ([0,1,2,...,INNINGS-1]).
 function defaultColumnMap() { return Array.from({ length: INNINGS }, (_, i) => i); }
@@ -158,7 +179,7 @@ function createEmptyState() {
       visiting: { innings: Array(INNINGS).fill(''), r:'', h:'', e:'' },
       home: { innings: Array(INNINGS).fill(''), r:'', h:'', e:'' }
     },
-    visibleInnings: 9,
+    visibleInnings: DEFAULT_REGULATION,
     innings: {
       visiting: Array(INNINGS).fill(null).map(() => makeInning()),
       home: Array(INNINGS).fill(null).map(() => makeInning())
@@ -193,7 +214,7 @@ function createEmptyState() {
     // `allowReentry`: OBR 5.10(d) says a replaced player is out of the game;
     // youth and some rec leagues let a starter back in. Off by default, and the
     // re-entry prompt is where a scorer turns it on for the game in hand.
-    rules: { allowReentry: false },
+    rules: { allowReentry: false, regulationInnings: DEFAULT_REGULATION },
     // Scorer decisions the card can't re-derive: a starter coming back in, and
     // the inning a side lost its DH. Logs, like `defChanges` — recorded when the
     // decision is made and not pruned when a cell is later cleared.
@@ -346,8 +367,9 @@ function buildPitcherTable(team, containerId) {
   html += '</div>';
   html += '<table class="pitcher-grid"><thead><tr>';
   html += '<th class="pitcher-num-col">#</th>';
-  html += '<th class="pitcher-name-col">Pitcher / ERA</th>';
+  html += '<th class="pitcher-name-col">Pitcher</th>';
   labels.forEach(l => html += `<th>${l}</th>`);
+  html += '<th class="pitcher-era-col">ERA</th>';
   html += '</tr></thead><tbody>';
 
   for (let i = 0; i < PITCHER_ROWS; i++) {
@@ -357,6 +379,10 @@ function buildPitcherTable(team, containerId) {
     stats.forEach(s => {
       html += `<td class="p-stat"><input type="text" data-team="${team}" data-pitcher="${i}" data-field="${s}" maxlength="5"></td>`;
     });
+    // ERA is derived from this game's ER and IP, so it is a cell, not an input —
+    // the header used to promise an ERA in the name column and no field ever
+    // existed for it. `updatePitcherStats` fills it.
+    html += `<td class="p-era" data-team="${team}" data-pitcher="${i}" data-field="era"></td>`;
     html += '</tr>';
   }
   html += '</tbody></table>';
@@ -1899,7 +1925,7 @@ function checkGameOver(team, innIdx) {
   // The bottom half ends the instant the home team goes ahead — a walk-off doesn't
   // wait for a 3rd out, and it doesn't care whether the run came in on a hit or on
   // a wild pitch. Otherwise the half has to be complete and the game not tied.
-  const isGameOver = realInn >= 8 && (team === 'home'
+  const isGameOver = realInn >= lastRegulationIdx() && (team === 'home'
     ? (hR > vR || (inn.outs >= 3 && vR !== hR))
     : (inn.outs >= 3 && hR > vR));
   if (!isGameOver || gameOverShown) return false;
@@ -2287,7 +2313,7 @@ function markNextInningLeadoff(team, innIdx) {
 function selectNextBatterForInning(team, colIdx) {
   // #6: extra-inning columns are display:none until +EI is pressed. After a tied
   // 9th the app selected a cell nobody could see, so reveal the column first.
-  if (colIdx >= (gameState.visibleInnings || 9)) {
+  if (colIdx >= visibleInningCount()) {
     gameState.visibleInnings = Math.min(colIdx + 1, INNINGS);
     updateInningVisibility();
   }
@@ -2510,8 +2536,8 @@ function updateLiveStatsFromState() {
   if (!hasPlays) return;
   const inn = getInnState(lastTeam, lastInn);
   const realInn = getRealInning(lastTeam, lastInn);
-  const isComplete = (lastTeam === 'home' && realInn >= 8 && inn.outs >= 3) ||
-                     (lastTeam === 'visiting' && realInn >= 8 && inn.outs >= 3 && hR > vR);
+  const isComplete = (lastTeam === 'home' && realInn >= lastRegulationIdx() && inn.outs >= 3) ||
+                     (lastTeam === 'visiting' && realInn >= lastRegulationIdx() && inn.outs >= 3 && hR > vR);
   const lsInn = document.getElementById('ls-inning');
   const lsCount = document.getElementById('ls-count');
   const lsBatter = document.getElementById('ls-batter');
@@ -3446,6 +3472,17 @@ function collectState() {
   gameState.info.homeTeam = document.getElementById('info-home-team').value;
   gameState.info.weather = document.getElementById('info-weather').value;
   gameState.info.attendance = document.getElementById('info-attendance').value;
+  // Regulation length lives in `rules`, not `info`, but it is scraped here with the
+  // rest of the header so the select can't drift from state if it is ever set
+  // without firing a change event.
+  const innSel = document.getElementById('info-innings');
+  if (innSel) {
+    const n = parseInt(innSel.value);
+    if (n >= 1 && n <= INNINGS) {
+      if (!gameState.rules) gameState.rules = { allowReentry: false, regulationInnings: DEFAULT_REGULATION };
+      gameState.rules.regulationInnings = n;
+    }
+  }
   gameState.umpires.hp = document.getElementById('ump-hp').value;
   gameState.umpires['1b'] = document.getElementById('ump-1b').value;
   gameState.umpires['2b'] = document.getElementById('ump-2b').value;
@@ -3477,7 +3514,9 @@ function collectState() {
       const p = parseInt(inp.dataset.p);
       gameState.teams[team].players[p].avg = inp.value;
     });
-    const pitcherStats = ['era','ip','pc','h','r','er','k','bb'];
+    // `era` is deliberately absent: it is derived in `updatePitcherStats` and
+    // rendered into a cell, so there is no input here to scrape.
+    const pitcherStats = ['ip','pc','h','r','er','k','bb'];
     pitcherStats.forEach(stat => {
       document.querySelectorAll(`input[data-team="${team}"][data-field="${stat}"]`).forEach(inp => {
         if (inp.dataset.pitcher !== undefined) {
@@ -3517,6 +3556,12 @@ function mergeStateDefaults(parsed) {
   if (!parsed.teams) parsed.teams = defaults.teams;
   if (!parsed.innings) parsed.innings = defaults.innings;
   if (!parsed.columnMap) parsed.columnMap = defaults.columnMap;
+  // The key-by-key merge above only fills whole top-level keys, so a save from
+  // before regulation length was settable — `rules` present, the key inside it
+  // missing — needs the nested backfill by hand.
+  if (!parsed.rules) parsed.rules = defaults.rules;
+  const parsedReg = parseInt(parsed.rules.regulationInnings);
+  parsed.rules.regulationInnings = (parsedReg >= 1 && parsedReg <= INNINGS) ? parsedReg : DEFAULT_REGULATION;
   // Dropped in Phase 9: an older save still carries an unbounded play log (#31)
   // and an unused standings table (#33). Shed them rather than writing them back
   // out on every autoSave.
@@ -3641,10 +3686,14 @@ function applyState() {
   if (gameState.timerRunning === undefined) gameState.timerRunning = false;
   if (gameState.notes === undefined) gameState.notes = '';
   if (!gameState.defChanges) gameState.defChanges = [];
-  if (!gameState.rules) gameState.rules = { allowReentry: false };
+  if (!gameState.rules) gameState.rules = { allowReentry: false, regulationInnings: DEFAULT_REGULATION };
+  // A save from before regulation length was settable carries `rules` without the
+  // key, so this has to backfill inside the object, not just create it.
+  const savedReg = parseInt(gameState.rules.regulationInnings);
+  gameState.rules.regulationInnings = (savedReg >= 1 && savedReg <= INNINGS) ? savedReg : DEFAULT_REGULATION;
   if (!Array.isArray(gameState.reentries)) gameState.reentries = [];
   if (!gameState.dhTerminated) gameState.dhTerminated = { visiting: null, home: null };
-  if (!gameState.visibleInnings) gameState.visibleInnings = 9;
+  if (!gameState.visibleInnings) gameState.visibleInnings = regulationInnings();
   if (gameState.playSeq === undefined) gameState.playSeq = 0;
   migrateBaseRunners(gameState);   // bare-index base entries from a pre-Phase-7 save
   ['visiting','home'].forEach(t => {
@@ -3676,6 +3725,8 @@ function applyState() {
   document.getElementById('info-home-team').value = gameState.info.homeTeam || '';
   document.getElementById('info-weather').value = gameState.info.weather || '';
   document.getElementById('info-attendance').value = gameState.info.attendance || '';
+  const innSelEl = document.getElementById('info-innings');
+  if (innSelEl) innSelEl.value = String(regulationInnings());
   document.getElementById('ump-hp').value = gameState.umpires.hp || '';
   document.getElementById('ump-1b').value = gameState.umpires['1b'] || '';
   document.getElementById('ump-2b').value = gameState.umpires['2b'] || '';
@@ -4009,6 +4060,15 @@ function updatePitcherStats(battingTeam) {
         pitchers[i][field] = String(fields[field]);
       }
     });
+
+    // ERA for this game's line: ER × 9 ÷ IP, which in outs is ER × 27 ÷ outs.
+    // A pitcher charged an earned run without retiring anybody has an infinite
+    // ERA — the convention on a box score is INF, not a division by zero.
+    const eraStr = s.outs > 0 ? (s.er * 27 / s.outs).toFixed(2)
+                              : (s.er > 0 ? 'INF' : '');
+    pitchers[i].era = eraStr;
+    const eraCell = document.querySelector(`td[data-field="era"][data-team="${pitchingTeam}"][data-pitcher="${i}"]`);
+    if (eraCell) eraCell.textContent = eraStr;
 
     // ER-review badge: flag the ER cell when this pitcher allowed a run in an
     // inning that had an error/PB/CI, so the scorer knows to verify it.
@@ -4579,7 +4639,7 @@ function toggleQBDrawer() {
 }
 
 function updateInningVisibility() {
-  const vis = gameState.visibleInnings || 9;
+  const vis = visibleInningCount();
   for (let i = 0; i < INNINGS; i++) {
     const show = i < vis;
     document.querySelectorAll(`.inn-col[data-inn="${i}"], .at-bat-cell[data-inn="${i}"], [data-inn-col="${i}"]`)
@@ -4590,7 +4650,7 @@ function updateInningVisibility() {
 }
 
 function addExtraInning() {
-  if (!gameState.visibleInnings) gameState.visibleInnings = 9;
+  if (!gameState.visibleInnings) gameState.visibleInnings = regulationInnings();
   if (gameState.visibleInnings < INNINGS) {
     gameState.visibleInnings++;
     updateInningVisibility();
@@ -4599,6 +4659,38 @@ function addExtraInning() {
 }
 
 function updateExtraInnings() { updateInningVisibility(); }
+
+/* The scorer sets regulation length; the card follows it. Columns are never taken
+   away from a half-inning that already has plays — dropping to 7 after nine have
+   been scored would hide real at-bats behind `hidden-inning` — so the floor is the
+   last column in use. `gameOverShown` is reset because the answer to "is this game
+   over" has just changed: shortening the game can make a finished card final, and
+   lengthening it un-finals one. */
+function setRegulationInnings(value) {
+  const n = parseInt(value);
+  if (!(n >= 1 && n <= INNINGS)) return;
+  if (!gameState.rules) gameState.rules = { allowReentry: false, regulationInnings: DEFAULT_REGULATION };
+  gameState.rules.regulationInnings = n;
+  gameState.visibleInnings = Math.max(n, lastColumnWithPlays() + 1);
+  gameOverShown = false;
+  updateInningVisibility();
+  updateLiveStatsFromState();
+  autoSave();
+}
+
+/* Highest column index either side has a recorded play in, or -1 for an empty
+   card. Used as the floor on how far the inning columns can be pulled back. */
+function lastColumnWithPlays() {
+  let last = -1;
+  ['visiting', 'home'].forEach(team => {
+    for (const player of gameState.teams[team].players) {
+      for (let col = 0; col < player.atBats.length; col++) {
+        if (player.atBats[col].play && col > last) last = col;
+      }
+    }
+  });
+  return last;
+}
 
 /* Game Timer (Feature 13) */
 let timerInterval = null;
@@ -5184,7 +5276,7 @@ function showGameSummary() {
   const winner = vR > hR ? vTeam : (hR > vR ? hTeam : 'Tied');
   const loser = vR > hR ? hTeam : (hR > vR ? vTeam : '');
 
-  const gsVis = gameState.visibleInnings || 9;
+  const gsVis = visibleInningCount();
 
   // Linescore row
   function lsRow(team) {
@@ -5264,7 +5356,7 @@ function showGameSummary() {
       const ip = p.ip || '0';
       if (ip === '0' && !p.h && !p.k) continue;
       const name = (p.num ? '#' + p.num + ' ' : '') + (p.name || 'Pitcher ' + (i + 1));
-      rows += '<tr><td>' + escapeHtml(name) + '</td><td>' + (p.ip || '0') + '</td><td>' + (p.pc || '0') + '</td><td>' + (p.h || '0') + '</td><td>' + (p.r || '0') + '</td><td>' + (p.er || '0') + '</td><td>' + (p.k || '0') + '</td><td>' + (p.bb || '0') + '</td></tr>';
+      rows += '<tr><td>' + escapeHtml(name) + '</td><td>' + (p.ip || '0') + '</td><td>' + (p.pc || '0') + '</td><td>' + (p.h || '0') + '</td><td>' + (p.r || '0') + '</td><td>' + (p.er || '0') + '</td><td>' + (p.k || '0') + '</td><td>' + (p.bb || '0') + '</td><td>' + escapeHtml(p.era || '—') + '</td></tr>';
     }
     return rows;
   }
@@ -5454,13 +5546,13 @@ function showGameSummary() {
 
   // Pitching — Visiting pitchers
   html += '<div class="gs-section"><h3>' + escapeHtml(vTeam) + ' — Pitching</h3>';
-  html += '<table class="gs-table"><thead><tr><th>Pitcher</th><th>IP</th><th>PC</th><th>H</th><th>R</th><th>ER</th><th>K</th><th>BB</th></tr></thead><tbody>';
+  html += '<table class="gs-table"><thead><tr><th>Pitcher</th><th>IP</th><th>PC</th><th>H</th><th>R</th><th>ER</th><th>K</th><th>BB</th><th>ERA</th></tr></thead><tbody>';
   html += pitcherBox('visiting');
   html += '</tbody></table></div>';
 
   // Pitching — Home pitchers
   html += '<div class="gs-section"><h3>' + escapeHtml(hTeam) + ' — Pitching</h3>';
-  html += '<table class="gs-table"><thead><tr><th>Pitcher</th><th>IP</th><th>PC</th><th>H</th><th>R</th><th>ER</th><th>K</th><th>BB</th></tr></thead><tbody>';
+  html += '<table class="gs-table"><thead><tr><th>Pitcher</th><th>IP</th><th>PC</th><th>H</th><th>R</th><th>ER</th><th>K</th><th>BB</th><th>ERA</th></tr></thead><tbody>';
   html += pitcherBox('home');
   html += '</tbody></table></div>';
 
@@ -5497,8 +5589,14 @@ function showGameSummary() {
     return s;
   }).filter(Boolean);
   const reentries = Array.isArray(gameState.reentries) ? gameState.reentries : [];
-  if (dhLines.length || reentries.length) {
+  // A game that wasn't nine innings is a scorer decision too, and the linescore
+  // alone doesn't say whether a 7-inning card was shortened or just unfinished.
+  const regLine = regulationInnings() !== DEFAULT_REGULATION
+    ? 'Regulation: ' + regulationInnings() + ' innings'
+    : null;
+  if (dhLines.length || reentries.length || regLine) {
     html += '<div class="gs-section"><h3>Lineup Rules</h3>';
+    if (regLine) html += '<div class="gs-pitching-line">' + escapeHtml(regLine) + '</div>';
     dhLines.forEach(l => { html += '<div class="gs-pitching-line">' + l + '</div>'; });
     if (reentries.length) {
       html += '<table class="gs-table"><thead><tr><th>Inning</th><th>Team</th><th>Spot</th><th>Re-entered</th><th>For</th></tr></thead><tbody>';
@@ -5607,7 +5705,7 @@ function renderWinProbSVG(container, data, vTeam, hTeam, numInns, isEstimate) {
 function renderManualWinProbChart(containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
-  const vis = gameState.visibleInnings || 9;
+  const vis = visibleInningCount();
   const vTeam = gameState.info.visitingTeam || 'VIS';
   const hTeam = gameState.info.homeTeam || 'HOM';
   const awayInns = gameState.linescore.visiting.innings;
@@ -5787,6 +5885,12 @@ document.getElementById('info-home-team')?.addEventListener('input', function() 
   const label = document.getElementById('ls-h-label');
   if (label) label.textContent = this.value || 'Home';
   autoSave();
+});
+document.getElementById('info-innings')?.addEventListener('change', function() {
+  setRegulationInnings(this.value);
+  // Snap the select back if the change was refused or clamped, so what it reads is
+  // always what the card is actually using.
+  this.value = String(regulationInnings());
 });
 
 /* Event delegation for cell selection */

@@ -432,6 +432,13 @@ input:focus { outline: 2px solid var(--gold); outline-offset: -1px; }
 }
 .pitcher-grid td.p-name input { text-align: left; padding-left: 6px; font-family: var(--font); font-weight: 500; }
 .pitcher-grid td.p-stat { width: 38px; }
+/* ERA is derived, not typed — a cell rather than an input, so it needs the input's
+   type treatment applied directly and is tinted to read as read-only. */
+.pitcher-grid th.pitcher-era-col { width: 46px; }
+.pitcher-grid td.p-era {
+  width: 46px; text-align: center; font-size: 12px; font-family: var(--mono);
+  padding: 2px 3px; color: var(--text-light); background: rgba(0,0,0,0.03);
+}
 /* ER cell flagged for manual earned/unearned review */
 .pitcher-grid td.p-stat.er-review { position: relative; background: rgba(196,30,58,0.12); }
 .pitcher-grid td.p-stat.er-review::after {
@@ -846,7 +853,7 @@ input:focus { outline: 2px solid var(--gold); outline-offset: -1px; }
   .scoring-grid td.avg-cell input { font-size: 11px; }
   .scoring-grid thead th { font-size: 10px; padding: 6px 2px; }
 
-  .pitcher-grid td input { font-size: 12px; padding: 4px 3px; }
+  .pitcher-grid td input, .pitcher-grid td.p-era { font-size: 12px; padding: 4px 3px; }
   .pitcher-grid th { font-size: 10px; padding: 4px; }
   .pitcher-grid td { height: 28px; }
 

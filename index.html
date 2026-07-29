@@ -59,6 +59,14 @@
       <div class="info-row"><label for="info-date">Date:</label><input type="text" id="info-date"></div>
       <div class="info-row"><label for="info-start-time">Start Time:</label><input type="text" id="info-start-time"></div>
       <div class="info-row"><label for="info-time-of-game">Time of Game:</label><input type="text" id="info-time-of-game"></div>
+      <!-- Regulation length. Drives the game-over checks and how many inning
+           columns show; +EI still extends past it for extra innings. -->
+      <div class="info-row"><label for="info-innings">Innings:</label><select id="info-innings">
+        <option value="9">9</option>
+        <option value="7">7</option>
+        <option value="6">6</option>
+        <option value="5">5</option>
+      </select></div>
     </div>
     <div class="info-group">
       <div class="info-row"><label for="info-visiting-team">Visiting Team:</label><input type="text" id="info-visiting-team"></div>

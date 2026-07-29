@@ -209,10 +209,13 @@ that allow re-entry stop being warned. `sub-popup` and `dh-popup` are both in
 
 ## Step 4 — The second PH
 
-Sized by Step 1. If the spike says expensive, weigh it against the other
-Appendix B item worth doing — **game-over logic hardcodes 9 innings**
-(`realInn >= 8` at three sites), which is smaller and matters for any 6- or
-7-inning game.
+Sized by Step 1: **medium**, Option 3 (extra name lines inside the existing sub
+row). Still open — the one thing on this branch's name that hasn't landed.
+
+The alternative this step used to be weighed against — **game-over logic
+hardcodes 9 innings** — is done, along with a computed ERA. Both shipped on
+`regulation-innings-and-era` after this branch merged; see `FIX_PLAN.md`
+Appendix B. That leaves Step 4 with nothing smaller queued ahead of it.
 
 ---
 

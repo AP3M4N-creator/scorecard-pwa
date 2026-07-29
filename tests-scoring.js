@@ -47,6 +47,7 @@
     /^\.out-num\[data-team=/,
     /^input\[data-ls=/,
     /^input\[data-team="(visiting|home)"\]\[data-pitcher=/,
+    /^td\[data-field="era"\]\[data-team=/,
     /^input\[data-field="(num|name|avg)"\]\[data-team=/,
     /^select\[data-field="pos"\]\[data-team=/
   ];
@@ -131,6 +132,10 @@
     pendingTransitionTimer = null;
     if (selectedCell) selectedCell.classList.remove('selected');
     selectedCell = null;
+    // The regulation-length select is a header field the grid never rebuilds, so a
+    // case that shortened the game has to hand back a nine-inning card.
+    const innSel = document.getElementById('info-innings');
+    if (innSel && innSel.value !== String(DEFAULT_REGULATION)) innSel.value = String(DEFAULT_REGULATION);
 
     for (const col of dirtyCols) {
       for (const team of ['visiting', 'home']) {
@@ -227,6 +232,19 @@
   function pStat(battingTeam, i, field) {
     const t = battingTeam === 'visiting' ? 'home' : 'visiting';
     return document.querySelector(`input[data-team="${t}"][data-pitcher="${i}"][data-field="${field}"]`).value;
+  }
+  // ERA is derived, so it renders into a cell rather than an input.
+  function pEra(battingTeam, i) {
+    const t = battingTeam === 'visiting' ? 'home' : 'visiting';
+    return document.querySelector(`td[data-field="era"][data-team="${t}"][data-pitcher="${i}"]`).textContent;
+  }
+  // Set regulation length the way the scorer does — through the select, so the
+  // change handler and `setRegulationInnings` are both on the path.
+  function setInnings(n) {
+    const sel = document.getElementById('info-innings');
+    if (!sel) fail('no #info-innings select');
+    sel.value = String(n);
+    sel.dispatchEvent(new window.Event('change'));
   }
   // Batting stats live on the batter's own row; writeStats blanks a zero, so an
   // empty string is what "none" reads as.
@@ -2523,5 +2541,168 @@
     gameState.teams.visiting.players[0].atBats[2].subChange = true;
     setPlayer('visiting', 1, '30', 'Ruiz');
     eq('and the sub is the man batting', getActivePlayerName('visiting', 0, 2), '#30 Ruiz');
+  });
+
+  /* =====================================================================
+     Regulation length — the three game-over comparisons used to be a literal
+     `realInn >= 8`, so a 6- or 7-inning game (doubleheader, youth, softball)
+     never reached a final and rolled on into an inning that doesn't exist.
+     ===================================================================== */
+
+  test('a 7-inning game is final when the 7th is complete', () => {
+    setInnings(7);
+    lsInput('home', 0).value = '2';                 // home leads 2-0
+    updateLinescoreTotals('home');
+    sel('visiting', 0, 6);                          // top of the 7th
+    play('K'); play('K'); play('K');
+    eq('three away', inn('visiting', 6).outs, 3);
+    ok('game recognised as over', gameOverShown);
+  });
+
+  test('the same 7th inning leaves a 9-inning game running', () => {
+    lsInput('home', 0).value = '2';
+    updateLinescoreTotals('home');
+    sel('visiting', 0, 6);
+    play('K'); play('K'); play('K');
+    eq('three away', inn('visiting', 6).outs, 3);
+    ok('still four half-innings to play', !gameOverShown);
+  });
+
+  test('a walk-off in the bottom of the 7th ends a 7-inning game', () => {
+    setInnings(7);
+    sel('home', 0, 6);
+    play('3B');
+    ok('not over yet', !gameOverShown);
+    key('n');                                       // wild pitch scores him
+    eq('run scored', lsInput('home', 6).value, '1');
+    ok('game recognised as over', gameOverShown);
+  });
+
+  test('a tie in the bottom of the 7th does not end a 7-inning game', () => {
+    setInnings(7);
+    lsInput('visiting', 0).value = '1';
+    updateLinescoreTotals('visiting');
+    sel('home', 0, 6);
+    play('3B');
+    key('n');                                       // ties it 1-1
+    ok('game still going', !gameOverShown);
+  });
+
+  test('the linescore reads FINAL once a shortened game is complete', () => {
+    setInnings(7);
+    lsInput('home', 0).value = '2';
+    updateLinescoreTotals('home');
+    sel('visiting', 0, 6);
+    play('K'); play('K'); play('K');
+    updateLiveStatsFromState();
+    eq('the readout', document.getElementById('ls-inning').textContent, 'FINAL');
+  });
+
+  test('shortening the game pulls the inning columns back with it', () => {
+    setInnings(7);
+    eq('regulation', regulationInnings(), 7);
+    eq('columns shown', visibleInningCount(), 7);
+    ok('the 8th is hidden', innHeaderCell('visiting', 7).classList.contains('hidden-inning'));
+  });
+
+  test('shortening the game never hides a column that has plays in it', () => {
+    sel('visiting', 0, 8);                          // a play in the 9th
+    play('1B');
+    setInnings(7);
+    eq('regulation is short', regulationInnings(), 7);
+    eq('but the columns stay', visibleInningCount(), 9);
+    ok('the 9th is still on the card', !innHeaderCell('visiting', 8).classList.contains('hidden-inning'));
+  });
+
+  test('+EI still extends a 7-inning game into extras', () => {
+    setInnings(7);
+    addExtraInning();
+    eq('an 8th column appears', visibleInningCount(), 8);
+    eq('regulation is untouched', regulationInnings(), 7);
+  });
+
+  test('regulation length survives a round trip through storage', () => {
+    clearStorage();
+    try {
+      setInnings(6);
+      flushSave();
+      const back = mergeStateDefaults(JSON.parse(safeStorage.getItem(CURRENT_GAME_KEY)));
+      eq('six innings came back', back.rules.regulationInnings, 6);
+    } finally { clearStorage(); }
+  });
+
+  test('an older save with no regulation length gets nine', () => {
+    const old = JSON.parse(JSON.stringify(createEmptyState()));
+    delete old.rules.regulationInnings;             // `rules` exists, the key does not
+    const merged = mergeStateDefaults(old);
+    eq('backfilled inside the object', merged.rules.regulationInnings, 9);
+  });
+
+  test('a nonsense regulation length is refused, not stored', () => {
+    setInnings(7);
+    setRegulationInnings(0);
+    eq('zero is not a game', regulationInnings(), 7);
+    setRegulationInnings(INNINGS + 1);
+    eq('nor is more than the card holds', regulationInnings(), 7);
+  });
+
+  /* =====================================================================
+     ERA — the pitcher header promised "Pitcher / ERA" and no field for it
+     ever existed, so `era` sat in state as an empty string forever.
+     ===================================================================== */
+
+  test('ERA is computed from this game\'s earned runs and innings', () => {
+    sel('visiting', 0, 0);
+    play('HR');                                     // 1 earned run
+    play('K'); play('K'); play('K');                // one full inning
+    eq('a full inning', pStat('visiting', 0, 'ip'), '1');
+    eq('one earned run', pStat('visiting', 0, 'er'), '1');
+    eq('ERA', pEra('visiting', 0), '9.00');
+  });
+
+  test('a partial inning is divided by outs, not by innings', () => {
+    sel('visiting', 0, 0);
+    play('HR');
+    play('K');                                      // 1 ER in 1/3 of an inning
+    eq('a third of an inning', pStat('visiting', 0, 'ip'), '0.1');
+    eq('ERA', pEra('visiting', 0), '27.00');
+  });
+
+  test('an earned run without an out recorded reads INF', () => {
+    sel('visiting', 0, 0);
+    play('HR');
+    eq('no outs', pStat('visiting', 0, 'ip'), '');
+    eq('ERA', pEra('visiting', 0), 'INF');
+  });
+
+  test('a pitcher with no line yet has no ERA', () => {
+    eq('blank, not 0.00', pEra('visiting', 0), '');
+  });
+
+  test('a scoreless inning is an ERA of 0.00, not a blank', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K'); play('K');
+    eq('ERA', pEra('visiting', 0), '0.00');
+  });
+
+  test('an unearned run is left out of ERA', () => {
+    sel('visiting', 0, 0);
+    play('E6');                                     // reached on an error
+    sel('visiting', 2, 0);                          // batter 2 — odd rows are sub rows
+    play('HR');                                     // both score, one unearned
+    play('K'); play('K'); play('K');
+    eq('two runs', pStat('visiting', 0, 'r'), '2');
+    eq('one of them earned', pStat('visiting', 0, 'er'), '1');
+    eq('ERA counts only that one', pEra('visiting', 0), '9.00');
+  });
+
+  test('the computed ERA is what the summary box score prints', () => {
+    setPlayer('visiting', 0, '7', 'Batter');
+    sel('visiting', 0, 0);
+    play('HR');
+    play('K'); play('K'); play('K');
+    const p = gameState.teams.home.pitchers[0];
+    p.name = 'Reliever';
+    eq('state carries it for the summary', p.era, '9.00');
   });
 })();
