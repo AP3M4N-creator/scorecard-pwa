@@ -2110,6 +2110,60 @@
     eq('and the runner is back on 1st', onB('visiting', 0, 0), 0);
   });
 
+  // C1 — the same captured-state problem on the *entry* path. `applyPlay` commits
+  // `ab.play` and the result pitch before the popup that decides the play opens, so
+  // a tap that lands while it is pending orphaned the play underneath (on the card
+  // and counted in H, but nobody on base and no out) and left a Confirm that would
+  // later write advancements into an inning that never existed.
+  test('a cell cannot be selected while a runner popup is waiting', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('2B');                                     // opens the runner popup
+    ok('the popup is up', visible('runner-popup'));
+    sel('visiting', 4, 0);                          // the tap that used to get through
+    ok('the popup is still up', visible('runner-popup'));
+    eq('the selection did not move', curP(), 2);
+    ok('the refusal is shown', visible('play-reject'));
+    runnerPopup({ 0: 2, batter: 1 });
+    eq('the runner is on 3rd', onB('visiting', 0, 2), 0);
+  });
+
+  test('a play cannot be entered while a runner popup is waiting', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('2B');
+    play('K');                                      // a play button under the popup
+    ok('the popup is still up', visible('runner-popup'));
+    eq('no play was written', ab('visiting', 2, 0).play, '2B');
+    ok('the refusal is shown', visible('play-reject'));
+    runnerPopup({ 0: 2, batter: 1 });
+    eq('outs are untouched', inn('visiting', 0).outs, 0);
+  });
+
+  test('a play cannot be entered while an outcome popup is waiting', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    sel('visiting', 2, 0);
+    play('DP 6-4-3');                               // opens the outcome popup
+    ok('the popup is up', visible('outcome-popup'));
+    sel('visiting', 4, 0);
+    eq('the selection did not move', curP(), 2);
+    play('1B');
+    eq('and no play was written', ab('visiting', 4, 0).play, '');
+    ok('the popup is still up', visible('outcome-popup'));
+  });
+
+  // Both entry popups get a backdrop, so the tap never reaches the grid in the
+  // first place — the guards above are the belt to its braces.
+  test('the entry popups draw a backdrop over the card', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('2B');
+    ok('the backdrop is up with the runner popup', visible('popup-backdrop'));
+    runnerPopup({ 0: 2, batter: 1 });
+    ok('and gone once it is answered', !visible('popup-backdrop'));
+  });
+
   // The spray popup opens by itself after every hit and only writes hitLoc, so
   // it must not stand between the scorer and undo.
   test('the spray popup does not block undo', () => {

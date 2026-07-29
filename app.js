@@ -418,6 +418,13 @@ function buildLinescore() {
 
 /* Interaction */
 function selectCell(td) {
+  // Moving the selection out from under a pending entry popup is what orphans the
+  // play the popup is still deciding (C1). Every programmatic caller runs after
+  // the popup has closed, so this only ever refuses a real tap or hotkey.
+  if (td !== selectedCell && entryInProgress()) {
+    showPlayReject('Finish the open entry first.');
+    return;
+  }
   if (selectedCell) {
     selectedCell.classList.remove('selected');
     selectedCell.removeAttribute('aria-current');
@@ -1196,7 +1203,7 @@ function showPlayReject(msg) {
 
 // Popups that own the current entry get a backdrop, so a tap meant for the popup
 // can't land on the grid and move the selection underneath it (#1, #29).
-const BACKDROP_GUARDED = ['k-popup', 'pos-popup'];
+const BACKDROP_GUARDED = ['k-popup', 'pos-popup', 'runner-popup', 'outcome-popup'];
 
 function showPopupBackdrop() {
   if (typeof document === 'undefined') return;
@@ -1214,6 +1221,9 @@ function showPopupBackdrop() {
         return p && p.style.display && p.style.display !== 'none';
       });
       if (!stillOpen) hidePopupBackdrop();
+      // A swallowed tap with no explanation reads as a dead app. The two entry
+      // popups can only be answered, not dismissed, so say so (C1).
+      else if (entryInProgress()) showPlayReject('Finish the open entry first.');
     };
     document.body.appendChild(bd);
   }
@@ -1247,6 +1257,24 @@ const PENDING_ENTRY_POPUPS = [
 function pendingEntryPopupOpen() {
   if (typeof document === 'undefined') return false;
   return PENDING_ENTRY_POPUPS.some(id => {
+    const p = document.getElementById(id);
+    return p && p.style.display && p.style.display !== 'none';
+  });
+}
+
+// The two popups that open from *inside* `applyPlay`, after `ab.play` and the
+// result pitch are already committed but before the play's effects are known.
+// A tap that lands while one is pending does two kinds of damage (C1):
+// the play underneath is orphaned — on the card, counted in H, but nobody on
+// base and no out — and the popup's Confirm still closes over the inning as it
+// was when it opened, so answering it later writes runners into a state that
+// never happened. The backdrop stops the tap; this guard stops anything that
+// reaches the entry path some other way (a play button, a hotkey).
+const ENTRY_IN_PROGRESS_POPUPS = ['runner-popup', 'outcome-popup'];
+
+function entryInProgress() {
+  if (typeof document === 'undefined') return false;
+  return ENTRY_IN_PROGRESS_POPUPS.some(id => {
     const p = document.getElementById(id);
     return p && p.style.display && p.style.display !== 'none';
   });
@@ -1358,6 +1386,7 @@ function playEntryReject(team, innIdx, play) {
 // `target` is the cell this play belongs to. Popups pass the cell they captured
 // when they opened; everything else falls back to the current selection (#1).
 function applyPlay(play, target) {
+  if (entryInProgress()) { showPlayReject('Finish the open entry first.'); return; }
   const t = target || currentTarget();
   if (!t) return;
   const team = t.team;
@@ -1721,6 +1750,7 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
 
   html += `<button id="oc-confirm" style="margin-top:6px;width:100%;padding:7px;font-size:12px;font-weight:700;background:var(--navy);color:var(--gold);border:none;border-radius:4px;cursor:pointer;font-family:var(--heading);letter-spacing:0.5px;text-transform:uppercase">Confirm</button>`;
   popup.innerHTML = html;
+  showPopupBackdrop();
   popup.style.display = 'block';
 
   // Every runner still on a base after the play, plus the batter if he ends up on
@@ -1825,6 +1855,7 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
       return;
     }
     popup.style.display = 'none';
+    hidePopupBackdrop();
     callback(outcomes);
   };
 }
@@ -2061,6 +2092,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
 
   html += `<button id="rp-confirm" style="margin-top:6px;width:100%;padding:6px;font-size:12px;font-weight:700;background:#333;color:#fff;border:none;border-radius:4px;cursor:pointer">Confirm</button>`;
   popup.innerHTML = html;
+  showPopupBackdrop();
   popup.style.display = 'block';
 
   // Where everyone ends up, as `runnerOrderConflicts` wants it. A runner thrown out
@@ -2151,6 +2183,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     }
 
     popup.style.display = 'none';
+    hidePopupBackdrop();
     callback(choices);
   };
 }

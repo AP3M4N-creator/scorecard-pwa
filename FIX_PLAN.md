@@ -46,8 +46,8 @@ Standalone: M2, M3, M5, M6, M7, L1–L7.
 
 | # | Question | My recommendation |
 |---|---|---|
-| D1 ★ | **C1 fix shape.** Block the tap (backdrop + `pendingEntryPopupOpen()` guard), or let the tap through and *cancel* the pending play? | **Block.** Add `runner-popup` / `outcome-popup` to `BACKDROP_GUARDED` and refuse `applyPlay` / `selectCell` while one is open, with a `showPlayReject('Finish or close the open entry first.')` — the message `undoLastPlay` already uses. Consistent with how undo/redo already treat these popups. |
-| D2 ★ | **C2 fix shape.** Require an explicit outcome for every runner on a DP/TP (the way `showRunnerPopup` flashes unanswered rows), or default the forced runner to *out*? | **Both.** Default the lead forced runner to `out` (that is what a DP *means*), **and** refuse Confirm when a play labelled `DP` would record fewer than 2 outs / `TP` fewer than 3. A DP that records one out is not a DP. |
+| ~~D1~~ **answered: Block** | **C1 fix shape.** Block the tap (backdrop + `pendingEntryPopupOpen()` guard), or let the tap through and *cancel* the pending play? | **Block.** Add `runner-popup` / `outcome-popup` to `BACKDROP_GUARDED` and refuse `applyPlay` / `selectCell` while one is open, with a `showPlayReject('Finish or close the open entry first.')` — the message `undoLastPlay` already uses. Consistent with how undo/redo already treat these popups. |
+| ~~D2~~ **answered: Both** | **C2 fix shape.** Require an explicit outcome for every runner on a DP/TP (the way `showRunnerPopup` flashes unanswered rows), or default the forced runner to *out*? | **Both.** Default the lead forced runner to `out` (that is what a DP *means*), **and** refuse Confirm when a play labelled `DP` would record fewer than 2 outs / `TP` fewer than 3. A DP that records one out is not a DP. |
 | D3 | **H1 scope.** Derive E from `E`-play cells and credit it to the fielding team, or leave E manual and just stop pretending? | **Derive it.** Count cells where `isErrorPlay(ab.play)`, plus `advReason` containing `'E'` (throwing errors on steals/pickoffs, which leave no error play), and write it to the *other* team's E input. Needs a decision on whether two errors on one play can be recorded at all — currently they can't. |
 | D4 | **H2 pinch runner.** New mechanism, or overload SUB? | A distinct **PR** action that transfers the *run* to the sub row while leaving AB/H on the starter. Overloading SUB can't work — `setSubLine` skipping the played column is correct for a PH. |
 | D5 | **H3 third player in a slot.** Raise `ROWS_PER_POS` to 3, or make sub rows dynamic? | **`ROWS_PER_POS = 3`** is the cheap correct answer — it is already a constant that sizes the grid, the state and ~12 loops, and `stateForStorage` / `refillAtBats` already handle "rows whose at-bats are dropped on the way out". Dynamic rows are a much larger change for a rarer case. Confirm the row-height cost on iPad is acceptable. |
@@ -61,7 +61,18 @@ Standalone: M2, M3, M5, M6, M7, L1–L7.
 These are the only findings that silently produce a **wrong card during a live
 game from ordinary taps**. Both are small. Do these before anything else.
 
-### C1 — pending-popup bypass (RC-A)
+### C1 — pending-popup bypass (RC-A) — ✅ **FIXED**
+Fixed per D1 (block). `runner-popup` / `outcome-popup` joined `BACKDROP_GUARDED`,
+both now call `showPopupBackdrop()` / `hidePopupBackdrop()`, and a new
+`entryInProgress()` guard refuses `applyPlay` and `selectCell` with
+`showPlayReject('Finish the open entry first.')` — worded that way because
+neither popup has a Cancel, so "close" isn't an option the scorer has. Covered by
+4 cases in `tests-scoring.js` under the #29 heading (the same failure family).
+Suite: **210 passed, 0 failed**. Verified live too: with the popup open,
+`elementFromPoint` over an at-bat cell now returns `popup-backdrop` rather than
+the cell's diamond.
+
+
 `applyPlay` [app.js:1360], `selectCell` [app.js:420], `BACKDROP_GUARDED` [app.js:1199]
 
 `runner-popup` and `outcome-popup` are in `PENDING_ENTRY_POPUPS` (so undo/redo
