@@ -94,7 +94,13 @@ function escapeHtml(s) {
 
 // Field image embedded directly in SVG
 const POSITIONS = 9;
-const ROWS_PER_POS = 2;
+/* Rows in one lineup slot: the starter plus ROWS_PER_POS - 1 substitutes. Two was
+   one short of routine — a pinch hitter followed by a defensive replacement in the
+   same spot had nowhere to go, and the second SUB press could only offer to undo
+   the first (H3). Raising it also made `subChange` a row *number* rather than a
+   boolean; see `subRowOf`. Saves written with two rows are re-laid-out by
+   `migrateLineupRows`. */
+const ROWS_PER_POS = 3;
 const INNINGS = 15;
 const PITCHER_ROWS = 8;
 const DEFAULT_REGULATION = 9;
@@ -126,12 +132,46 @@ function visibleInningCount() {
 function defaultColumnMap() { return Array.from({ length: INNINGS }, (_, i) => i); }
 
 // Every at-bat cell on the card carries the *starter's* row index — a sub bats
-// on the starter's line — so `players[1].atBats` and every other odd row is 15
-// untouched objects. They stay allocated in memory, because a dozen loops walk
+// on the starter's line — so every row that isn't a multiple of ROWS_PER_POS holds
+// 15 untouched objects. They stay allocated in memory, because a dozen loops walk
 // every player and index by column, but `stateForStorage` drops them on the way
 // out and `refillAtBats` puts them back on the way in (#33).
 function makeEmptyAtBat() {
-  return { bases:[false,false,false,false], advReason:['','','',''], outOnBase:null, play:'', out:0, outsRecorded:0, pitches:[], hitLoc:null, rbi:0, pitcher:0, reachedOnError:false, pitcherChangeNum:'', subChange:false, seq:0 };
+  return { bases:[false,false,false,false], advReason:['','','',''], outOnBase:null, play:'', out:0, outsRecorded:0, pitches:[], hitLoc:null, rbi:0, pitcher:0, reachedOnError:false, pitcherChangeNum:'', subChange:0, seq:0 };
+}
+
+/* Which row of the slot owns this at-bat: 0 for the starter, 1..ROWS_PER_POS-1 for
+   a substitute. `subChange` was a boolean while a slot had exactly one sub row, and
+   a boolean cannot say *which* sub once there are two (H3) — so it is now the row
+   number, and this is the one reader of it.
+
+   `true` is still accepted and means row 1. Saves are re-laid-out on load by
+   `migrateLineupRows`, but a boolean also reaches here from a library entry or an
+   imported file that skipped a migration, and resolving it to the first sub is
+   both what the old build meant and what the scorer sees on the card. Anything out
+   of range is clamped rather than trusted: an index past the last row would read
+   a player who doesn't exist. */
+function subRowOf(ab) {
+  if (!ab || !ab.subChange) return 0;
+  const r = ab.subChange === true ? 1 : Math.floor(ab.subChange);
+  return r >= 1 && r < ROWS_PER_POS ? r : (r >= ROWS_PER_POS ? ROWS_PER_POS - 1 : 0);
+}
+
+// The sub rows of a slot, in order — `[1, 2]` as it stands. Several callers split
+// a slot's figures per row and would otherwise each write the same loop bounds.
+function subRowOffsets() {
+  return Array.from({ length: ROWS_PER_POS - 1 }, (_, i) => i + 1);
+}
+
+// Which row is in the slot *now* — the one owning the last column of the game,
+// since every sub line runs to the end of it and a re-entry hands the tail back.
+// Callers that name "the man at this position" want this rather than "has a sub
+// been used at all", which stopped being the same question at two sub rows.
+function currentSlotRow(team, sp) {
+  const abs = gameState.teams[team] && gameState.teams[team].players[sp] &&
+    gameState.teams[team].players[sp].atBats;
+  if (!abs || !abs.length) return 0;
+  return subRowOf(abs[Math.min(INNINGS, abs.length) - 1]);
 }
 
 // A player row's at-bats, padded to INNINGS — for a save from a build with fewer
@@ -312,11 +352,11 @@ function buildScoringGrid(team, containerId) {
 
   for (let pos = 0; pos < POSITIONS; pos++) {
     const sp = pos * ROWS_PER_POS;     // starter player index
-    const subp = sp + 1;               // sub player index
 
-    // Starter row — includes at-bat cells with rowspan=2
+    // Starter row — carries the at-bat cells, spanned down over every sub row of
+    // the slot, because a sub bats on the starter's line.
     html += `<tr class="pos-starter" data-team="${team}" data-player="${sp}">`;
-    html += `<td class="order-cell" rowspan="2">${pos + 1}</td>`;
+    html += `<td class="order-cell" rowspan="${ROWS_PER_POS}">${pos + 1}</td>`;
     html += `<td class="num-cell"><input type="text" data-field="num" data-team="${team}" data-p="${sp}" maxlength="3"></td>`;
     html += `<td class="player-cell"><input type="text" data-field="name" data-team="${team}" data-p="${sp}"></td>`;
     html += `<td class="pos-cell">${posSelect.replace('data-field="pos"', `data-field="pos" data-team="${team}" data-p="${sp}"`)}</td>`;
@@ -327,7 +367,7 @@ function buildScoringGrid(team, containerId) {
     html += `<td class="stat-cell" id="st-rbi-${team}-${sp}"></td>`;
     html += `<td class="stat-cell" id="st-bb-${team}-${sp}"></td>`;
     for (let inn = 0; inn < INNINGS; inn++) {
-      html += `<td class="at-bat-cell" id="cell-${team}-${sp}-${inn}" rowspan="2" aria-label="${describeCellForScreenReader(team, sp, inn)}" data-team="${team}" data-p="${sp}" data-inn="${inn}">`;
+      html += `<td class="at-bat-cell" id="cell-${team}-${sp}-${inn}" rowspan="${ROWS_PER_POS}" aria-label="${describeCellForScreenReader(team, sp, inn)}" data-team="${team}" data-p="${sp}" data-inn="${inn}">`;
       html += `<div class="pitcher-change-mark" id="pcm-${team}-${sp}-${inn}"></div>`;
       html += `<div class="sub-change-mark" id="scm-${team}-${sp}-${inn}"></div>`;
       html += `<div class="pitch-track" id="pt-${team}-${sp}-${inn}"></div>`;
@@ -340,18 +380,24 @@ function buildScoringGrid(team, containerId) {
     }
     html += '</tr>';
 
-    // Sub row — player info only, no at-bat cells (spanned from above)
-    html += `<tr class="pos-sub" data-team="${team}" data-player="${subp}">`;
-    html += `<td class="num-cell"><input type="text" data-field="num" data-team="${team}" data-p="${subp}" maxlength="3"></td>`;
-    html += `<td class="player-cell"><input type="text" data-field="name" data-team="${team}" data-p="${subp}" placeholder="PH / Sub"></td>`;
-    html += `<td class="pos-cell">${posSelect.replace('data-field="pos"', `data-field="pos" data-team="${team}" data-p="${subp}"`)}</td>`;
-    html += `<td class="avg-cell"><input type="text" data-field="avg" data-team="${team}" data-p="${subp}" maxlength="5"></td>`;
-    html += `<td class="stat-cell" id="st-ab-${team}-${subp}"></td>`;
-    html += `<td class="stat-cell" id="st-h-${team}-${subp}"></td>`;
-    html += `<td class="stat-cell" id="st-r-${team}-${subp}"></td>`;
-    html += `<td class="stat-cell" id="st-rbi-${team}-${subp}"></td>`;
-    html += `<td class="stat-cell" id="st-bb-${team}-${subp}"></td>`;
-    html += '</tr>';
+    // Sub rows — player info only, no at-bat cells (spanned from above). The
+    // placeholder numbers them once there is more than one, so the scorer can tell
+    // which row a prompt is talking about.
+    subRowOffsets().forEach(r => {
+      const subp = sp + r;
+      const ph = ROWS_PER_POS > 2 ? `PH / Sub ${r}` : 'PH / Sub';
+      html += `<tr class="pos-sub" data-team="${team}" data-player="${subp}">`;
+      html += `<td class="num-cell"><input type="text" data-field="num" data-team="${team}" data-p="${subp}" maxlength="3"></td>`;
+      html += `<td class="player-cell"><input type="text" data-field="name" data-team="${team}" data-p="${subp}" placeholder="${ph}"></td>`;
+      html += `<td class="pos-cell">${posSelect.replace('data-field="pos"', `data-field="pos" data-team="${team}" data-p="${subp}"`)}</td>`;
+      html += `<td class="avg-cell"><input type="text" data-field="avg" data-team="${team}" data-p="${subp}" maxlength="5"></td>`;
+      html += `<td class="stat-cell" id="st-ab-${team}-${subp}"></td>`;
+      html += `<td class="stat-cell" id="st-h-${team}-${subp}"></td>`;
+      html += `<td class="stat-cell" id="st-r-${team}-${subp}"></td>`;
+      html += `<td class="stat-cell" id="st-rbi-${team}-${subp}"></td>`;
+      html += `<td class="stat-cell" id="st-bb-${team}-${subp}"></td>`;
+      html += '</tr>';
+    });
   }
   html += '</tbody></table>';
   wrap.innerHTML = html;
@@ -856,7 +902,7 @@ function writeTeamLOB(team) {
 function getActivePlayerIndex(team, pIdx, innIdx) {
   const sp = Math.floor(pIdx / ROWS_PER_POS) * ROWS_PER_POS;
   const ab = gameState.teams[team].players[sp].atBats[innIdx];
-  return (ab && ab.subChange) ? sp + 1 : sp;
+  return sp + subRowOf(ab);
 }
 
 // A row's `num`/`name` as they stand on the card. `collectState` only scrapes the
@@ -3615,14 +3661,21 @@ function clearSelectedCell() {
     ab.advSrc = null;
     ab.reachedOnError = false;
     ab.pitcherChangeNum = '';
-    // A sub line spans from here to the end of the game; clear the whole contiguous run.
-    if (ab.subChange) {
-      for (let c = innIdx; c < players[pIdx].atBats.length && players[pIdx].atBats[c].subChange; c++) {
-        players[pIdx].atBats[c].subChange = false;
+    // A sub line spans from here to the end of the game; clear the whole contiguous
+    // run, and hand those columns back to the row above rather than all the way to
+    // the starter — with two sub rows the man before this one may be another sub.
+    // The run is bounded by row number, so clearing the first sub doesn't also wipe
+    // a second substitution made later in the game (H3).
+    const clearedRow = subRowOf(ab);
+    if (clearedRow) {
+      const back = clearedRow - 1;
+      for (let c = innIdx; c < players[pIdx].atBats.length && subRowOf(players[pIdx].atBats[c]) === clearedRow; c++) {
+        players[pIdx].atBats[c].subChange = back;
         renderPitcherChange(team, pIdx, c);
       }
+    } else {
+      ab.subChange = 0;
     }
-    ab.subChange = false;
     ab.seq = 0;
     renderDiamond(team, pIdx, innIdx);
     renderOut(team, pIdx, innIdx);
@@ -3839,10 +3892,106 @@ function mergeStateDefaults(parsed) {
   // out on every autoSave.
   delete parsed.log;
   delete parsed.standings;
+  // Before refillAtBats: the re-lay-out moves whole player rows, and there is no
+  // point padding rows that are about to be inserted.
+  migrateLineupRows(parsed);
   refillAtBats(parsed);
   backfillOutsLog(parsed);
   migrateBaseRunners(parsed);
   return parsed;
+}
+
+/* Re-lay-out a save written when a lineup slot had fewer rows than it has now
+   (H3: ROWS_PER_POS went 2 → 3).
+
+   A player's row index *is* his position in the slot — `slot * ROWS_PER_POS + row`
+   — so widening a slot is not an append, it is a remap. Row 2 of a 2-row save is
+   slot 1's starter; in a 3-row card that index belongs to slot 0's second sub. Left
+   alone, every lineup below the first would shift up a spot and the at-bats would
+   go with them.
+
+   So each old row moves to `slot * ROWS_PER_POS + row`, the new rows in between are
+   fresh, and every stored player index is put through the same map. Those indices
+   are the reason this can't be done anywhere but here: `bases[].p`, `lastPA.pIdx`,
+   the out log's `pIdx`/`srcP`, `nextLeadoff`, `reentries` and `defChanges` all name
+   rows, and a card whose runners point at the wrong men is worse than one that
+   failed to load.
+
+   Idempotent — a save already at the current width is left alone, which is what
+   makes it safe to call from more than one load path. */
+function migrateLineupRows(state) {
+  if (!state || !state.teams) return;
+  const want = POSITIONS * ROWS_PER_POS;
+  // Infer the old width from the row count. Anything that isn't a whole number of
+  // rows per slot is not a shape this knows how to move, so leave it to
+  // `refillAtBats` and the per-row defaults rather than guess.
+  const widths = ['visiting', 'home'].map(t => {
+    const pl = state.teams[t] && state.teams[t].players;
+    return Array.isArray(pl) ? pl.length : 0;
+  });
+  if (widths.some(n => n === want) || widths.some(n => n === 0)) return;
+  if (widths[0] !== widths[1]) return;
+  const oldRows = widths[0] / POSITIONS;
+  if (!Number.isInteger(oldRows) || oldRows < 1 || oldRows >= ROWS_PER_POS) return;
+
+  const remap = p => {
+    if (typeof p !== 'number' || p < 0) return p;
+    return Math.floor(p / oldRows) * ROWS_PER_POS + (p % oldRows);
+  };
+
+  ['visiting', 'home'].forEach(t => {
+    const team = state.teams[t];
+    const old = team.players;
+    const next = Array(want).fill(null).map(() => ({
+      num: '', name: '', pos: '', avg: '', atBats: []
+    }));
+    old.forEach((pl, i) => { next[remap(i)] = pl; });
+    team.players = next;
+
+    const innings = state.innings && state.innings[t];
+    if (Array.isArray(innings)) {
+      innings.forEach(inn => {
+        if (!inn) return;
+        if (Array.isArray(inn.bases)) {
+          inn.bases.forEach((held, b) => {
+            if (held && typeof held === 'object' && typeof held.p === 'number') held.p = remap(held.p);
+            else if (typeof held === 'number') inn.bases[b] = remap(held);   // pre-Phase-7 bare index
+          });
+        }
+        if (inn.lastPA && typeof inn.lastPA.pIdx === 'number') inn.lastPA.pIdx = remap(inn.lastPA.pIdx);
+        if (Array.isArray(inn.outsLog)) {
+          inn.outsLog.forEach(e => {
+            if (!e) return;
+            if (typeof e.pIdx === 'number') e.pIdx = remap(e.pIdx);
+            if (typeof e.srcP === 'number') e.srcP = remap(e.srcP);
+          });
+        }
+      });
+    }
+
+    const leadoff = state.nextLeadoff && state.nextLeadoff[t];
+    if (leadoff) Object.keys(leadoff).forEach(col => { leadoff[col] = remap(leadoff[col]); });
+  });
+
+  if (Array.isArray(state.reentries)) {
+    state.reentries.forEach(r => { if (r && typeof r.pIdx === 'number') r.pIdx = remap(r.pIdx); });
+  }
+  if (Array.isArray(state.defChanges)) {
+    state.defChanges.forEach(d => {
+      if (!d || !Array.isArray(d.changes)) return;
+      d.changes.forEach(c => { if (c && typeof c.pIdx === 'number') c.pIdx = remap(c.pIdx); });
+    });
+  }
+
+  // `subChange` was a boolean when a slot had one sub row. True means the first
+  // sub, which is the row the old build drew and the scorer saw.
+  ['visiting', 'home'].forEach(t => {
+    (state.teams[t].players || []).forEach(pl => {
+      (pl.atBats || []).forEach(ab => {
+        if (ab && typeof ab.subChange !== 'number') ab.subChange = ab.subChange ? 1 : 0;
+      });
+    });
+  });
 }
 
 // Games saved before Phase 7 hold a bare player index in `inn.bases`, not the
@@ -4244,17 +4393,15 @@ function updatePlayerStats(team) {
   const players = gameState.teams[team].players;
   for (let pos = 0; pos < POSITIONS; pos++) {
     const sp = pos * ROWS_PER_POS;
-    const subp = sp + 1;
     const player = players[sp];
     const allABs = player.atBats;
-    const hasSub = player.atBats.some(a => a.subChange);
-    if (hasSub) {
-      writeStats(team, sp, tallyAtBats(team, sp, allABs, a => !a.subChange));
-      writeStats(team, subp, tallyAtBats(team, sp, allABs, a => a.subChange));
-    } else {
-      writeStats(team, sp, tallyAtBats(team, sp, allABs, () => true));
-      writeStats(team, subp, { ab:0, h:0, r:0, rbi:0, bb:0 });
-    }
+    // Every row of the slot is tallied from the starter's at-bats, split by which
+    // row owns each column. A row nobody has batted in tallies to zeros and shows
+    // blank, so an untouched sub row reads empty rather than "0".
+    writeStats(team, sp, tallyAtBats(team, sp, allABs, a => subRowOf(a) === 0));
+    subRowOffsets().forEach(r => {
+      writeStats(team, sp + r, tallyAtBats(team, sp, allABs, a => subRowOf(a) === r));
+    });
   }
 }
 
@@ -4405,41 +4552,51 @@ function markSub() {
     return;
   }
   pushUndo(team, pIdx, innIdx);
-  setSubLine(team, pIdx, innIdx, INNINGS - 1, true);
+  setSubLine(team, pIdx, innIdx, INNINGS - 1, 1);
 }
 
-// Write a slot's sub line on or off across `[from, to]` and bring the stats and
-// the change marks with it. Turning on skips the first column when a play is
-// already recorded there: that at-bat was the starter's, and the sub takes over
-// from the next one.
-function setSubLine(team, pIdx, from, to, on) {
+// Write a slot's sub line across `[from, to]` and bring the stats and the change
+// marks with it. `row` is which row of the slot takes over — 0 hands the columns
+// back to the starter, 1..ROWS_PER_POS-1 gives them to that substitute. Turning a
+// sub on skips the first column when a play is already recorded there: that at-bat
+// belongs to whoever was batting, and the new man takes over from the next one.
+//
+// `row` used to be a boolean, because a slot had one sub row and "on" could only
+// mean that row (H3).
+function setSubLine(team, pIdx, from, to, row) {
   const player = gameState.teams[team].players[pIdx];
-  const start = (on && player.atBats[from].play) ? from + 1 : from;
+  const r = row === true ? 1 : (row ? Math.floor(row) : 0);
+  const start = (r && player.atBats[from].play) ? from + 1 : from;
   for (let c = start; c <= to && c < INNINGS; c++) {
-    player.atBats[c].subChange = on;
+    player.atBats[c].subChange = r;
     renderPitcherChange(team, pIdx, c);
   }
   updatePlayerStats(team);
   autoSave();
 }
 
-// The contiguous run of columns a slot's sub line covers around `col`, plus what
-// the sub has recorded inside it. `before` and `after` are the plate appearances
-// either side of `col`, and they are what decide whether taking the sub out here
-// is a re-entry (he batted, so the starter is coming back) or simply an undo
-// (he never came up, so nothing happened to record).
+// The contiguous run of columns *one* substitute's line covers around `col`, plus
+// what he has recorded inside it. `before` and `after` are the plate appearances
+// either side of `col`, and they are what decide whether taking him out here is a
+// re-entry (he batted, so someone is coming back) or simply an undo (he never came
+// up, so nothing happened to record).
+//
+// The run is bounded by the row number, not by "any sub": with two sub rows,
+// walking on truthiness alone would swallow the *next* substitute's columns into
+// this one's run and offer to clear them both (H3). `row` is the run's owner.
 function subLineRun(team, pIdx, col) {
   const abs = gameState.teams[team].players[pIdx].atBats;
-  if (!abs[col] || !abs[col].subChange) return null;
+  const row = subRowOf(abs[col]);
+  if (!abs[col] || !row) return null;
   let start = col, end = col;
-  while (start > 0 && abs[start - 1].subChange) start--;
-  while (end < abs.length - 1 && abs[end + 1].subChange) end++;
+  while (start > 0 && subRowOf(abs[start - 1]) === row) start--;
+  while (end < abs.length - 1 && subRowOf(abs[end + 1]) === row) end++;
   const plays = (a, b) => {
     let n = 0;
     for (let c = a; c <= b; c++) if (abs[c] && abs[c].play) n++;
     return n;
   };
-  return { start, end, before: col > start ? plays(start, col - 1) : 0, after: plays(col, end) };
+  return { row, start, end, before: col > start ? plays(start, col - 1) : 0, after: plays(col, end) };
 }
 
 // A one-line description of a lineup row, for a prompt or a log entry. Unlike
@@ -4448,7 +4605,14 @@ function subLineRun(team, pIdx, col) {
 function rowLabel(team, pIdx) {
   if (!(gameState.teams[team] && gameState.teams[team].players[pIdx])) return 'row ' + pIdx;
   const spot = Math.floor(pIdx / ROWS_PER_POS) + 1;
-  const fallback = (pIdx % ROWS_PER_POS === 0 ? 'Batter ' : 'Sub ') + spot;
+  const row = pIdx % ROWS_PER_POS;
+  // "Sub 3" meant the sub in spot 3 while a slot had one of them. With two it named
+  // both rows identically, and the takeover prompt read "Sub 1 takes over" about a
+  // spot whose current occupant was also "Sub 1" — so an unnamed sub row now says
+  // which one it is as well as where. Numbered the same way the row's own
+  // placeholder is, so the prompt and the card agree.
+  const fallback = row === 0 ? 'Batter ' + spot
+    : (ROWS_PER_POS > 2 ? 'Sub ' + row + ' in spot ' + spot : 'Sub ' + spot);
   const num = livePlayerField(team, pIdx, 'num');
   return (num ? '#' + num + ' ' : '') + (livePlayerField(team, pIdx, 'name') || fallback);
 }
@@ -4461,7 +4625,7 @@ function currentInningLabel(team, innIdx) {
   return (team === 'visiting' ? 'T' : 'B') + (getRealInning(team, col) + 1);
 }
 
-/* The second press of SUB. Two different acts land on the same button, so this
+/* The second press of SUB. Several different acts land on the same button, so this
    asks which — and spells out what each does to the card, because the choice
    changes who the recorded at-bats belong to. */
 function promptSubRemoval(team, pIdx, innIdx) {
@@ -4472,22 +4636,38 @@ function promptSubRemoval(team, pIdx, innIdx) {
   // not a re-entry. Take the whole line back without ceremony.
   if (!run.before && !run.after) {
     pushUndo(team, pIdx, innIdx);
-    setSubLine(team, pIdx, run.start, run.end, false);
+    setSubLine(team, pIdx, run.start, run.end, run.row - 1);
     return;
   }
 
-  const starter = rowLabel(team, pIdx);
-  const sub = rowLabel(team, pIdx + 1);
+  // Clearing a sub line hands its columns back to whoever held them before, which
+  // is the row above — the starter for the first sub, the first sub for the second.
+  // It was always "the starter" while a slot had one sub row (H3).
+  const prevRow = run.row - 1;
+  const prev = rowLabel(team, pIdx + prevRow);
+  const sub = rowLabel(team, pIdx + run.row);
+  const nextRow = run.row + 1 < ROWS_PER_POS ? run.row + 1 : null;
   const innLabel = currentInningLabel(team, innIdx);
   const allowed = !!(gameState.rules && gameState.rules.allowReentry);
+  const recorded = run.before + run.after;
 
   const opts = [];
+  if (nextRow !== null) {
+    // The whole point of a third row: a pinch hitter who has batted, now being
+    // replaced in the field. Nothing comes off the card — the man already in the
+    // slot keeps what he did, and the next row takes the columns from here on.
+    opts.push({
+      key: 'next',
+      label: rowLabel(team, pIdx + nextRow) + ' takes over at ' + innLabel,
+      note: 'A second substitution in this spot. ' + sub + ' keeps what he has recorded.'
+    });
+  }
   if (run.before) {
-    // The sub has batted, so clearing from here forward puts the starter back in
+    // The sub has batted, so clearing from here forward puts the man above back in
     // the game. That is the re-entry, and it is what gets recorded.
     opts.push({
       key: 'reentry',
-      label: starter + ' re-enters at ' + innLabel,
+      label: prev + ' re-enters at ' + innLabel,
       note: allowed
         ? 'Recorded as a re-entry. This league allows it.'
         : 'Illegal under OBR 5.10(d) — a replaced player may not return. Recorded as entered.',
@@ -4497,9 +4677,8 @@ function promptSubRemoval(team, pIdx, innIdx) {
   opts.push({
     key: 'undo',
     label: 'Undo the substitution',
-    note: run.before + run.after === 1
-      ? 'Clears the whole sub line. The 1 at-bat recorded on it goes back to ' + starter + '.'
-      : 'Clears the whole sub line. The ' + (run.before + run.after) + ' at-bats recorded on it go back to ' + starter + '.'
+    note: 'Clears the whole sub line. The ' + (recorded === 1 ? '1 at-bat' : recorded + ' at-bats') +
+      ' recorded on it go' + (recorded === 1 ? 'es' : '') + ' back to ' + prev + '.'
   });
 
   let popup = document.getElementById('sub-popup');
@@ -4510,9 +4689,10 @@ function promptSubRemoval(team, pIdx, innIdx) {
     document.body.appendChild(popup);
   }
 
-  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:8px;font-family:var(--heading)">Take the sub out? <span style="font-size:11px;color:var(--accent);font-weight:600;margin-left:6px">' + escapeHtml(innLabel) + '</span></div>';
+  const heading = nextRow !== null ? 'Change this spot?' : 'Take the sub out?';
+  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:8px;font-family:var(--heading)">' + heading + ' <span style="font-size:11px;color:var(--accent);font-weight:600;margin-left:6px">' + escapeHtml(innLabel) + '</span></div>';
   html += '<div style="font-size:11px;color:var(--text-light);margin-bottom:10px">' + escapeHtml(sub) +
-    ' is batting in spot ' + (Math.floor(pIdx / ROWS_PER_POS) + 1) + ' for ' + escapeHtml(starter) + '.</div>';
+    ' is batting in spot ' + (Math.floor(pIdx / ROWS_PER_POS) + 1) + ' for ' + escapeHtml(prev) + '.</div>';
   opts.forEach(o => {
     html += '<button class="sub-opt" data-key="' + o.key + '" style="display:block;width:100%;text-align:left;padding:7px 10px;margin-bottom:6px;border:1.5px solid ' +
       (o.warn ? 'var(--accent)' : '#ccc') + ';border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-weight:600;font-family:var(--font)">' +
@@ -4539,12 +4719,17 @@ function promptSubRemoval(team, pIdx, innIdx) {
         gameState.rules.allowReentry = true;
       }
       pushUndo(team, pIdx, innIdx);
-      if (key === 'reentry') {
-        recordReentry(team, pIdx, innIdx, innLabel, starter, sub);
-        setSubLine(team, pIdx, innIdx, run.end, false);
-        announce(starter + ' re-enters at ' + innLabel);
+      if (key === 'next') {
+        // From this column forward only: the columns behind stay with the man who
+        // batted in them.
+        setSubLine(team, pIdx, innIdx, run.end, nextRow);
+        announce(rowLabel(team, pIdx + nextRow) + ' takes over at ' + innLabel);
+      } else if (key === 'reentry') {
+        recordReentry(team, pIdx, innIdx, innLabel, prev, sub);
+        setSubLine(team, pIdx, innIdx, run.end, prevRow);
+        announce(prev + ' re-enters at ' + innLabel);
       } else {
-        setSubLine(team, pIdx, run.start, run.end, false);
+        setSubLine(team, pIdx, run.start, run.end, prevRow);
         announce('Substitution cleared in spot ' + (Math.floor(pIdx / ROWS_PER_POS) + 1));
       }
     };
@@ -4771,10 +4956,10 @@ function applyFieldPos(team, starterP, pos, innLabel) {
   if (oldPos && oldPos !== pos && innLabel) {
     if (!gameState.defChanges) gameState.defChanges = [];
     const player = gameState.teams[team].players[starterP];
-    const sub = gameState.teams[team].players[starterP + 1];
-    const hasSub = player.atBats.some(ab => ab.subChange);
-    const activeName = hasSub && sub.name ? sub.name : player.name;
-    const activeNum = hasSub && sub.num ? sub.num : player.num;
+    // Whoever is in the slot now, which may be the second sub (H3).
+    const active = gameState.teams[team].players[starterP + currentSlotRow(team, starterP)];
+    const activeName = active.name || player.name;
+    const activeNum = active.name ? active.num : player.num;
     const displayName = (activeNum ? '#' + activeNum + ' ' : '') + (activeName || 'Pos ' + (Math.floor(starterP / ROWS_PER_POS) + 1));
     let existing = gameState.defChanges.find(d => d.inning === innLabel && d.team === team);
     if (!existing) {
@@ -4820,7 +5005,9 @@ function renderPitcherChange(team, pIdx, innIdx) {
   const sel = document.getElementById('scm-' + team + '-' + pIdx + '-' + innIdx);
   if (sel) {
     const prev = innIdx > 0 ? gameState.teams[team].players[pIdx].atBats[innIdx - 1] : null;
-    const isSubStart = !!ab.subChange && !(prev && prev.subChange);
+    // The mark goes on the column where the slot changes hands, so a *second*
+    // substitution is marked too — not just the first one off the starter (H3).
+    const isSubStart = subRowOf(ab) > 0 && subRowOf(ab) !== subRowOf(prev);
     sel.classList.toggle('active', isSubStart);
   }
 }
@@ -5586,31 +5773,28 @@ function showGameSummary() {
       rows += '<tr><td>' + pre + escapeHtml(name) + ' <span style="color:var(--text-light);font-size:10px">' + escapeHtml(posLabel) + '</span></td><td>' + s.ab + '</td><td>' + s.r + '</td><td>' + s.h + '</td><td>' + s.rbi + '</td><td>' + s.bb + '</td><td>' + s.k + '</td><td>' + avg + '</td></tr>';
       totAB += s.ab; totH += s.h; totR += s.r; totRBI += s.rbi; totBB += s.bb;
     }
+    // One line per row of the slot that actually came to the plate, in row order —
+    // so a spot with two substitutions prints all three men (H3). A slot with no
+    // sub prints the starter's whole line, which is the `subRowOf === 0` tally.
+    const came = s => s.ab > 0 || s.bb > 0 || s.hbp > 0;
     for (let pos = 0; pos < POSITIONS; pos++) {
       const sp = pos * ROWS_PER_POS;
-      const subp = sp + 1;
       const starter = players[sp];
-      const sub = players[subp];
       const allABs = starter.atBats;
-      const hasSub = starter.atBats.some(ab => ab.subChange);
-      if (hasSub) {
-        const ss = tallyAtBats(team, sp, allABs, ab => !ab.subChange);
-        const us = tallyAtBats(team, sp, allABs, ab => ab.subChange);
-        if (ss.ab > 0 || ss.bb > 0 || ss.hbp > 0) {
+      const ss = tallyAtBats(team, sp, allABs, ab => subRowOf(ab) === 0);
+      if (came(ss) || starter.name || starter.num) {
+        if (came(ss)) {
           const name = (starter.num ? '#' + starter.num + ' ' : '') + (starter.name || 'Pos ' + (pos + 1));
           addRow(name, getPosTrail(team, sp), ss, false);
         }
-        if (us.ab > 0 || us.bb > 0 || us.hbp > 0) {
-          const name = (sub.num ? '#' + sub.num + ' ' : '') + (sub.name || 'Sub ' + (pos + 1));
-          addRow(name, sub.pos || '', us, true);
-        }
-      } else {
-        if (!starter.name && !starter.num) continue;
-        const s = tallyAtBats(team, sp, allABs, () => true);
-        if (s.ab === 0 && s.bb === 0 && s.hbp === 0) continue;
-        const name = (starter.num ? '#' + starter.num + ' ' : '') + (starter.name || 'Pos ' + (pos + 1));
-        addRow(name, getPosTrail(team, sp), s, false);
       }
+      subRowOffsets().forEach(r => {
+        const sub = players[sp + r];
+        const us = tallyAtBats(team, sp, allABs, ab => subRowOf(ab) === r);
+        if (!came(us)) return;
+        const name = (sub.num ? '#' + sub.num + ' ' : '') + (sub.name || 'Sub ' + (pos + 1));
+        addRow(name, sub.pos || '', us, true);
+      });
     }
     rows += '<tr class="gs-totals"><td>Totals</td><td>' + totAB + '</td><td>' + totR + '</td><td>' + totH + '</td><td>' + totRBI + '</td><td>' + totBB + '</td><td></td><td></td></tr>';
     return rows;
@@ -5659,14 +5843,12 @@ function showGameSummary() {
       for (let pos = 0; pos < POSITIONS; pos++) {
         const sp = pos * ROWS_PER_POS;
         const starter = players[sp];
-        const sub = players[sp + 1];
-        const hasSub = starter.atBats.some(ab => ab.subChange);
-        if (hasSub) {
-          consider(starter, tName, starter.atBats, ab => !ab.subChange);
-          consider(sub, tName, starter.atBats, ab => ab.subChange);
-        } else {
-          consider(starter, tName, starter.atBats, () => true);
-        }
+        // Every row of the slot is a candidate on its own at-bats, so a second
+        // substitute can win it too (H3). `consider` skips unnamed rows itself.
+        consider(starter, tName, starter.atBats, ab => subRowOf(ab) === 0);
+        subRowOffsets().forEach(r => {
+          consider(players[sp + r], tName, starter.atBats, ab => subRowOf(ab) === r);
+        });
       }
     });
     // Also check pitchers — dominant pitching performance
@@ -5720,15 +5902,12 @@ function showGameSummary() {
       for (let pos = 0; pos < POSITIONS; pos++) {
         const sp = pos * ROWS_PER_POS;
         const starter = players[sp];
-        const sub = players[sp + 1];
-        const hasSub = starter.atBats.some(ab => ab.subChange);
-        if (hasSub) {
-          if (starter.name) scanNotable((starter.num ? '#' + starter.num + ' ' : '') + starter.name, tName, starter.atBats, ab => !ab.subChange);
-          if (sub.name) scanNotable((sub.num ? '#' + sub.num + ' ' : '') + sub.name, tName, starter.atBats, ab => ab.subChange);
-        } else {
-          if (!starter.name) continue;
-          scanNotable((starter.num ? '#' + starter.num + ' ' : '') + starter.name, tName, starter.atBats, () => true);
-        }
+        // Per row, so a multi-hit game by the second substitute is still notable.
+        if (starter.name) scanNotable((starter.num ? '#' + starter.num + ' ' : '') + starter.name, tName, starter.atBats, ab => subRowOf(ab) === 0);
+        subRowOffsets().forEach(r => {
+          const sub = players[sp + r];
+          if (sub.name) scanNotable((sub.num ? '#' + sub.num + ' ' : '') + sub.name, tName, starter.atBats, ab => subRowOf(ab) === r);
+        });
       }
     });
     // DP plays

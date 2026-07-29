@@ -197,6 +197,14 @@
   function xfail(finding, name, fn) { record(name, fn, finding); }
 
   /* ------------------------------------------------------------ drivers ---*/
+  /* `p` throughout is a lineup *row* index, not a batting spot: a row is
+     `spot * ROWS_PER_POS + subRow`, so with ROWS_PER_POS = 3 the nine starters are
+     0, 3, 6 … 24 and their subs are +1 and +2. The literals below were 0, 2, 4 …
+     while a slot had two rows (H3 moved them). If ROWS_PER_POS changes again, every
+     one of them moves with it — `p_new = floor(p_old / oldRows) * ROWS_PER_POS +
+     p_old % oldRows`, which is the same remap `migrateLineupRows` applies to a save.
+     Expected values compared against `onB`, `occupants`, `curP`, `onBaseFrom`,
+     `nextLeadoff` and the `{p, col}` refs are row indices too. */
   function cellOf(team, p, col) {
     const cell = document.querySelector(`.at-bat-cell[data-team="${team}"][data-p="${p}"][data-inn="${col}"]`);
     if (!cell) fail(`no at-bat cell for ${team} p${p} col${col}`);
@@ -385,7 +393,7 @@
     eq('runner on 1st', onB('visiting', 0, 0), 0);
     eq('batter reached 1st', ab('visiting', 0, 0).bases[0], true);
     eq('result pitch recorded', ab('visiting', 0, 0).pitches.length, 1);
-    eq('next batter selected', curP(), 2);
+    eq('next batter selected', curP(), 3);
     eq('no run scored', rTotal('visiting'), '');
   });
 
@@ -394,8 +402,8 @@
     play('K'); play('K'); play('K');
     eq('outs', inn('visiting', 0).outs, 3);
     eq('first out', ab('visiting', 0, 0).out, 1);
-    eq('second out', ab('visiting', 2, 0).out, 2);
-    eq('third out', ab('visiting', 4, 0).out, 3);
+    eq('second out', ab('visiting', 3, 0).out, 2);
+    eq('third out', ab('visiting', 6, 0).out, 3);
   });
 
   test('three strikes auto-opens the strikeout popup and records the K', () => {
@@ -422,7 +430,7 @@
     play('HR');
     eq('runs in the inning', lsInput('visiting', 0).value, '3');
     eq('R total', rTotal('visiting'), '3');
-    eq('RBI on the homer', ab('visiting', 4, 0).rbi, 3);
+    eq('RBI on the homer', ab('visiting', 6, 0).rbi, 3);
     eq('bases cleared', inn('visiting', 0).bases.filter(b => b !== null).length, 0);
   });
 
@@ -430,7 +438,7 @@
     sel('visiting', 0, 0);
     play('1B'); play('BB'); play('BB'); play('BB');
     eq('R total', rTotal('visiting'), '1');
-    eq('RBI on the walk', ab('visiting', 6, 0).rbi, 1);
+    eq('RBI on the walk', ab('visiting', 9, 0).rbi, 1);
     eq('bases still loaded', inn('visiting', 0).bases.filter(b => b !== null).length, 3);
   });
 
@@ -438,7 +446,7 @@
     sel('visiting', 0, 0);
     play('K'); play('K'); play('K');   // 3rd out made by p4 (batting 3rd)
     flushTimers();                     // half-inning transition
-    eq('stored leadoff for column 1', gameState.nextLeadoff.visiting[1], 6);
+    eq('stored leadoff for column 1', gameState.nextLeadoff.visiting[1], 9);
   });
 
   test('a run lands in the column it was scored in', () => {
@@ -493,10 +501,10 @@
   test('the strikeout popup applies to the batter who struck out, not the cell selected later', () => {
     sel('visiting', 0, 0);
     pitch('S'); pitch('S'); pitch('S');          // popup opens for batter 1
-    sel('visiting', 8, 0);                       // scorer taps batter 5's cell meanwhile
+    sel('visiting', 12, 0);                       // scorer taps batter 5's cell meanwhile
     clickId('k-swinging');
     eq('batter 1 play', ab('visiting', 0, 0).play, 'K');
-    eq('batter 5 play', ab('visiting', 8, 0).play, '');
+    eq('batter 5 play', ab('visiting', 12, 0).play, '');
     eq('outs', inn('visiting', 0).outs, 1);
   });
 
@@ -565,9 +573,9 @@
     play('K'); play('K');                         // 2 outs
     promptPositionPlay('DP ');
     positionPopup('6-4-3');
-    eq('play not recorded', ab('visiting', 4, 0).play, '');
+    eq('play not recorded', ab('visiting', 6, 0).play, '');
     eq('outs', inn('visiting', 0).outs, 2);
-    eq('no pitch left behind', ab('visiting', 4, 0).pitches.length, 0);
+    eq('no pitch left behind', ab('visiting', 6, 0).pitches.length, 0);
   });
 
   // #8
@@ -596,10 +604,10 @@
   test('pitches cannot be charged to a batter after the 3rd out', () => {
     sel('visiting', 0, 0);
     play('K'); play('K'); play('K');
-    sel('visiting', 6, 0);                         // a batter who never came up
+    sel('visiting', 9, 0);                         // a batter who never came up
     pitch('B'); pitch('B'); pitch('B'); pitch('B');
-    eq('pitches', ab('visiting', 6, 0).pitches.length, 0);
-    eq('play', ab('visiting', 6, 0).play, '');
+    eq('pitches', ab('visiting', 9, 0).pitches.length, 0);
+    eq('play', ab('visiting', 9, 0).play, '');
   });
 
   // #27
@@ -632,7 +640,7 @@
     play('1B');                                    // p0 on 1st
     play('1B'); runnerPopup({ 0: 1, batter: 0 });   // runner to 2nd, batter to 1st
     eq('runner on 2nd', onB('visiting', 0, 1), 0);
-    eq('batter on 1st', onB('visiting', 0, 0), 2);
+    eq('batter on 1st', onB('visiting', 0, 0), 3);
     eq('outs', inn('visiting', 0).outs, 0);
   });
 
@@ -654,7 +662,7 @@
     ok('popup still open', visible('runner-popup'));
     runnerPopup({ 1: 3 });                         // send the runner home instead
     eq('runner scored', ab('visiting', 0, 0).bases[3], true);
-    eq('batter on 2nd', onB('visiting', 0, 1), 2);
+    eq('batter on 2nd', onB('visiting', 0, 1), 3);
     eq('outs', inn('visiting', 0).outs, 0);
   });
 
@@ -714,7 +722,7 @@
     positionPopup('6-4-3');
     outcomePopup({ 0: ['out', 1], batter: ['out'] });
     eq('outs', inn('visiting', 0).outs, 2);
-    eq('outs charged to the batter', ab('visiting', 2, 0).outsRecorded, 2);
+    eq('outs charged to the batter', ab('visiting', 3, 0).outsRecorded, 2);
     eq('out log length', inn('visiting', 0).outsLog.length, 2);
     eq('IP', pStat('visiting', 0, 'ip'), '0.2');
   });
@@ -751,7 +759,7 @@
     outcomePopup({ 0: ['out', 1], batter: ['out'] });
     eq('outs', inn('visiting', 0).outs, 3);
     flushTimers();
-    eq('leadoff for the next inning', gameState.nextLeadoff.visiting[1], 6);
+    eq('leadoff for the next inning', gameState.nextLeadoff.visiting[1], 9);
   });
 
   test('the inning after a caught-stealing-ending inning leads off with the batter at the plate', () => {
@@ -761,7 +769,7 @@
     promptCSBase();
     eq('outs', inn('visiting', 0).outs, 3);
     flushTimers();
-    eq('leadoff for the next inning', gameState.nextLeadoff.visiting[1], 6);
+    eq('leadoff for the next inning', gameState.nextLeadoff.visiting[1], 9);
   });
 
   test('the inning after a pickoff-ending inning leads off with the batter at the plate', () => {
@@ -772,7 +780,7 @@
     basePicker(0);
     eq('outs', inn('visiting', 0).outs, 3);
     flushTimers();
-    eq('leadoff for the next inning', gameState.nextLeadoff.visiting[1], 6);
+    eq('leadoff for the next inning', gameState.nextLeadoff.visiting[1], 9);
   });
 
   // #21 — clearing an older play has to give back every out it made, not just the
@@ -783,10 +791,10 @@
     promptPositionPlay('DP ');
     positionPopup('6-4-3');
     outcomePopup({ 0: ['out', 1], batter: ['out'] });
-    sel('visiting', 4, 0);
+    sel('visiting', 6, 0);
     play('K');                                     // a later play, so the DP is not the newest
     eq('outs before the clear', inn('visiting', 0).outs, 3);
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     clearSelectedCell();                           // clear the DP
     eq('outs', inn('visiting', 0).outs, 1);
     eq('out log length', inn('visiting', 0).outsLog.length, 1);
@@ -799,11 +807,11 @@
   test('clearing the middle out renumbers the outs after it', () => {
     sel('visiting', 0, 0);
     play('K'); play('K'); play('K');
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     clearSelectedCell();                           // clear the 2nd out
     eq('outs', inn('visiting', 0).outs, 2);
     eq('first out', ab('visiting', 0, 0).out, 1);
-    eq('the 3rd out is now the 2nd', ab('visiting', 4, 0).out, 2);
+    eq('the 3rd out is now the 2nd', ab('visiting', 6, 0).out, 2);
     eq('IP', pStat('visiting', 0, 'ip'), '0.2');
   });
 
@@ -815,9 +823,9 @@
     play('1B'); play('1B'); runnerPopup({ 0: 1, batter: 0 });
     promptPositionPlay('TP ');
     positionPopup('6-4-3');
-    eq('play not recorded', ab('visiting', 6, 0).play, '');
+    eq('play not recorded', ab('visiting', 9, 0).play, '');
     eq('outs', inn('visiting', 0).outs, 1);
-    eq('no pitch left behind', ab('visiting', 6, 0).pitches.length, 0);
+    eq('no pitch left behind', ab('visiting', 9, 0).pitches.length, 0);
   });
 
   // Batting around continues one real inning across two columns. Each column logs
@@ -860,7 +868,7 @@
     sel('visiting', 0, 0);
     for (let i = 0; i < 9; i++) play('BB');          // bats around; 6 in, bases loaded
     eq('overflowed to the next column', curCol(), 1);
-    eq('runner on 3rd came up in column 0', onBaseFrom('visiting', 1, 2), '12@0');
+    eq('runner on 3rd came up in column 0', onBaseFrom('visiting', 1, 2), '18@0');
     play('BB'); play('BB'); play('BB');              // p0 up again in column 1
     eq('runner on 3rd now came up in column 1', onBaseFrom('visiting', 1, 2), '0@1');
   });
@@ -888,8 +896,8 @@
     eq('seven runs', lsInput('visiting', 0).value, '7');
     undoLastPlay();
     eq('back to six runs', lsInput('visiting', 0).value, '6');
-    eq('the runner is back on 3rd', onB('visiting', 1, 2), 12);
-    eq('his column-0 cell shows no run', ab('visiting', 12, 0).bases[3], false);
+    eq('the runner is back on 3rd', onB('visiting', 1, 2), 18);
+    eq('his column-0 cell shows no run', ab('visiting', 18, 0).bases[3], false);
     eq('the batter has no play', ab('visiting', 0, 1).play, '');
     basesConsistent('visiting', 1);
   });
@@ -915,7 +923,7 @@
     eq('outs', inn('visiting', 0).outs, 0);
     eq('out log length', inn('visiting', 0).outsLog.length, 0);
     eq('runner back on 1st', onB('visiting', 0, 0), 0);
-    eq('batter has no play', ab('visiting', 2, 0).play, '');
+    eq('batter has no play', ab('visiting', 3, 0).play, '');
     eq('IP', pStat('visiting', 0, 'ip'), '');
   });
 
@@ -1006,7 +1014,7 @@
     ok('2nd is still offered', !rpBtn(0, 1).disabled);
     runnerPopup({ 0: 1, batter: 0 });
     eq('runner on 2nd', onB('visiting', 0, 1), 0);
-    eq('batter on 1st', onB('visiting', 0, 0), 2);
+    eq('batter on 1st', onB('visiting', 0, 0), 3);
   });
 
   test('the runner popup will not send a runner past a lead runner who holds', () => {
@@ -1029,7 +1037,7 @@
     play('1B'); runnerPopup({ 1: 3, batter: 0 });   // p0 scores, p2 on 1st
     play('2B'); runnerPopup({ 0: 3, batter: 1 });   // p2 scores from 1st, p4 on 2nd
     eq('runs', lsInput('visiting', 0).value, '2');
-    eq('batter on 2nd', onB('visiting', 0, 1), 4);
+    eq('batter on 2nd', onB('visiting', 0, 1), 6);
     basesConsistent('visiting', 0);
   });
 
@@ -1040,7 +1048,7 @@
     play('1B');                                    // p0 on 1st
     play('K+WP'); runnerPopup({ 0: 1, batter: 0 }); // runner to 2nd, batter to 1st
     eq('runner on 2nd', onB('visiting', 0, 1), 0);
-    eq('batter on 1st', onB('visiting', 0, 0), 2);
+    eq('batter on 1st', onB('visiting', 0, 0), 3);
     eq('the runner kept his advancement', ab('visiting', 0, 0).bases[1], true);
     basesConsistent('visiting', 0);
   });
@@ -1055,7 +1063,7 @@
     ok('out at 2nd is still offered', !ocBtn(0, 'out', 1).disabled);
     outcomePopup({ 0: ['safe', 1], batter: ['safe', 0] });
     eq('runner on 2nd', onB('visiting', 0, 1), 0);
-    eq('batter on 1st', onB('visiting', 0, 0), 2);
+    eq('batter on 1st', onB('visiting', 0, 0), 3);
   });
 
   test('the DP outcome popup offers a hold but will not confirm one out', () => {
@@ -1084,7 +1092,7 @@
     positionPopup('6-4-3');
     outcomePopup({});                              // Confirm, nothing touched
     eq('outs', inn('visiting', 0).outs, 2);
-    eq('outs recorded on the play', ab('visiting', 2, 0).outsRecorded, 2);
+    eq('outs recorded on the play', ab('visiting', 3, 0).outsRecorded, 2);
     eq('the forced runner did not advance', onB('visiting', 0, 1), null);
     eq('and is off 1st', onB('visiting', 0, 0), null);
   });
@@ -1135,8 +1143,8 @@
     play('2B'); runnerPopup({ 2: 2, batter: 1 });   // p0 holds 3rd, p2 on 2nd
     key('r');
     eq('the runner on 3rd stole home', lsInput('visiting', 0).value, '1');
-    eq('the runner on 2nd stayed put', onB('visiting', 0, 1), 2);
-    eq('the runner on 2nd did not advance', ab('visiting', 2, 0).bases[2], false);
+    eq('the runner on 2nd stayed put', onB('visiting', 0, 1), 3);
+    eq('the runner on 2nd did not advance', ab('visiting', 3, 0).bases[2], false);
     basesConsistent('visiting', 0);
   });
 
@@ -1146,11 +1154,11 @@
     sel('visiting', 0, 0);
     play('3B');                                    // p0 on 3rd
     play('2B'); runnerPopup({ 2: 2, batter: 1 });   // p0 holds 3rd, p2 on 2nd
-    sel('visiting', 4, 0);
+    sel('visiting', 6, 0);
     applyRunnerEvent('SB');
     eq('R total', rTotal('visiting'), '');
-    eq('the runner did not reach home', ab('visiting', 2, 0).bases[3], false);
-    eq('runner still on 2nd', onB('visiting', 0, 1), 2);
+    eq('the runner did not reach home', ab('visiting', 3, 0).bases[3], false);
+    eq('runner still on 2nd', onB('visiting', 0, 1), 3);
     eq('runner still on 3rd', onB('visiting', 0, 2), 0);
   });
 
@@ -1180,15 +1188,15 @@
     sel('visiting', 0, 0);
     play('1B');                                    // p0 on 1st
     play('K');                                     // p2 struck out
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     editPlay('1B');                                // would put p2 on an occupied 1st
-    eq('play unchanged', ab('visiting', 2, 0).play, 'K');
+    eq('play unchanged', ab('visiting', 3, 0).play, 'K');
     eq('runner on 1st unchanged', onB('visiting', 0, 0), 0);
     eq('outs', inn('visiting', 0).outs, 1);
     // The refusal is judged after the old play has been taken off the card, so the
     // rollback has to put all of it back — the out log included.
     eq('out log intact', inn('visiting', 0).outsLog.length, 1);
-    eq('the out number is still on his cell', ab('visiting', 2, 0).out, 1);
+    eq('the out number is still on his cell', ab('visiting', 3, 0).out, 1);
     basesConsistent('visiting', 0);
   });
 
@@ -1196,10 +1204,10 @@
     sel('visiting', 0, 0);
     play('1B');                                    // p0 on 1st
     play('K');
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     editPlay('2B', { 0: 2, batter: 1 });           // the change re-asks the runners
-    eq('play', ab('visiting', 2, 0).play, '2B');
-    eq('batter on 2nd', onB('visiting', 0, 1), 2);
+    eq('play', ab('visiting', 3, 0).play, '2B');
+    eq('batter on 2nd', onB('visiting', 0, 1), 3);
     eq('the runner was sent to 3rd', onB('visiting', 0, 2), 0);
     eq('outs', inn('visiting', 0).outs, 0);
   });
@@ -1213,7 +1221,7 @@
     play('1B'); runnerPopup({ 2: 2, batter: 0 });   // p0 holds 3rd, p2 on 1st
     key('n');                                      // wild pitch
     eq('run scored', lsInput('visiting', 0).value, '1');
-    eq('trailing runner on 2nd', onB('visiting', 0, 1), 2);
+    eq('trailing runner on 2nd', onB('visiting', 0, 1), 3);
     eq('3rd empty', onB('visiting', 0, 2), null);
     basesConsistent('visiting', 0);
   });
@@ -1226,9 +1234,9 @@
     play('BB');
     eq('run scored', lsInput('visiting', 0).value, '1');
     eq('runner from 3rd scored', ab('visiting', 0, 0).bases[3], true);
-    eq('1st', onB('visiting', 0, 0), 6);
-    eq('2nd', onB('visiting', 0, 1), 4);
-    eq('3rd', onB('visiting', 0, 2), 2);
+    eq('1st', onB('visiting', 0, 0), 9);
+    eq('2nd', onB('visiting', 0, 1), 6);
+    eq('3rd', onB('visiting', 0, 2), 3);
     basesConsistent('visiting', 0);
   });
 
@@ -1239,8 +1247,8 @@
     play('BB');
     eq('no run scored', rTotal('visiting'), '');
     eq('runner still on 3rd', onB('visiting', 0, 2), 0);
-    eq('forced runner on 2nd', onB('visiting', 0, 1), 2);
-    eq('batter on 1st', onB('visiting', 0, 0), 4);
+    eq('forced runner on 2nd', onB('visiting', 0, 1), 3);
+    eq('batter on 1st', onB('visiting', 0, 0), 6);
   });
 
   test('a grand slam clears the bases and scores four', () => {
@@ -1250,7 +1258,7 @@
     play('1B'); runnerPopup({ 1: 2, 0: 1, batter: 0 });   // bases loaded
     play('HR');
     eq('runs', lsInput('visiting', 0).value, '4');
-    eq('RBI', ab('visiting', 6, 0).rbi, 4);
+    eq('RBI', ab('visiting', 9, 0).rbi, 4);
     eq('bases empty', inn('visiting', 0).bases.filter(b => b !== null).length, 0);
   });
 
@@ -1452,14 +1460,14 @@
     play('HR');                                     // walk-off, 1-0
     ok('game recognised as over', gameOverShown);
     ok('no notice for the play that ended it', !visible('play-reject'));
-    sel('home', 2, 8);
+    sel('home', 3, 8);
     play('HR');                                     // the extra one
     eq('it was recorded', rTotal('home'), '2');
     ok('and the card said so', visible('play-reject'));
     eq('as a notice, not a refusal', document.getElementById('play-reject').dataset.tone, 'notice');
     // Once. A second correction on the same final card doesn't nag.
     document.getElementById('play-reject').style.display = 'none';
-    sel('home', 4, 8);
+    sel('home', 6, 8);
     play('1B');
     ok('no second notice', !visible('play-reject'));
   });
@@ -1471,7 +1479,7 @@
     eq('with the score', document.getElementById('ls-count').textContent, '0-1');
     // The one writer that repaints on every selection used to overwrite it, so the
     // marker survived until the scorer's next tap and no further.
-    sel('visiting', 4, 2);
+    sel('visiting', 6, 2);
     eq('still FINAL after selecting an earlier cell', document.getElementById('ls-inning').textContent, 'FINAL');
   });
 
@@ -1508,11 +1516,11 @@
     key('c');                                       // CLR All, past the backdrop
     ok('the refusal is shown', visible('play-reject'));
     ok('the popup is still open', visible('runner-popup'));
-    eq('the play is still there', ab('visiting', 2, 0).play, '1B');
+    eq('the play is still there', ab('visiting', 3, 0).play, '1B');
     // And answering it still works — the refusal is not a lockup.
     runnerPopup({ 0: 1, batter: 0 });
     eq('runner on 2nd', onB('visiting', 0, 1), 0);
-    eq('batter on 1st', onB('visiting', 0, 0), 2);
+    eq('batter on 1st', onB('visiting', 0, 0), 3);
   });
 
   // H1 — E was a hand-typed input while R, H and LOB were all derived, so the card
@@ -1616,12 +1624,12 @@
     play('1B');
     play('1B'); runnerPopup({ 0: 1, batter: 0 });    // p0 on 2nd, p2 on 1st
     play('K');                                       // p4 strikes out
-    sel('visiting', 4, 0);
+    sel('visiting', 6, 0);
     editPlay('HR');
     eq('three runs', lsInput('visiting', 0).value, '3');
-    eq('three RBI', ab('visiting', 4, 0).rbi, 3);
+    eq('three RBI', ab('visiting', 6, 0).rbi, 3);
     eq('lead runner scored', ab('visiting', 0, 0).bases[3], true);
-    eq('trailing runner scored', ab('visiting', 2, 0).bases[3], true);
+    eq('trailing runner scored', ab('visiting', 3, 0).bases[3], true);
     eq('bases empty', JSON.stringify(inn('visiting', 0).bases), '[null,null,null]');
     eq('the out came off', inn('visiting', 0).outs, 0);
   });
@@ -1629,10 +1637,10 @@
   test('changing a home run back to a strikeout empties the bases again', () => {
     sel('visiting', 0, 0);
     play('1B');
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     play('HR');
     eq('two runs', lsInput('visiting', 0).value, '2');
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     editPlay('K');
     eq('the batter is not on a base', onB('visiting', 0, 0), 0);
     eq('one out', inn('visiting', 0).outs, 1);
@@ -1641,7 +1649,7 @@
     // is off the board. A strikeout advances nobody, so there is nothing to re-ask.
     eq('the runner he drove in goes back to 1st', ab('visiting', 0, 0).bases[3], false);
     eq('no runs', lsInput('visiting', 0).value, '');
-    eq('no RBI', ab('visiting', 2, 0).rbi, 0);
+    eq('no RBI', ab('visiting', 3, 0).rbi, 0);
   });
 
   /* The rest of #22. A change of play type used to adjust the batter's own bases
@@ -1652,7 +1660,7 @@
     sel('visiting', 0, 0);
     play('1B');                                      // p0 on 1st
     play('1B'); runnerPopup({ 0: 2, batter: 0 });     // p0 sent to 3rd, p2 on 1st
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     editPlay('K');                                   // a strikeout advances nobody
     eq('the runner goes back to 1st', onB('visiting', 0, 0), 0);
     eq('nobody on 3rd', onB('visiting', 0, 2), null);
@@ -1665,7 +1673,7 @@
     sel('visiting', 0, 0);
     play('1B');                                      // p0 on 1st
     play('1B'); runnerPopup({ 0: 1, batter: 0 });     // p0 to 2nd, p2 on 1st
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     // The single's advancement comes off first, so the popup asks from 1st — and
     // this time the sacrifice moves him to 2nd rather than the single doing it.
     editPlay('SH', { 0: 1 });
@@ -1673,18 +1681,18 @@
     eq('the batter is out', inn('visiting', 0).outs, 1);
     eq('nobody else on base', occupants('visiting', 0).join(','), '0');
     // The advance is stamped to the new play, so clearing it takes it back again.
-    eq('stamped to the batter who sacrificed', JSON.stringify(ab('visiting', 0, 0).advSrc[1]), '{"p":2,"col":0}');
+    eq('stamped to the batter who sacrificed', JSON.stringify(ab('visiting', 0, 0).advSrc[1]), '{"p":3,"col":0}');
   });
 
   test('a strikeout rewritten as a double play is judged on the outs left', () => {
     sel('visiting', 0, 0);
     play('1B');                                      // p0 on 1st
     play('K'); play('K');                            // 2 outs
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     // Legal: this cell's own out comes off first, leaving one out and a runner to
     // double off. Entered as a DP it makes both outs, ending the inning.
     editPlayCustom('DP 6-4-3', { 0: ['out', 1], batter: ['out'] });
-    eq('play', ab('visiting', 2, 0).play, 'DP 6-4-3');
+    eq('play', ab('visiting', 3, 0).play, 'DP 6-4-3');
     eq('three outs', inn('visiting', 0).outs, 3);
     eq('out log', inn('visiting', 0).outsLog.length, 3);
     eq('the runner is off the bases', occupants('visiting', 0).length, 0);
@@ -1759,13 +1767,13 @@
     play('1B');                                      // p0 on 1st
     play('1B'); runnerPopup({ 0: 1, batter: 0 });     // p2 singles, p0 to 2nd
     play('K');                                       // an out after it, so it isn't the latest
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     clearSelectedCell();                             // clear p2's single
     eq('the runner is back on 1st', onB('visiting', 0, 0), 0);
     eq('nobody on 2nd', onB('visiting', 0, 1), null);
     eq('his 2nd-base mark is gone', ab('visiting', 0, 0).bases[1], false);
     eq('he keeps the base he singled to', ab('visiting', 0, 0).bases[0], true);
-    eq('the batter is gone from the card', ab('visiting', 2, 0).play, '');
+    eq('the batter is gone from the card', ab('visiting', 3, 0).play, '');
   });
 
   test('clearing an older play leaves a base the runner stole', () => {
@@ -1774,7 +1782,7 @@
     promptSBBase(); basePicker(0);                    // steals 2nd — his own, not a play's
     play('1B'); runnerPopup({ 1: 2, batter: 0 });     // p2 singles, p0 to 3rd
     play('K');
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     clearSelectedCell();
     eq('back on the base he stole', onB('visiting', 0, 1), 0);
     eq('the stolen base is still marked', ab('visiting', 0, 0).bases[1], true);
@@ -1791,12 +1799,12 @@
     play('1B'); runnerPopup({ 0: 1, batter: 0 });     // p4 singles, p2 to 2nd, p4 to 1st
     play('K');                                       // so p2's single isn't the latest
     eq('a run scored', lsInput('visiting', 0).value, '1');
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     clearSelectedCell();                             // clear the single that drove p0 in
     // p0 would go back to 1st, but p4 is standing there off a later single.
     eq('p0 keeps the run', ab('visiting', 0, 0).bases[3], true);
     eq('the run stays on the board', lsInput('visiting', 0).value, '1');
-    eq('p4 keeps 1st', onB('visiting', 0, 0), 4);
+    eq('p4 keeps 1st', onB('visiting', 0, 0), 6);
     eq('p2 is off the card, so 2nd is empty', onB('visiting', 0, 1), null);
     eq('nobody shares a base', new Set(occupants('visiting', 0)).size, 1);
   });
@@ -1808,7 +1816,7 @@
     play('1B');                                      // p0 on 1st
     play('1B'); runnerPopup({ 0: 3, batter: 0 });     // p2 singles p0 home, p2 to 1st
     play('K');
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     clearSelectedCell();
     eq('p0 is back on 1st', onB('visiting', 0, 0), 0);
     eq('his run came off', ab('visiting', 0, 0).bases[3], false);
@@ -1824,11 +1832,11 @@
     play('1B');                                      // p0 on 1st
     play('HR');                                      // p2 drives him in and himself
     eq('two runs', lsInput('visiting', 0).value, '2');
-    eq('two RBI', ab('visiting', 2, 0).rbi, 2);
+    eq('two RBI', ab('visiting', 3, 0).rbi, 2);
     sel('visiting', 0, 0);
     clearSelectedCell();                             // the man who scored comes off
     eq('one run left', lsInput('visiting', 0).value, '1');
-    eq('and one RBI', ab('visiting', 2, 0).rbi, 1);
+    eq('and one RBI', ab('visiting', 3, 0).rbi, 1);
   });
 
   test('rewriting the man who scored as an out takes the RBI with it', () => {
@@ -1838,7 +1846,7 @@
     sel('visiting', 0, 0);
     editPlay('K');                                   // the leadoff single never happened
     eq('only the home run scored', lsInput('visiting', 0).value, '1');
-    eq('so one RBI', ab('visiting', 2, 0).rbi, 1);
+    eq('so one RBI', ab('visiting', 3, 0).rbi, 1);
   });
 
   // The run is stamped to the play that drove it in, so clearing a play in the
@@ -1849,11 +1857,11 @@
     play('1B');                                      // p0 on 1st
     play('1B'); runnerPopup({ 0: 1, batter: 0 });     // p2 singles, p0 to 2nd
     play('1B'); runnerPopup({ 1: 3, 0: 1, batter: 0 });  // p4 singles p0 home, p2 to 2nd
-    eq('p4 has the RBI', ab('visiting', 4, 0).rbi, 1);
-    sel('visiting', 2, 0);
+    eq('p4 has the RBI', ab('visiting', 6, 0).rbi, 1);
+    sel('visiting', 3, 0);
     clearSelectedCell();                             // clear the single that moved p0 up
     eq('the run came off', lsInput('visiting', 0).value, '');
-    eq('so did the RBI', ab('visiting', 4, 0).rbi, 0);
+    eq('so did the RBI', ab('visiting', 6, 0).rbi, 0);
   });
 
   // A scorer's manual RBI override is not contradicted by a run that is still on the
@@ -1863,10 +1871,10 @@
     play('1B');
     play('1B'); runnerPopup({ 0: 3, batter: 0 });     // p2 singles p0 home
     play('K');
-    sel('visiting', 4, 0);
+    sel('visiting', 6, 0);
     clearSelectedCell();                             // clear the strikeout
     eq('the run stands', lsInput('visiting', 0).value, '1');
-    eq('and so does the RBI', ab('visiting', 2, 0).rbi, 1);
+    eq('and so does the RBI', ab('visiting', 3, 0).rbi, 1);
   });
 
   test('clearing a double play gives back both outs and the runner', () => {
@@ -1877,7 +1885,7 @@
     outcomePopup({ 0: ['out', 1], batter: ['out'] });
     play('K');                                       // 3rd out, so the DP isn't the latest
     eq('three outs', inn('visiting', 0).outs, 3);
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     clearSelectedCell();                             // clear the double play
     eq('one out left', inn('visiting', 0).outs, 1);
     eq('the runner is back on 1st', onB('visiting', 0, 0), 0);
@@ -1904,7 +1912,7 @@
   test('clearing a play but keeping its pitches gives back its out', () => {
     sel('visiting', 0, 0);
     play('K'); play('K');
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     clearPlayKeepPitches();
     eq('one out left', inn('visiting', 0).outs, 1);
     eq('out log', inn('visiting', 0).outsLog.length, 1);
@@ -1914,15 +1922,15 @@
   test('clearing a play but keeping its pitches also sends the runners back', () => {
     sel('visiting', 0, 0);
     play('1B');
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     pitch('S'); pitch('B');
     play('1B'); runnerPopup({ 0: 1, batter: 0 });     // p0 to 2nd
     play('K'); play('K');                            // no longer the latest play
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     clearPlayKeepPitches();
     eq('the runner is back on 1st', onB('visiting', 0, 0), 0);
-    eq('pitches kept', ab('visiting', 2, 0).pitches.join(''), 'SB');
-    eq('play cleared', ab('visiting', 2, 0).play, '');
+    eq('pitches kept', ab('visiting', 3, 0).pitches.join(''), 'SB');
+    eq('play cleared', ab('visiting', 3, 0).play, '');
   });
 
   // The #21 shape in the one path Phase 6 didn't rewire: the outs came off the log
@@ -1935,7 +1943,7 @@
     positionPopup('6-4-3');
     outcomePopup({ 0: ['out', 1], batter: ['out'] });
     eq('two outs', inn('visiting', 0).outs, 2);
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     clearPlayKeepPitches();
     eq('both outs came off', inn('visiting', 0).outs, 0);
     eq('out log empty', inn('visiting', 0).outsLog.length, 0);
@@ -1962,7 +1970,7 @@
     sel('visiting', 0, 0);
     play('1B');
     ok('the 1st has records', inningHasRecords('visiting', 0));
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     pitch('B');
     ok('pitches alone count as records', inningHasRecords('visiting', 0));
   });
@@ -1991,8 +1999,8 @@
     sel('visiting', 0, 0);
     play('1B');                                     // p0 on 1st
     play('E6'); runnerPopup({ 0: 2, batter: 1 });   // p0 to 3rd, batter takes 2nd
-    eq('the batter is on 2nd', onB('visiting', 0, 1), 2);
-    ok('and his card is charged to the error', ab('visiting', 2, 0).reachedOnError);
+    eq('the batter is on 2nd', onB('visiting', 0, 1), 3);
+    ok('and his card is charged to the error', ab('visiting', 3, 0).reachedOnError);
   });
 
   test('a batter held at first on the error is charged to it too', () => {
@@ -2010,7 +2018,7 @@
     positionPopup('6-4-3');
     outcomePopup({ 2: ['safe', 3], 0: ['out', 1], batter: ['out'] });
     eq('the run is on the board', lsInput('visiting', 0).value, '1');
-    eq('but the double play earns no RBI', ab('visiting', 4, 0).rbi, 0);
+    eq('but the double play earns no RBI', ab('visiting', 6, 0).rbi, 0);
   });
 
   // A fielder's choice is not covered by the rule — that run is the batter's.
@@ -2022,7 +2030,7 @@
     positionPopup('6');
     outcomePopup({ 2: ['safe', 3], 0: ['out', 1], batter: ['safe', 0] });
     eq('the run is on the board', lsInput('visiting', 0).value, '1');
-    eq('and it is his RBI', ab('visiting', 4, 0).rbi, 1);
+    eq('and it is his RBI', ab('visiting', 6, 0).rbi, 1);
   });
 
   // #12 — the other half: a run scored on the wild pitch of a K+WP came in on the
@@ -2032,7 +2040,7 @@
     play('3B');                                     // p0 on 3rd
     play('K+WP'); runnerPopup({ 2: 3, batter: 0 }); // he comes home on the wild pitch
     eq('the run is on the board', lsInput('visiting', 0).value, '1');
-    eq('but a strikeout drives in nobody', ab('visiting', 2, 0).rbi, 0);
+    eq('but a strikeout drives in nobody', ab('visiting', 3, 0).rbi, 0);
   });
 
   // #13 — a throwing error on a steal leaves no error play on any cell, so the
@@ -2092,8 +2100,8 @@
     sel('visiting', 0, 0);
     play('3B');                                     // p0 on 3rd
     play('SF'); runnerPopup({ 2: 3, batter: 0 });   // he tags and scores
-    eq('the run is his RBI', ab('visiting', 2, 0).rbi, 1);
-    eq('and the sacrifice costs no at-bat', bStat('visiting', 2, 'ab'), '');
+    eq('the run is his RBI', ab('visiting', 3, 0).rbi, 1);
+    eq('and the sacrifice costs no at-bat', bStat('visiting', 3, 'ab'), '');
   });
 
   test('a sacrifice bunt that moves a runner costs no at-bat', () => {
@@ -2101,7 +2109,7 @@
     play('1B');                                     // p0 on 1st
     play('SH'); runnerPopup({ 0: 1, batter: 0 });   // bunted to 2nd
     eq('the bunt did its job', onB('visiting', 0, 1), 0);
-    eq('so it costs no at-bat', bStat('visiting', 2, 'ab'), '');
+    eq('so it costs no at-bat', bStat('visiting', 3, 'ab'), '');
   });
 
   /* =====================================================================
@@ -2166,7 +2174,7 @@
   // An at-bat cell is a diamond, a play code and an out number — all graphical.
   // The label has to say the same thing in words, and stay in step with it.
   test('an empty at-bat cell says where it is', () => {
-    eq('by side, order and inning', aria('visiting', 8, 3), 'Visiting, batting order 5, inning 4, empty');
+    eq('by side, order and inning', aria('visiting', 12, 3), 'Visiting, batting order 5, inning 4, empty');
     eq('and the home side says so', aria('home', 0, 0), 'Home, batting order 1, inning 1, empty');
   });
 
@@ -2175,7 +2183,7 @@
     play('1B');
     eq('a single, and where he is', aria('visiting', 0, 0), 'Visiting, batting order 1, inning 1: 1B, on 1st');
     play('K');
-    eq('and an out is numbered', aria('visiting', 2, 0), 'Visiting, batting order 2, inning 1: K, out 1');
+    eq('and an out is numbered', aria('visiting', 3, 0), 'Visiting, batting order 2, inning 1: K, out 1');
   });
 
   test('a run and its RBI are in the label', () => {
@@ -2183,7 +2191,7 @@
     play('1B');
     play('HR');
     eq('the man who came round', aria('visiting', 0, 0), 'Visiting, batting order 1, inning 1: 1B, scored');
-    eq('and the man who drove him in', aria('visiting', 2, 0), 'Visiting, batting order 2, inning 1: HR, 2 RBI, scored');
+    eq('and the man who drove him in', aria('visiting', 3, 0), 'Visiting, batting order 2, inning 1: HR, 2 RBI, scored');
   });
 
   test('an unearned run says so', () => {
@@ -2216,7 +2224,7 @@
     const a = sel('visiting', 0, 0);
     ok('the selected cell is marked current', a.getAttribute('aria-current') === 'true');
     ok('and announced', liveRegion().startsWith('Selected Visiting, batting order 1, inning 1'));
-    const b = sel('visiting', 4, 2);
+    const b = sel('visiting', 6, 2);
     ok('the old one is no longer current', !a.hasAttribute('aria-current'));
     ok('the new one is', b.getAttribute('aria-current') === 'true');
     ok('and it is announced too', liveRegion().indexOf('batting order 3, inning 3') > 0);
@@ -2233,8 +2241,8 @@
   function decisions() { return computePitcherDecisions(); }
 
   test('a tie yields no decisions at all', () => {
-    solo('visiting', 0, 0); threeK('visiting', 2, 0);
-    solo('home', 0, 0); threeK('home', 2, 0);
+    solo('visiting', 0, 0); threeK('visiting', 3, 0);
+    solo('home', 0, 0); threeK('home', 3, 0);
     const d = decisions();
     eq('nobody won', d.winTeam, null);
     eq('no W', d.wp, null);
@@ -2245,13 +2253,13 @@
   // the loss belongs to whoever put the go-ahead runner on, not to whoever gave
   // up the most earned runs.
   test('a lead taken, lost and retaken charges the L to the go-ahead run\'s pitcher', () => {
-    solo('visiting', 0, 0); threeK('visiting', 2, 0);          // V 1-0, off home #0
-    solo('home', 0, 0); solo('home', 2, 0);                    // H 2-1
-    threeK('home', 4, 0);
+    solo('visiting', 0, 0); threeK('visiting', 3, 0);          // V 1-0, off home #0
+    solo('home', 0, 0); solo('home', 3, 0);                    // H 2-1
+    threeK('home', 6, 0);
     sel('visiting', 0, 1); usePitcher(1);                      // home goes to the pen
     solo('visiting', 0, 1);                                    // 2-2
-    solo('visiting', 2, 1);                                    // V 3-2, and holds
-    threeK('visiting', 4, 1);
+    solo('visiting', 3, 1);                                    // V 3-2, and holds
+    threeK('visiting', 6, 1);
     const d = decisions();
     eq('the visitors won', d.winTeam, 'visiting');
     eq('the go-ahead run is charged to the reliever', d.lp, 1);
@@ -2265,7 +2273,7 @@
   test('a starter pulled short of 5 innings hands the win to the scorer', () => {
     solo('visiting', 0, 0);                                    // V 1-0, and it holds
     for (let i = 0; i < 6; i++) {
-      threeK('visiting', i === 0 ? 2 : 0, i);
+      threeK('visiting', i === 0 ? 3 : 0, i);
       if (i === 3) { sel('home', 0, 3); usePitcher(1); }       // visitors go to the pen
       threeK('home', 0, i);
     }
@@ -2281,7 +2289,7 @@
   test('the scorer\'s pick overrides what the rules worked out', () => {
     solo('visiting', 0, 0);
     for (let i = 0; i < 6; i++) {
-      threeK('visiting', i === 0 ? 2 : 0, i);
+      threeK('visiting', i === 0 ? 3 : 0, i);
       if (i === 3) { sel('home', 0, 3); usePitcher(1); }
       threeK('home', 0, i);
     }
@@ -2294,8 +2302,8 @@
   // Rule 9.19, first condition: entered with a lead of three or fewer and
   // pitched at least an inning.
   test('a save for a reliever who enters with a small lead and finishes an inning', () => {
-    solo('visiting', 0, 0); solo('visiting', 2, 0);            // V 2-0
-    threeK('visiting', 4, 0);
+    solo('visiting', 0, 0); solo('visiting', 3, 0);            // V 2-0
+    threeK('visiting', 6, 0);
     threeK('home', 0, 0);                                      // starter's inning
     threeK('visiting', 0, 1);
     sel('home', 0, 1); usePitcher(1);                          // reliever in for the 2nd
@@ -2307,8 +2315,8 @@
 
   // Third condition: three innings of relief, whatever the lead.
   test('a save for three innings of relief regardless of the lead', () => {
-    for (let r = 0; r < 6; r++) solo('visiting', r * 2, 0);    // V 6-0
-    threeK('visiting', 12, 0);
+    for (let r = 0; r < 6; r++) solo('visiting', r * ROWS_PER_POS, 0);    // V 6-0
+    threeK('visiting', 18, 0);
     threeK('home', 0, 0);
     sel('home', 0, 1); usePitcher(1);                          // reliever in for the 2nd
     for (let i = 1; i <= 3; i++) { threeK('visiting', 0, i); threeK('home', 0, i); }
@@ -2320,12 +2328,12 @@
   // Second condition: he came in with the tying run on deck — lead of three with
   // a man on — and got only one out, so neither of the other conditions applies.
   test('a save for a reliever who enters with the tying run on deck', () => {
-    solo('visiting', 0, 0); solo('visiting', 2, 0); solo('visiting', 4, 0);   // V 3-0
-    threeK('visiting', 6, 0);
+    solo('visiting', 0, 0); solo('visiting', 3, 0); solo('visiting', 6, 0);   // V 3-0
+    threeK('visiting', 9, 0);
     sel('home', 0, 0);
     play('1B');                                                // a man on off the starter
     play('K'); play('K');                                      // two away
-    sel('home', 6, 0); usePitcher(1);                          // reliever in
+    sel('home', 9, 0); usePitcher(1);                          // reliever in
     play('K');                                                 // he gets the third
     const d = decisions();
     eq('he got one out', pitcherOutCounts('visiting')[1], 1);
@@ -2333,11 +2341,11 @@
   });
 
   test('no save for a reliever who enters with the game out of reach', () => {
-    for (let r = 0; r < 6; r++) solo('visiting', r * 2, 0);    // V 6-0
-    threeK('visiting', 12, 0);
+    for (let r = 0; r < 6; r++) solo('visiting', r * ROWS_PER_POS, 0);    // V 6-0
+    threeK('visiting', 18, 0);
     sel('home', 0, 0);
     play('K'); play('K');
-    sel('home', 4, 0); usePitcher(1);
+    sel('home', 6, 0); usePitcher(1);
     play('K');
     const d = decisions();
     eq('he finished it', finishingPitcher('visiting'), 1);
@@ -2347,8 +2355,8 @@
   // No pitcher holds a win and a save in the same game, so handing the win to
   // the man who finished it has to take the save off him.
   test('giving the win to the pitcher who finished takes his save away', () => {
-    solo('visiting', 0, 0); solo('visiting', 2, 0);
-    threeK('visiting', 4, 0);
+    solo('visiting', 0, 0); solo('visiting', 3, 0);
+    threeK('visiting', 6, 0);
     threeK('home', 0, 0);
     threeK('visiting', 0, 1);
     sel('home', 0, 1); usePitcher(1);
@@ -2361,8 +2369,8 @@
   });
 
   test('the scorer can take a save away', () => {
-    solo('visiting', 0, 0); solo('visiting', 2, 0);
-    threeK('visiting', 4, 0);
+    solo('visiting', 0, 0); solo('visiting', 3, 0);
+    threeK('visiting', 6, 0);
     threeK('home', 0, 0);
     threeK('visiting', 0, 1);
     sel('home', 0, 1); usePitcher(1);
@@ -2375,7 +2383,7 @@
   // A game saved before `ab.seq` existed has no play order to sort runs by, so
   // the timeline falls back to column-then-batting-order and says so.
   test('a game with no recorded play order is flagged approximate', () => {
-    solo('visiting', 0, 0); threeK('visiting', 2, 0);
+    solo('visiting', 0, 0); threeK('visiting', 3, 0);
     threeK('home', 0, 0);
     gameState.teams.visiting.players[0].atBats[0].seq = 0;   // as an older save has it
     ok('the summary will say so', decisions().approximate);
@@ -2400,7 +2408,7 @@
     ok('the refusal is shown', visible('play-reject'));
     runnerPopup({ 0: 2, batter: 1 });               // answer it — the entry completes
     eq('the runner is on 3rd', onB('visiting', 0, 2), 0);
-    eq('the batter on 2nd', onB('visiting', 0, 1), 2);
+    eq('the batter on 2nd', onB('visiting', 0, 1), 3);
   });
 
   test('undo works again once the popup is answered', () => {
@@ -2408,7 +2416,7 @@
     play('1B');
     play('2B'); runnerPopup({ 0: 2, batter: 1 });
     key('u');
-    eq('the double is gone', ab('visiting', 2, 0).play, '');
+    eq('the double is gone', ab('visiting', 3, 0).play, '');
     eq('and the runner is back on 1st', onB('visiting', 0, 0), 0);
   });
 
@@ -2422,9 +2430,9 @@
     play('1B');
     play('2B');                                     // opens the runner popup
     ok('the popup is up', visible('runner-popup'));
-    sel('visiting', 4, 0);                          // the tap that used to get through
+    sel('visiting', 6, 0);                          // the tap that used to get through
     ok('the popup is still up', visible('runner-popup'));
-    eq('the selection did not move', curP(), 2);
+    eq('the selection did not move', curP(), 3);
     ok('the refusal is shown', visible('play-reject'));
     runnerPopup({ 0: 2, batter: 1 });
     eq('the runner is on 3rd', onB('visiting', 0, 2), 0);
@@ -2436,7 +2444,7 @@
     play('2B');
     play('K');                                      // a play button under the popup
     ok('the popup is still up', visible('runner-popup'));
-    eq('no play was written', ab('visiting', 2, 0).play, '2B');
+    eq('no play was written', ab('visiting', 3, 0).play, '2B');
     ok('the refusal is shown', visible('play-reject'));
     runnerPopup({ 0: 2, batter: 1 });
     eq('outs are untouched', inn('visiting', 0).outs, 0);
@@ -2445,13 +2453,13 @@
   test('a play cannot be entered while an outcome popup is waiting', () => {
     sel('visiting', 0, 0);
     play('1B');
-    sel('visiting', 2, 0);
+    sel('visiting', 3, 0);
     play('DP 6-4-3');                               // opens the outcome popup
     ok('the popup is up', visible('outcome-popup'));
-    sel('visiting', 4, 0);
-    eq('the selection did not move', curP(), 2);
+    sel('visiting', 6, 0);
+    eq('the selection did not move', curP(), 3);
     play('1B');
-    eq('and no play was written', ab('visiting', 4, 0).play, '');
+    eq('and no play was written', ab('visiting', 6, 0).play, '');
     ok('the popup is still up', visible('outcome-popup'));
   });
 
@@ -2615,7 +2623,7 @@
     play('1B');                                     // p0 on 1st
     play('SH'); runnerPopup({ 0: 0, batter: 0 });   // the runner holds
     eq('nobody advanced', onB('visiting', 0, 0), 0);
-    eq('so it is an ordinary out', bStat('visiting', 2, 'ab'), '1');
+    eq('so it is an ordinary out', bStat('visiting', 3, 'ab'), '1');
   });
 
   /* ============================== substitutions, re-entry and the DH ======
@@ -2656,8 +2664,11 @@
     if (!btn) fail(`#${popupId} has no option starting "${startsWith}" (got: ${btns.map(b => JSON.stringify(b.textContent.slice(0, 40))).join(', ')})`);
     btn.onclick();
   }
+  // One digit per column: which row of the slot owns it. '0' is the starter, '1'
+  // the first sub, '2' the second — so a line with two substitutions reads its own
+  // history off the string.
   function subLine(team, p) {
-    return gameState.teams[team].players[p].atBats.map(a => (a.subChange ? '1' : '0')).join('');
+    return gameState.teams[team].players[p].atBats.map(a => String(subRowOf(a))).join('');
   }
 
   test('SUB marks the sub in from the selected column to the end of the card', () => {
@@ -2775,6 +2786,181 @@
     clickOpt('sub-popup', '.sub-opt', 'Cancel');
   });
 
+  /* H3 — a lineup slot had two rows, so a pinch hitter followed by a defensive
+     replacement in the same spot had nowhere to go: the second SUB press could only
+     offer to undo the first. ROWS_PER_POS is 3, `subChange` is the row number
+     rather than a boolean, and the prompt has a third option. */
+
+  test('a spot takes a second substitution, and all three men keep their own line', () => {
+    setPlayer('visiting', 0, '12', 'Alou');
+    setPlayer('visiting', 1, '30', 'Ruiz');
+    setPlayer('visiting', 2, '44', 'Mays');
+    sel('visiting', 0, 0);
+    play('1B');                                     // the starter singles in the 1st
+    sel('visiting', 0, 1);
+    markSub();                                      // pinch hitter in for the 2nd
+    play('2B');                                     // and doubles
+    sel('visiting', 0, 2);
+    markSub();
+    ok('the question is put', visible('sub-popup'));
+    clickOpt('sub-popup', '.sub-opt', '#44 Mays takes over');
+    eq('the card records all three', subLine('visiting', 0), '012222222222222');
+    sel('visiting', 0, 2);
+    play('HR');                                     // the second sub homers in the 3rd
+    eq('the starter keeps his single', bStat('visiting', 0, 'h'), '1');
+    eq('the first sub keeps his double', bStat('visiting', 1, 'h'), '1');
+    eq('and the second sub his home run', bStat('visiting', 2, 'h'), '1');
+    eq('nothing was logged as a re-entry', gameState.reentries.length, 0);
+  });
+
+  test('the second substitution is marked on the card like the first', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    play('1B');
+    sel('visiting', 0, 2);
+    markSub();
+    clickOpt('sub-popup', '.sub-opt', 'Sub 2 in spot 1 takes over');
+    const mark = col => document.getElementById(`scm-visiting-0-${col}`).classList.contains('active');
+    ok('the first change is marked', mark(1));
+    ok('and so is the second', mark(2));
+    ok('a column inside a run is not', !mark(3));
+  });
+
+  test('clearing the second sub hands the columns back to the first, not the starter', () => {
+    setPlayer('visiting', 0, '12', 'Alou');
+    setPlayer('visiting', 1, '30', 'Ruiz');
+    setPlayer('visiting', 2, '44', 'Mays');
+    sel('visiting', 0, 1);
+    markSub();
+    play('1B');                                     // Ruiz singles
+    sel('visiting', 0, 2);
+    markSub();
+    clickOpt('sub-popup', '.sub-opt', '#44 Mays takes over');
+    sel('visiting', 0, 2);
+    play('K');                                      // Mays strikes out
+    sel('visiting', 0, 3);
+    markSub();
+    clickOpt('sub-popup', '.sub-opt', '#30 Ruiz re-enters');
+    eq('Ruiz has the tail back', subLine('visiting', 0), '012111111111111');
+    eq('and the re-entry names him, not the starter', gameState.reentries[0].starter, '#30 Ruiz');
+    eq('over the man he replaced', gameState.reentries[0].sub, '#44 Mays');
+  });
+
+  // The run a prompt acts on is bounded by row number. On truthiness alone it would
+  // swallow the second substitution's columns into the first one's run and offer to
+  // clear them both.
+  test('undoing the first sub does not take a later substitution with it', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    play('1B');
+    sel('visiting', 0, 3);
+    markSub();
+    clickOpt('sub-popup', '.sub-opt', 'Sub 2 in spot 1 takes over');
+    eq('two runs on the line', subLine('visiting', 0), '011222222222222');
+    sel('visiting', 0, 1);
+    markSub();
+    clickOpt('sub-popup', '.sub-opt', 'Undo the substitution');
+    eq('only the first run went back to the starter', subLine('visiting', 0), '000222222222222');
+  });
+
+  test('a slot with one sub still reads exactly as it did', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    play('1B');
+    sel('visiting', 0, 3);
+    markSub();
+    ok('the heading is still about taking the sub out',
+      document.getElementById('sub-popup').innerHTML.includes('Change this spot?'));
+    clickOpt('sub-popup', '.sub-opt', 'Batter 1 re-enters');
+    eq('the starter is back from the 4th on', subLine('visiting', 0), '011000000000000');
+    eq('one re-entry logged', gameState.reentries.length, 1);
+  });
+
+  /* The migration. A row index *is* a player's place in the slot, so widening a
+     slot is a remap, not an append: row 2 of a 2-row save is spot 1's starter, and
+     in a 3-row card that index belongs to spot 0's second sub. Every stored player
+     index has to move with it. */
+
+  // A save as the 2-row build wrote it: 18 rows a side, a play on spot 1's starter
+  // (old index 2), and that man standing on 1st.
+  function twoRowSave() {
+    const mkAB = () => ({ bases:[false,false,false,false], advReason:['','','',''], outOnBase:null,
+      play:'', out:0, outsRecorded:0, pitches:[], hitLoc:null, rbi:0, pitcher:0,
+      reachedOnError:false, pitcherChangeNum:'', subChange:false, seq:0 });
+    const mkTeam = () => ({
+      players: Array(POSITIONS * 2).fill(null).map((_, i) => ({
+        num: String(i), name: 'Row' + i, pos: '', avg: '',
+        atBats: Array(INNINGS).fill(null).map(() => mkAB())
+      })),
+      pitchers: Array(PITCHER_ROWS).fill(null).map(() => ({ num:'', name:'', era:'', ip:'', pc:'', h:'', r:'', er:'', k:'', bb:'' }))
+    });
+    const st = {
+      info: {}, umpires: {}, notes: '', linescore: {
+        visiting: { innings: Array(INNINGS).fill(''), r:'', h:'', e:'' },
+        home: { innings: Array(INNINGS).fill(''), r:'', h:'', e:'' }
+      },
+      innings: { visiting: [], home: [] },
+      teams: { visiting: mkTeam(), home: mkTeam() },
+      columnMap: { visiting: defaultColumnMap(), home: defaultColumnMap() },
+      nextLeadoff: { visiting: { 1: 4 }, home: {} },   // old index 4 = spot 2's starter
+      defChanges: [{ inning: 'T1', team: 'visiting', changes: [{ pIdx: 2, fromPos: 'LF', toPos: 'CF', name: 'Row2' }] }],
+      reentries: [{ team: 'visiting', pIdx: 2, col: 0, inning: 'T1', spot: 2, starter: 'Row2', sub: 'Row3', legal: false }],
+      rules: { allowReentry: false, regulationInnings: 9 },
+      dhTerminated: { visiting: null, home: null }, playSeq: 1
+    };
+    ['visiting','home'].forEach(t => {
+      st.innings[t] = Array(INNINGS).fill(null).map(() => ({ outs:0, bases:[null,null,null], currentPitcher:0, lob:0, outsLog:[], lastPA:null }));
+    });
+    st.teams.visiting.players[2].atBats[0].play = '1B';
+    st.teams.visiting.players[2].atBats[0].bases[0] = true;
+    st.innings.visiting[0].bases[0] = { p: 2, col: 0 };
+    st.innings.visiting[0].lastPA = { pIdx: 2, col: 0 };
+    st.innings.visiting[0].outsLog = [{ n: 1, kind: 'batter', pIdx: 4, col: 0, srcP: 4, srcCol: 0, pitcher: 0 }];
+    return st;
+  }
+
+  test('a two-row save is re-laid-out, not appended to', () => {
+    const st = mergeStateDefaults(twoRowSave());
+    eq('the card is the current width', st.teams.visiting.players.length, POSITIONS * ROWS_PER_POS);
+    // Old row 2 was spot 1's starter. It has to land on spot 1's starter again.
+    eq('spot 1 keeps its starter', st.teams.visiting.players[3].name, 'Row2');
+    eq('with his at-bat', st.teams.visiting.players[3].atBats[0].play, '1B');
+    eq('spot 1 keeps its sub', st.teams.visiting.players[4].name, 'Row3');
+    eq('spot 0 is untouched', st.teams.visiting.players[0].name, 'Row0');
+    eq('and its sub too', st.teams.visiting.players[1].name, 'Row1');
+    eq('the new second sub row is blank', st.teams.visiting.players[2].name, '');
+    eq('the last spot moved all the way down', st.teams.visiting.players[24].name, 'Row16');
+  });
+
+  test('every stored player index moves with the rows', () => {
+    const st = mergeStateDefaults(twoRowSave());
+    eq('the runner on 1st', st.innings.visiting[0].bases[0].p, 3);
+    eq('and the plate appearance he is running from', st.innings.visiting[0].bases[0].col, 0);
+    eq('the last plate appearance', st.innings.visiting[0].lastPA.pIdx, 3);
+    eq('the out log', st.innings.visiting[0].outsLog[0].pIdx, 6);
+    eq('and its source', st.innings.visiting[0].outsLog[0].srcP, 6);
+    eq('the stored leadoff', st.nextLeadoff.visiting[1], 6);
+    eq('the re-entry log', st.reentries[0].pIdx, 3);
+    eq('the defensive change log', st.defChanges[0].changes[0].pIdx, 3);
+  });
+
+  test('a boolean sub flag from an old save becomes the first sub row', () => {
+    const raw = twoRowSave();
+    raw.teams.visiting.players[2].atBats[1].subChange = true;
+    const st = mergeStateDefaults(raw);
+    eq('it is the first sub', st.teams.visiting.players[3].atBats[1].subChange, 1);
+    eq('and an unset column is the starter', st.teams.visiting.players[3].atBats[0].subChange, 0);
+  });
+
+  test('a save already at the current width is left alone', () => {
+    const once = mergeStateDefaults(twoRowSave());
+    const before = JSON.stringify(once.teams.visiting.players.map(p => p.name));
+    const twice = mergeStateDefaults(once);
+    eq('re-running the migration changes nothing',
+      JSON.stringify(twice.teams.visiting.players.map(p => p.name)), before);
+    eq('and the runner stays put', twice.innings.visiting[0].bases[0].p, 3);
+  });
+
   test('a second DH asks which one to keep', () => {
     setPlayer('visiting', 0, '12', 'Alou');
     setPos('visiting', 0, 'DH');
@@ -2805,7 +2991,7 @@
   });
 
   test('once the game is under way, a pitcher in the order asks', () => {
-    sel('visiting', 4, 0);
+    sel('visiting', 6, 0);
     play('1B');                                    // this side has batted
     setPos('visiting', 0, 'DH');
     setPos('visiting', 2, 'P');
@@ -2817,7 +3003,7 @@
   });
 
   test('calling it a mistake instead reverts the position', () => {
-    sel('visiting', 4, 0);
+    sel('visiting', 6, 0);
     play('1B');
     setPos('visiting', 0, 'DH');
     setPos('visiting', 2, '3B');
@@ -2851,7 +3037,7 @@
   });
 
   test('a DH lineup with no pitcher in the order raises nothing', () => {
-    sel('visiting', 4, 0);
+    sel('visiting', 6, 0);
     play('1B');
     setPos('visiting', 0, 'DH');
     setPos('visiting', 2, 'C');
@@ -2867,10 +3053,10 @@
       setPlayer('visiting', 0, '12', 'Alou');
       setPos('visiting', 0, 'DH');
       setPos('visiting', 0, 'LF');                 // terminates the DH
-      sel('visiting', 2, 1);
+      sel('visiting', 3, 1);
       markSub();
       play('1B');
-      sel('visiting', 2, 3);
+      sel('visiting', 3, 3);
       markSub();
       clickOpt('sub-popup', '.sub-opt', 'Batter 2 re-enters');
       flushSave();
@@ -3045,7 +3231,7 @@
   test('an unearned run is left out of ERA', () => {
     sel('visiting', 0, 0);
     play('E6');                                     // reached on an error
-    sel('visiting', 2, 0);                          // batter 2 — odd rows are sub rows
+    sel('visiting', 3, 0);                          // batter 2 — odd rows are sub rows
     play('HR');                                     // both score, one unearned
     play('K'); play('K'); play('K');
     eq('two runs', pStat('visiting', 0, 'r'), '2');

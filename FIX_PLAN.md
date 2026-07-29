@@ -347,9 +347,9 @@ LOB 1` on the line with 0 outs.
 
 ## Phase 4 — roster (RC-F) — **unblocked: D4 + D5 answered**
 
-The two real feature gaps. Both need a state-shape change, so they go together:
-a distinct **PR** action (D4) and **`ROWS_PER_POS = 3`** (D5). Check the row-height
-cost on the iPad before that one ships.
+The two real feature gaps. Both need a state-shape change: a distinct **PR** action
+(D4) and **`ROWS_PER_POS = 3`** (D5). Split into two commits — the rows and their
+migration first, so the index remap is reviewable on its own, then PR on top.
 
 ### H2 — no pinch runner; the run is credited to the starter
 `setSubLine` [app.js:4141]
@@ -360,7 +360,7 @@ line skips a column that already has a play. Correct for a pinch hitter arriving
 running in. Repro: starter singles, PR comes in, PR scores →
 `starterR: "1"`, `subR: ""`. There is no separate PR mechanism.
 
-### H3 — only two players per lineup slot
+### H3 — only two players per lineup slot — ✅ **FIXED**
 `ROWS_PER_POS = 2` [app.js:97]
 
 A pinch hitter followed by a defensive replacement in the same spot — routine —
@@ -374,6 +374,74 @@ at-bat cells is `2`, hard-coded at [app.js:330]), `getActivePlayerIndex`
 (`pIdx + 1` assumes exactly one sub), `dhState`, and the `pos * ROWS_PER_POS`
 loops throughout. `mergeStateDefaults` / `refillAtBats` must migrate a saved
 2-row game.
+
+**iPad row-height check first (D5's gate).** Measured on a throwaway origin, with
+the third row simulated in the DOM (`rowspan` 3 plus a cloned sub row) rather than
+extrapolated. Per-row height does not change — 24.5px starter, 23.8px sub — so tap
+targets are no worse; the grid grows 48%, 464px → 685px.
+
+| iPad | grid before | after | page scroll before | after |
+|---|---|---|---|---|
+| Pro 12.9″ landscape | 464px | 685px | **16px** | **237px** |
+| 10.9″/Air landscape | 464px | 685px | 220px | 441px |
+| 10.9″ portrait | 590px | 878px | 202px | 490px |
+
+The cost that matters: the 12.9″ in landscape currently fits the whole card in one
+screen and stops doing so. Adam's call: **proceed** — a third player in a slot is
+routine and was impossible, and scrolling a card beats losing a substitution.
+
+**What was done.** Raising the constant was the small half. `subChange` was a
+*boolean*, which cannot say *which* sub owns a column once there are two, so it is
+now the row number (0 = starter) with one reader, `subRowOf` — which still accepts
+`true` and resolves it to row 1, for a library entry or an imported file that
+reached a reader without passing a migration.
+
+Everything that split a slot's figures "starter vs sub" now loops the rows:
+`updatePlayerStats`, the box score, player of the game, and the notable-performance
+scan. `getActivePlayerIndex` adds `subRowOf` instead of `+ 1`. `subLineRun` bounds a
+run by row number rather than truthiness — on truthiness it would swallow a *later*
+substitution's columns into the first one's run and offer to clear them both.
+`clearSelectedCell` and the re-entry path hand columns back to the row above rather
+than all the way to the starter, since with two sub rows the man before this one may
+be another sub. The sub-change mark triggers on a *change* of owner, so a second
+substitution is marked too. `defChanges` names the current occupant through a new
+`currentSlotRow` — "has a sub been used at all" stopped being that question.
+
+`promptSubRemoval` gains a third option, `<next row> takes over at T5`, offered
+whenever a row is free; the heading becomes "Change this spot?". Known limitation,
+deliberate: if the sitting sub has recorded *nothing*, the second press still takes
+the line back without ceremony (the existing mis-press path), so reaching the second
+sub row requires the first to have batted. That is the real sequence — a PH who
+never came up is a card correction, not a substitution.
+
+`rowLabel`'s fallback had to change too: "Sub 3" meant *spot* 3, so both sub rows of
+a slot read identically and the prompt offered "Sub 1 takes over" about a spot whose
+occupant was also "Sub 1". Unnamed sub rows now read "Sub 2 in spot 1", numbered the
+way the row's own placeholder is.
+
+**The migration** (`migrateLineupRows`, beside `migrateBaseRunners`) is the part
+worth reviewing. A row index *is* a player's place in the slot, so widening a slot
+is a remap, not an append: old row 2 is spot 1's starter, and in a 3-row card that
+index belongs to spot 0's second sub. Left alone every lineup below the first would
+shift up a spot and its at-bats would go with it. So each old row moves to
+`slot * ROWS_PER_POS + row`, and every stored player index goes through the same
+map — `bases[].p` (including a pre-Phase-7 bare index), `lastPA.pIdx`, the out log's
+`pIdx`/`srcP`, `nextLeadoff`, `reentries[].pIdx` and `defChanges[].changes[].pIdx`.
+It runs before `refillAtBats` (no point padding rows about to be inserted), infers
+the old width from the row count, refuses anything that isn't a whole number of rows
+per slot, and is idempotent on a save already at the current width — which is what
+makes it safe on the `loadGameFromLibrary` and import paths too.
+
+Verified: 244 passed · 0 failed. The 235 existing cases needed their hard-coded row
+indices remapped (`0, 2, 4 …` → `0, 3, 6 …`) — mechanical, and the failures were the
+proof the app was right and the literals stale. 9 new cases: three men in one spot
+each keeping their own line, both changes marked, clearing the second sub handing
+back to the first, undoing the first not taking the second with it, a one-sub slot
+reading exactly as before, and four on the migration (rows re-laid-out, every stored
+index moved, a legacy boolean becoming row 1, idempotency). Reverting the migration,
+the takeover option and the run-bounding fails 8 of them and nothing else. In the
+browser: 27 rows a side, `rowspan="3"`, placeholders "PH / Sub 1"/"PH / Sub 2", and a
+single-double-homer across the three rows of spot 1 splitting 1/1 · 1/1 · 1/1/1/1.
 
 ---
 
@@ -408,7 +476,10 @@ driver vocabulary. `sel(team, p, col)` selects, `play(code)` enters,
 `runnerPopup({from: dest, batter: dest})` answers Advance Runners (negative dest
 = out at |dest|), `outcomePopup({from|'batter': [action, dest]})` answers
 DP/FC/TP, `editPlay(newPlay, picks)` changes a play type, `flushTimers()` runs
-queued transitions. Odd player indices are sub rows — batters are `0, 2, 4, …`.
+queued transitions. A player index is a lineup *row*, `spot * ROWS_PER_POS + subRow`
+— so since H3 raised `ROWS_PER_POS` to 3, the batters are `0, 3, 6, …` and each has
+two sub rows above the next batter. The repros below still read `0, 2, 4, …`, which
+is where those rows were when the finding was written.
 
 | id | sev | statement | where | repro |
 |---|---|---|---|---|
