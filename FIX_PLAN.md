@@ -44,16 +44,16 @@ Standalone: M2, M3, M5, M6, M7, L1–L7.
 
 ---
 
-## Open decisions — **need Adam's answer before Phase 4, and for the starred items in 1–3**
+## Decisions — **all seven answered (D4–D6 on 2026-07-29, each as recommended)**
 
 | # | Question | My recommendation |
 |---|---|---|
 | ~~D1~~ **answered: Block** | **C1 fix shape.** Block the tap (backdrop + `pendingEntryPopupOpen()` guard), or let the tap through and *cancel* the pending play? | **Block.** Add `runner-popup` / `outcome-popup` to `BACKDROP_GUARDED` and refuse `applyPlay` / `selectCell` while one is open, with a `showPlayReject('Finish or close the open entry first.')` — the message `undoLastPlay` already uses. Consistent with how undo/redo already treat these popups. |
 | ~~D2~~ **answered: Both** | **C2 fix shape.** Require an explicit outcome for every runner on a DP/TP (the way `showRunnerPopup` flashes unanswered rows), or default the forced runner to *out*? | **Both.** Default the lead forced runner to `out` (that is what a DP *means*), **and** refuse Confirm when a play labelled `DP` would record fewer than 2 outs / `TP` fewer than 3. A DP that records one out is not a DP. |
 | ~~D3~~ **answered: Derive, read-only, count every signal** | **H1 scope.** Derive E from `E`-play cells and credit it to the fielding team, or leave E manual and just stop pretending? | **Derive it.** Count cells where `isErrorPlay(ab.play)`, plus `advReason` containing `'E'` (throwing errors on steals/pickoffs, which leave no error play), and write it to the *other* team's E input. Adam's call: the box becomes **read-only** like R/H/LOB, and **every signal counts** — so a man who reaches on E5 and then takes an extra base on a bad throw is two errors, which is right. The two `'E'` advancement writers are steals and pickoffs, always a physically separate error from any batter's error play, so nothing double-counts. |
-| D4 | **H2 pinch runner.** New mechanism, or overload SUB? | A distinct **PR** action that transfers the *run* to the sub row while leaving AB/H on the starter. Overloading SUB can't work — `setSubLine` skipping the played column is correct for a PH. |
-| D5 | **H3 third player in a slot.** Raise `ROWS_PER_POS` to 3, or make sub rows dynamic? | **`ROWS_PER_POS = 3`** is the cheap correct answer — it is already a constant that sizes the grid, the state and ~12 loops, and `stateForStorage` / `refillAtBats` already handle "rows whose at-bats are dropped on the way out". Dynamic rows are a much larger change for a rarer case. Confirm the row-height cost on iPad is acceptable. |
-| D6 | **M1 lock.** Hard-refuse entry after the game is final, or warn once and allow? | **Warn and allow.** A scorer sometimes needs to correct a final card, and this app's standing policy is "record what happened, never refuse" (see the re-entry prompt). A one-time toast + a FINAL marker is enough. |
+| ~~D4~~ **answered: a distinct PR action** | **H2 pinch runner.** New mechanism, or overload SUB? | A distinct **PR** action that transfers the *run* to the sub row while leaving AB/H on the starter. Overloading SUB can't work — `setSubLine` skipping the played column is correct for a PH. |
+| ~~D5~~ **answered: `ROWS_PER_POS = 3`** | **H3 third player in a slot.** Raise `ROWS_PER_POS` to 3, or make sub rows dynamic? | **`ROWS_PER_POS = 3`** is the cheap correct answer — it is already a constant that sizes the grid, the state and ~12 loops, and `stateForStorage` / `refillAtBats` already handle "rows whose at-bats are dropped on the way out". Dynamic rows are a much larger change for a rarer case. Confirm the row-height cost on iPad is acceptable. |
+| ~~D6~~ **answered: warn once and allow** | **M1 lock.** Hard-refuse entry after the game is final, or warn once and allow? | **Warn and allow.** A scorer sometimes needs to correct a final card, and this app's standing policy is "record what happened, never refuse" (see the re-entry prompt). A one-time toast + a FINAL marker is enough. |
 | ~~D7~~ **answered: Yes** | **M2 LOB in a walk-off.** Count runners left on when the half ends without 3 outs? | **Yes** — official scoring counts them. Change the `outs >= 3` condition to "the half-inning is over", which now includes a game-ending run. |
 
 ---
@@ -258,7 +258,14 @@ make sure a transition isn't scheduled from a change that then gets rolled back.
 `checkGameOver` [app.js:1916]
 
 After a walk-off (`gameOverShown: true`), another HR was accepted and moved R
-from 1 to 2. Fix per **D6**.
+from 1 to 2. Fix per **D6** — a one-time toast plus a FINAL marker, entry still
+allowed.
+
+Fold in while in this code: the leftover H1 noticed above — `clearSelectedCell`
+does not dismiss an open runner popup, so Clear tapped over one leaves it up on a
+cell whose play is gone, and `entryInProgress()` then refuses *all* entry until it
+is closed. Same guard family as M1's toast, and a lockup is worse than the bug it
+came from.
 
 ### M2 — LOB is 0 in a walk-off — ✅ **FIXED**
 `recomputeInning` [app.js:748]
@@ -292,9 +299,11 @@ LOB 1` on the line with 0 outs.
 
 ---
 
-## Phase 4 — roster (RC-F) — **blocked on D4 + D5**
+## Phase 4 — roster (RC-F) — **unblocked: D4 + D5 answered**
 
-The two real feature gaps. Both need a state-shape change, so they go together.
+The two real feature gaps. Both need a state-shape change, so they go together:
+a distinct **PR** action (D4) and **`ROWS_PER_POS = 3`** (D5). Check the row-height
+cost on the iPad before that one ships.
 
 ### H2 — no pinch runner; the run is credited to the starter
 `setSubLine` [app.js:4141]
