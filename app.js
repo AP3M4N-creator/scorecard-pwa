@@ -218,6 +218,16 @@ function getColumnsForInning(team, realInning) {
   return gameState.columnMap[team].reduce((cols, ri, ci) => { if (ri === realInning) cols.push(ci); return cols; }, []);
 }
 
+// Every at-bat label on one side, re-derived. Batting around renumbers the
+// columns, so a label built at grid time now names the wrong inning — the same
+// staleness `updateColumnHeaders` fixes for the headers a sighted scorer reads.
+function refreshCellAria(team) {
+  const players = gameState.teams[team].players;
+  for (let p = 0; p < players.length; p += ROWS_PER_POS) {
+    for (let c = 0; c < INNINGS; c++) updateCellAria(team, p, c);
+  }
+}
+
 function updateColumnHeaders(team) {
   if (!gameState.columnMap) return;
   const gridId = team === 'visiting' ? 'grid-visiting' : 'grid-home';
@@ -283,7 +293,7 @@ function buildScoringGrid(team, containerId) {
     html += `<td class="stat-cell" id="st-rbi-${team}-${sp}"></td>`;
     html += `<td class="stat-cell" id="st-bb-${team}-${sp}"></td>`;
     for (let inn = 0; inn < INNINGS; inn++) {
-      html += `<td class="at-bat-cell" rowspan="2" data-team="${team}" data-p="${sp}" data-inn="${inn}">`;
+      html += `<td class="at-bat-cell" id="cell-${team}-${sp}-${inn}" rowspan="2" aria-label="${describeCellForScreenReader(team, sp, inn)}" data-team="${team}" data-p="${sp}" data-inn="${inn}">`;
       html += `<div class="pitcher-change-mark" id="pcm-${team}-${sp}-${inn}"></div>`;
       html += `<div class="sub-change-mark" id="scm-${team}-${sp}-${inn}"></div>`;
       html += `<div class="pitch-track" id="pt-${team}-${sp}-${inn}"></div>`;
@@ -369,14 +379,23 @@ function buildLinescore() {
 
 /* Interaction */
 function selectCell(td) {
-  if (selectedCell) selectedCell.classList.remove('selected');
+  if (selectedCell) {
+    selectedCell.classList.remove('selected');
+    selectedCell.removeAttribute('aria-current');
+  }
   selectedCell = td;
   td.classList.add('selected');
+  // `aria-current`, not `aria-selected`: these are ordinary table cells, and
+  // promoting the card to role="grid" to make aria-selected legal would cost a
+  // screen reader the table navigation it already has.
+  td.setAttribute('aria-current', 'true');
+  announce('Selected ' + describeCellForScreenReader(td.dataset.team, parseInt(td.dataset.p), parseInt(td.dataset.inn)));
   updateSituation();
 }
 
 function renderDiamond(team, pIdx, innIdx) {
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
+  updateCellAria(team, pIdx, innIdx);
   const id = `d-${team}-${pIdx}-${innIdx}`;
   const svg = document.getElementById(id);
   if (!svg) return;
@@ -403,6 +422,7 @@ function renderDiamond(team, pIdx, innIdx) {
 
 function renderOut(team, pIdx, innIdx) {
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
+  updateCellAria(team, pIdx, innIdx);
   const el = document.querySelector(`.out-num[data-team="${team}"][data-p="${pIdx}"][data-inn="${innIdx}"]`);
   if (!el) return;
   const p = ab.play || '';
@@ -423,7 +443,53 @@ function renderOut(team, pIdx, innIdx) {
   el.classList.toggle('active', ab.out > 0 || (ab.dpOuts && ab.dpOuts.length >= 2));
 }
 
+/* ------------------------------------------------------------ a11y ---
+   An at-bat cell is a diamond, a play code and an out number — all of it
+   graphical. These give a screen reader the same thing in words, and keep it in
+   step: `renderPlayText` runs on every change to a cell, so the label is
+   rewritten with the play. The selected cell is also announced through a live
+   region, since moving the selection changes nothing a reader would otherwise
+   notice. */
+const A11Y_BASES = ['1st', '2nd', '3rd'];
+
+function describeCellForScreenReader(team, pIdx, col) {
+  const side = team === 'visiting' ? 'Visiting' : 'Home';
+  const spot = Math.floor(pIdx / ROWS_PER_POS) + 1;
+  const innNum = getRealInning(team, col) + 1;
+  const where = `${side}, batting order ${spot}, inning ${innNum}`;
+  const ab = gameState.teams[team] && gameState.teams[team].players[pIdx] &&
+    gameState.teams[team].players[pIdx].atBats[col];
+  if (!ab || !ab.play) return where + ', empty';
+  const bits = [ab.play];
+  if (ab.rbi) bits.push(ab.rbi + ' RBI');
+  if (ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null) {
+    bits.push(ab.reachedOnError ? 'scored, unearned' : 'scored');
+  } else if (ab.outOnBase != null) {
+    bits.push('out at ' + (ab.outOnBase === 3 ? 'home' : A11Y_BASES[ab.outOnBase]));
+  } else if (ab.out) {
+    bits.push('out ' + ab.out);
+  } else {
+    let last = -1;
+    for (let i = 0; i < 3; i++) if (ab.bases[i]) last = i;
+    if (last >= 0) bits.push('on ' + A11Y_BASES[last]);
+  }
+  return where + ': ' + bits.join(', ');
+}
+
+function updateCellAria(team, pIdx, col) {
+  const cell = document.getElementById(`cell-${team}-${pIdx}-${col}`);
+  if (cell) cell.setAttribute('aria-label', describeCellForScreenReader(team, pIdx, col));
+}
+
+// Say out loud whatever just changed, for a reader that has no other way to
+// notice it. Anything else on the page is unaffected: the region is off-screen.
+function announce(message) {
+  const el = document.getElementById('a11y-live');
+  if (el) el.textContent = message;
+}
+
 function renderPlayText(team, pIdx, innIdx) {
+  updateCellAria(team, pIdx, innIdx);
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   const el = document.getElementById(`txt-${team}-${pIdx}-${innIdx}`);
   if (!el) return;
@@ -2108,6 +2174,7 @@ function overflowToNextColumn(team, innIdx) {
 
   // Update column headers
   updateColumnHeaders(team);
+  refreshCellAria(team);
 
   // Select the next batter in the new column (wrap around from where we left off)
   const sameTeam = selectedCell && selectedCell.dataset.team === team;
@@ -3637,6 +3704,7 @@ function applyState() {
     // renumbered past their real innings — column 2 read "3" when it was still
     // the 1st. The map is the record; re-derive from it on every load.
     updateColumnHeaders(team);
+    refreshCellAria(team);
     // Re-derive every inning somebody batted in, so a game saved by an older build
     // — or hand-edited, or imported — comes back consistent with its own records.
     // A save from before LOB had one definition carries the old inflating scan's

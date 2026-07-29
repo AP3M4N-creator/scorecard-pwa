@@ -26,6 +26,9 @@
   <button onclick="downloadUnreadableSaves()" style="background:#fff;color:#8a5a1f;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer">Download unreadable save</button>
   <button onclick="discardUnreadableSaves()" style="background:transparent;color:#fff;border:2px solid #fff;border-radius:6px;padding:5px 11px;font-weight:700;cursor:pointer">Discard</button>
 </div>
+<!-- Off-screen live region: selecting a cell changes nothing a screen reader
+     would otherwise notice, so selectCell() says what was selected here. -->
+<div id="a11y-live" role="status" aria-live="polite" style="position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0"></div>
 <div class="app">
   <!-- Header -->
   <div class="header-bar">
@@ -45,22 +48,22 @@
   <!-- Game Info -->
   <div class="game-info-card">
     <div class="info-group">
-      <div class="info-row"><label>Date:</label><input type="text" id="info-date"></div>
-      <div class="info-row"><label>Start Time:</label><input type="text" id="info-start-time"></div>
-      <div class="info-row"><label>Time of Game:</label><input type="text" id="info-time-of-game"></div>
+      <div class="info-row"><label for="info-date">Date:</label><input type="text" id="info-date"></div>
+      <div class="info-row"><label for="info-start-time">Start Time:</label><input type="text" id="info-start-time"></div>
+      <div class="info-row"><label for="info-time-of-game">Time of Game:</label><input type="text" id="info-time-of-game"></div>
     </div>
     <div class="info-group">
-      <div class="info-row"><label>Visiting Team:</label><input type="text" id="info-visiting-team"></div>
-      <div class="info-row"><label>Home Team:</label><input type="text" id="info-home-team"></div>
-      <div class="info-row"><label>Weather:</label><input type="text" id="info-weather"></div>
-      <div class="info-row"><label>Attendance:</label><input type="text" id="info-attendance"></div>
+      <div class="info-row"><label for="info-visiting-team">Visiting Team:</label><input type="text" id="info-visiting-team"></div>
+      <div class="info-row"><label for="info-home-team">Home Team:</label><input type="text" id="info-home-team"></div>
+      <div class="info-row"><label for="info-weather">Weather:</label><input type="text" id="info-weather"></div>
+      <div class="info-row"><label for="info-attendance">Attendance:</label><input type="text" id="info-attendance"></div>
     </div>
     <div class="umpires-box">
       <h3>Umpires</h3>
-      <div class="ump-row"><label>HP</label><input type="text" id="ump-hp"></div>
-      <div class="ump-row"><label>1B</label><input type="text" id="ump-1b"></div>
-      <div class="ump-row"><label>2B</label><input type="text" id="ump-2b"></div>
-      <div class="ump-row"><label>3B</label><input type="text" id="ump-3b"></div>
+      <div class="ump-row"><label for="ump-hp">HP</label><input type="text" id="ump-hp"></div>
+      <div class="ump-row"><label for="ump-1b">1B</label><input type="text" id="ump-1b"></div>
+      <div class="ump-row"><label for="ump-2b">2B</label><input type="text" id="ump-2b"></div>
+      <div class="ump-row"><label for="ump-3b">3B</label><input type="text" id="ump-3b"></div>
     </div>
   </div>
 
@@ -281,7 +284,7 @@
           </svg>
         </div>
         <div class="notes-box" style="flex:1;min-width:160px;margin-bottom:0;display:flex;flex-direction:column">
-          <label>Notes</label>
+          <label for="game-notes">Notes</label>
           <textarea id="game-notes" placeholder="Game notes..." style="flex:1;height:auto;min-height:200px"></textarea>
         </div>
       </div>

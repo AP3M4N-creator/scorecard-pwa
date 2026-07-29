@@ -148,6 +148,10 @@
       if (el) el.style.display = 'none';
     });
 
+    // A case that batted around relabelled every cell on its side against the
+    // shifted column map; restoring gameState doesn't undo that, and reset only
+    // re-renders the columns the case touched.
+    ['visiting', 'home'].forEach(refreshCellAria);
     rawAll('input[data-ls]').forEach(i => { i.value = ''; });
     ['visiting', 'home'].forEach(t => { updateLinescoreTotals(t); updatePlayerStats(t); updatePitcherStats(t); });
     rawAll('.at-bat-cell.selected').forEach(c => c.classList.remove('selected'));
@@ -1766,6 +1770,74 @@
     play('SH'); runnerPopup({ 0: 1, batter: 0 });   // bunted to 2nd
     eq('the bunt did its job', onB('visiting', 0, 1), 0);
     eq('so it costs no at-bat', bStat('visiting', 2, 'ab'), '');
+  });
+
+  /* =====================================================================
+     Phase 10 — what a screen reader gets
+     ===================================================================== */
+
+  function aria(team, p, col) {
+    return document.getElementById(`cell-${team}-${p}-${col}`).getAttribute('aria-label');
+  }
+  function liveRegion() { return document.getElementById('a11y-live').textContent; }
+
+  // An at-bat cell is a diamond, a play code and an out number — all graphical.
+  // The label has to say the same thing in words, and stay in step with it.
+  test('an empty at-bat cell says where it is', () => {
+    eq('by side, order and inning', aria('visiting', 8, 3), 'Visiting, batting order 5, inning 4, empty');
+    eq('and the home side says so', aria('home', 0, 0), 'Home, batting order 1, inning 1, empty');
+  });
+
+  test('the label follows the play onto the cell', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    eq('a single, and where he is', aria('visiting', 0, 0), 'Visiting, batting order 1, inning 1: 1B, on 1st');
+    play('K');
+    eq('and an out is numbered', aria('visiting', 2, 0), 'Visiting, batting order 2, inning 1: K, out 1');
+  });
+
+  test('a run and its RBI are in the label', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('HR');
+    eq('the man who came round', aria('visiting', 0, 0), 'Visiting, batting order 1, inning 1: 1B, scored');
+    eq('and the man who drove him in', aria('visiting', 2, 0), 'Visiting, batting order 2, inning 1: HR, 2 RBI, scored');
+  });
+
+  test('an unearned run says so', () => {
+    sel('visiting', 0, 0);
+    play('E6');
+    play('HR');
+    eq('the run is flagged unearned', aria('visiting', 0, 0), 'Visiting, batting order 1, inning 1: E6, scored, unearned');
+  });
+
+  test('a runner thrown out on the bases says where', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    promptCSBase();
+    eq('caught stealing 2nd', aria('visiting', 0, 0), 'Visiting, batting order 1, inning 1: 1B, out at 2nd');
+  });
+
+  // The label follows the real inning, not the column, so batting around does
+  // not tell a reader the 1st inning is the 2nd.
+  test('a batted-around overflow column keeps the real inning in the label', () => {
+    sel('visiting', 0, 0);
+    for (let i = 0; i < 9; i++) play('BB');           // bats around into column 1
+    eq('overflowed to the next column', curCol(), 1);
+    eq('the leadoff man\'s second time up is still the 1st',
+      aria('visiting', 0, 1), 'Visiting, batting order 1, inning 1, empty');
+    eq('and the 2nd inning has moved to column 2',
+      aria('visiting', 0, 2), 'Visiting, batting order 1, inning 2, empty');
+  });
+
+  test('selecting a cell announces it, and only one cell is current', () => {
+    const a = sel('visiting', 0, 0);
+    ok('the selected cell is marked current', a.getAttribute('aria-current') === 'true');
+    ok('and announced', liveRegion().startsWith('Selected Visiting, batting order 1, inning 1'));
+    const b = sel('visiting', 4, 2);
+    ok('the old one is no longer current', !a.hasAttribute('aria-current'));
+    ok('the new one is', b.getAttribute('aria-current') === 'true');
+    ok('and it is announced too', liveRegion().indexOf('batting order 3, inning 3') > 0);
   });
 
   /* =====================================================================
