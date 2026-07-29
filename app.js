@@ -2310,7 +2310,13 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
   });
 
   // Batter advancement row for hits/errors — allows advancing past default base (e.g. 1B→2B on error)
-  const batterDefaultBase = defaultAdv > 0 && defaultAdv <= 3 ? defaultAdv - 1 : -1;
+  // Only for a batter who ends the play on a base. A sacrifice advances its runners
+  // by 1 like a single does, and the row used to render off that alone — three
+  // destinations for a man the callback then handed straight to `recordBatterOut`,
+  // and which `rpParties` never validated because he was never going to be on a base
+  // (M3). An option that cannot change the card is worse than no option.
+  const batterTakesBase = !!(opts && opts.batterTakesBase);
+  const batterDefaultBase = batterTakesBase && defaultAdv > 0 && defaultAdv <= 3 ? defaultAdv - 1 : -1;
   if (batterDefaultBase >= 0 && batterDefaultBase < 3) {
     choices.batterDest = undefined;
     const batterName = (opts && opts.batterPIdx !== undefined)
@@ -2346,7 +2352,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     for (let b = 0; b < 3; b++) {
       if (inn.bases[b] !== null && !inPopup.has(inn.bases[b].p)) list.push({ key: 'held' + b, from: b, dest: b });
     }
-    if (opts && opts.batterTakesBase) {
+    if (batterTakesBase) {
       const bDest = choices.batterDest !== undefined ? choices.batterDest : batterDefaultBase;
       list.push({ key: 'batter', from: -1, dest: bDest >= 0 ? bDest : undefined });
     }

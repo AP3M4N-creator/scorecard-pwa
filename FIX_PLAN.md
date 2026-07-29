@@ -505,7 +505,7 @@ single-double-homer across the three rows of spot 1 splitting 1/1 · 1/1 · 1/1/
 
 | # | Finding | Location |
 |---|---|---|
-| M3 | The runner popup offers a **batter-destination row on `SF`/`SH`** that is silently discarded. `defaultAdv` is 1 for a sacrifice → `batterDefaultBase` is 0 → the row renders (3 buttons); the callback then calls `recordBatterOut` and ignores the choice. Also excluded from collision validation, since `rpParties` only adds the batter when `batterTakesBase`. | [app.js:1460], [app.js:2046], [app.js:2081] |
+| M3 ✅ | The runner popup offers a **batter-destination row on `SF`/`SH`** that is silently discarded. `defaultAdv` is 1 for a sacrifice → `batterDefaultBase` is 0 → the row renders (3 buttons); the callback then calls `recordBatterOut` and ignores the choice. Also excluded from collision validation, since `rpParties` only adds the batter when `batterTakesBase`. | [app.js:1460], [app.js:2046], [app.js:2081] |
 | M4 ✅ | An **`FC` can record three outs** — `maxOuts` is 3 for anything not DP/TP, and `playEntryReject` doesn't constrain FC. (Folds into the D2 work — **it did not**; see below.) | [app.js:1761], [app.js:1344] |
 | M5 | **Undo history is memory-only** — after a refresh `undoLastPlay` does nothing (`historyDepth: 0`, state unchanged). `clearSelectedCell` still works correctly post-refresh. The 2026-07-28 plan deliberately left this; re-confirm rather than assume. | [app.js:2817] |
 | M6 | A pitcher who records **no outs shows blank IP**, not `0.0` — `s.outs > 0 ? fullInnings : ''`. Run/ER attribution across a mid-inning change is otherwise **correct** (`ab.pitcher` is frozen at entry). | [app.js:4047] |
@@ -515,6 +515,28 @@ single-double-homer across the three rows of spot 1 splitting 1/1 · 1/1 · 1/1/
 | L3 | A **balk** is visible only as a `BK` advancement label on the runner's diamond; no BK count on the pitcher line. | [app.js:2809] |
 | L4 | Batting around in the **15th column can't overflow** (`nextCol >= INNINGS` returns), leaving the selection on a filled cell and further batters silently unenterable. | [app.js:2211] |
 | L5 | A home half **never played stays blank** rather than showing `X`. | [app.js:3394] |
+
+### M3 — the `SF`/`SH` runner popup offers a batter destination it discards — ✅ **FIXED**
+`showRunnerPopup` [app.js:2245]
+
+**What was done.** The row rendered off `defaultAdv` alone: a sacrifice advances its
+runners by 1, the same default a single uses, so `batterDefaultBase` came out 0 and
+three destination buttons appeared for a man the callback then handed straight to
+`recordBatterOut`. Picking one changed nothing, and nothing validated it either —
+`rpParties` only ranks a batter who ends the play on a base, so the choice sat outside
+the collision check as well.
+
+It now renders only when `opts.batterTakesBase` is set, which is the condition the rest
+of the popup already used for the batter and the one honest test of whether he has a
+destination at all. `batterTakesBase` is hoisted to a local so the row and `rpParties`
+read the same thing. Deliberately not the play code: a `K+WP` is a strikeout whose
+batter *does* reach, and his row is real.
+
+Verified: 3 new cases (258 passed · 0 failed) — a sacrifice offering no batter row, a
+hit still offering three, and the K+WP case. Four existing cases answered the row on a
+sacrifice (`batter: 0`); dropping those picks is the fix's own proof, since the driver
+fails on an option that isn't there. Reverting the gate fails all three new cases and
+nothing else.
 
 ### M4 — an `FC` can record three outs — ✅ **FIXED**
 `showRunnerOutcomePopup` [app.js:1879]

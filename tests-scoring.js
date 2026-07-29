@@ -648,9 +648,50 @@
   test('a sacrifice is not refused when a runner holds the base the batter would take', () => {
     sel('visiting', 0, 0);
     play('1B');                                    // p0 on 1st
-    play('SH'); runnerPopup({ 0: 0, batter: 0 });   // runner holds, batter is out
+    play('SH'); runnerPopup({ 0: 0 });              // runner holds, batter is out
     eq('outs', inn('visiting', 0).outs, 1);
     eq('runner still on 1st', onB('visiting', 0, 0), 0);
+  });
+
+  // M3 — a sacrifice advances its runners by 1, the same default a single uses, and
+  // the batter row rendered off that alone: three destinations for a man the callback
+  // handed straight to `recordBatterOut`. Picking one changed nothing, and nothing
+  // validated it either, since `rpParties` only ranks a batter who ends up on a base.
+  test('a sacrifice offers the batter no destination', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                    // p0 on 3rd
+    play('SF');
+    ok('the popup is up', visible('runner-popup'));
+    eq('no batter row', document.getElementById('runner-popup')
+      .querySelectorAll('.rp-btn[data-base="batter"]').length, 0);
+    runnerPopup({ 2: 3 });
+    eq('the batter is out', inn('visiting', 0).outs, 1);
+    eq('and on no base', JSON.stringify(ab('visiting', 3, 0).bases), '[false,false,false,false]');
+    eq('the run scored', ab('visiting', 0, 0).bases[3], true);
+  });
+
+  test('a hit still offers the batter one', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    play('1B');
+    eq('three destinations', document.getElementById('runner-popup')
+      .querySelectorAll('.rp-btn[data-base="batter"]').length, 3);
+    runnerPopup({ 0: 2, batter: 1 });               // the batter takes 2nd on the throw
+    eq('batter on 2nd', onB('visiting', 0, 1), 3);
+  });
+
+  // The batter reaches on a K+WP, so his row is real there even though the play is
+  // a strikeout — the one case where "the batter is out" and "he takes a base" are
+  // both true, and `batterTakesBase` rather than the play code is what decides it.
+  test('a K+WP still offers the batter a destination', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    play('K+WP');
+    eq('three destinations', document.getElementById('runner-popup')
+      .querySelectorAll('.rp-btn[data-base="batter"]').length, 3);
+    runnerPopup({ 0: 1, batter: 0 });
+    eq('batter on 1st', onB('visiting', 0, 0), 3);
+    eq('runner on 2nd', onB('visiting', 0, 1), 0);
   });
 
   // #4 — a refusal has to be recoverable: the popup stays open to be re-answered.
@@ -2158,7 +2199,7 @@
   test('a sacrifice fly that scores a run costs no at-bat', () => {
     sel('visiting', 0, 0);
     play('3B');                                     // p0 on 3rd
-    play('SF'); runnerPopup({ 2: 3, batter: 0 });   // he tags and scores
+    play('SF'); runnerPopup({ 2: 3 });              // he tags and scores
     eq('the run is his RBI', ab('visiting', 3, 0).rbi, 1);
     eq('and the sacrifice costs no at-bat', bStat('visiting', 3, 'ab'), '');
   });
@@ -2166,7 +2207,7 @@
   test('a sacrifice bunt that moves a runner costs no at-bat', () => {
     sel('visiting', 0, 0);
     play('1B');                                     // p0 on 1st
-    play('SH'); runnerPopup({ 0: 1, batter: 0 });   // bunted to 2nd
+    play('SH'); runnerPopup({ 0: 1 });              // bunted to 2nd
     eq('the bunt did its job', onB('visiting', 0, 1), 0);
     eq('so it costs no at-bat', bStat('visiting', 3, 'ab'), '');
   });
@@ -2680,7 +2721,7 @@
   test('a bunt that moved nobody is charged as an at-bat', () => {
     sel('visiting', 0, 0);
     play('1B');                                     // p0 on 1st
-    play('SH'); runnerPopup({ 0: 0, batter: 0 });   // the runner holds
+    play('SH'); runnerPopup({ 0: 0 });              // the runner holds
     eq('nobody advanced', onB('visiting', 0, 0), 0);
     eq('so it is an ordinary out', bStat('visiting', 3, 'ab'), '1');
   });
