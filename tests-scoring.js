@@ -1769,6 +1769,165 @@
   });
 
   /* =====================================================================
+     Phase 8b — W / L / SV by the rules, not by a heuristic
+     ===================================================================== */
+
+  // Solo homers are the cheapest way to put a specific number of runs on the
+  // board in a specific half-inning with no popup to answer.
+  function solo(team, p, col) { sel(team, p, col); play('HR'); }
+  function threeK(team, p, col) { sel(team, p, col); play('K'); play('K'); play('K'); }
+  function decisions() { return computePitcherDecisions(); }
+
+  test('a tie yields no decisions at all', () => {
+    solo('visiting', 0, 0); threeK('visiting', 2, 0);
+    solo('home', 0, 0); threeK('home', 2, 0);
+    const d = decisions();
+    eq('nobody won', d.winTeam, null);
+    eq('no W', d.wp, null);
+    eq('no L', d.lp, null);
+  });
+
+  // Rules 9.17 and 9.17(d) against a lead taken, given back, and taken again:
+  // the loss belongs to whoever put the go-ahead runner on, not to whoever gave
+  // up the most earned runs.
+  test('a lead taken, lost and retaken charges the L to the go-ahead run\'s pitcher', () => {
+    solo('visiting', 0, 0); threeK('visiting', 2, 0);          // V 1-0, off home #0
+    solo('home', 0, 0); solo('home', 2, 0);                    // H 2-1
+    threeK('home', 4, 0);
+    sel('visiting', 0, 1); usePitcher(1);                      // home goes to the pen
+    solo('visiting', 0, 1);                                    // 2-2
+    solo('visiting', 2, 1);                                    // V 3-2, and holds
+    threeK('visiting', 4, 1);
+    const d = decisions();
+    eq('the visitors won', d.winTeam, 'visiting');
+    eq('the go-ahead run is charged to the reliever', d.lp, 1);
+    eq('and the W is the visitors\' pitcher of record', d.wp, 0);
+    ok('nothing needs the scorer', !d.judgment);
+    ok('and it is not approximate', !d.approximate);
+  });
+
+  // Rule 9.17(b): the starter did not go five in a game of six or more, so the
+  // win is explicitly the scorer's call. Offer the relievers; don't pick one.
+  test('a starter pulled short of 5 innings hands the win to the scorer', () => {
+    solo('visiting', 0, 0);                                    // V 1-0, and it holds
+    for (let i = 0; i < 6; i++) {
+      threeK('visiting', i === 0 ? 2 : 0, i);
+      if (i === 3) { sel('home', 0, 3); usePitcher(1); }       // visitors go to the pen
+      threeK('home', 0, i);
+    }
+    const d = decisions();
+    eq('the visitors won', d.winTeam, 'visiting');
+    eq('six innings', inningsPlayed(), 6);
+    eq('their starter went three', pitcherOutCounts('visiting')[0], 9);
+    ok('so the win is not credited automatically', d.wp === null);
+    ok('the scorer is told why', !!d.judgment);
+    eq('and offered the reliever', JSON.stringify(d.winCandidates), '[1]');
+  });
+
+  test('the scorer\'s pick overrides what the rules worked out', () => {
+    solo('visiting', 0, 0);
+    for (let i = 0; i < 6; i++) {
+      threeK('visiting', i === 0 ? 2 : 0, i);
+      if (i === 3) { sel('home', 0, 3); usePitcher(1); }
+      threeK('home', 0, i);
+    }
+    gameState.decisions = { wp: 1 };
+    const d = decisions();
+    eq('the reliever gets the win', d.wp, 1);
+    ok('and the prompt is gone', !d.judgment);
+  });
+
+  // Rule 9.19, first condition: entered with a lead of three or fewer and
+  // pitched at least an inning.
+  test('a save for a reliever who enters with a small lead and finishes an inning', () => {
+    solo('visiting', 0, 0); solo('visiting', 2, 0);            // V 2-0
+    threeK('visiting', 4, 0);
+    threeK('home', 0, 0);                                      // starter's inning
+    threeK('visiting', 0, 1);
+    sel('home', 0, 1); usePitcher(1);                          // reliever in for the 2nd
+    threeK('home', 0, 1);
+    const d = decisions();
+    eq('W to the starter', d.wp, 0);
+    eq('SV to the reliever', d.sv, 1);
+  });
+
+  // Third condition: three innings of relief, whatever the lead.
+  test('a save for three innings of relief regardless of the lead', () => {
+    for (let r = 0; r < 6; r++) solo('visiting', r * 2, 0);    // V 6-0
+    threeK('visiting', 12, 0);
+    threeK('home', 0, 0);
+    sel('home', 0, 1); usePitcher(1);                          // reliever in for the 2nd
+    for (let i = 1; i <= 3; i++) { threeK('visiting', 0, i); threeK('home', 0, i); }
+    const d = decisions();
+    eq('the reliever went three', pitcherOutCounts('visiting')[1], 9);
+    eq('so the save stands on the innings alone', d.sv, 1);
+  });
+
+  // Second condition: he came in with the tying run on deck — lead of three with
+  // a man on — and got only one out, so neither of the other conditions applies.
+  test('a save for a reliever who enters with the tying run on deck', () => {
+    solo('visiting', 0, 0); solo('visiting', 2, 0); solo('visiting', 4, 0);   // V 3-0
+    threeK('visiting', 6, 0);
+    sel('home', 0, 0);
+    play('1B');                                                // a man on off the starter
+    play('K'); play('K');                                      // two away
+    sel('home', 6, 0); usePitcher(1);                          // reliever in
+    play('K');                                                 // he gets the third
+    const d = decisions();
+    eq('he got one out', pitcherOutCounts('visiting')[1], 1);
+    eq('not enough for the other two conditions, but the tying run was on deck', d.sv, 1);
+  });
+
+  test('no save for a reliever who enters with the game out of reach', () => {
+    for (let r = 0; r < 6; r++) solo('visiting', r * 2, 0);    // V 6-0
+    threeK('visiting', 12, 0);
+    sel('home', 0, 0);
+    play('K'); play('K');
+    sel('home', 4, 0); usePitcher(1);
+    play('K');
+    const d = decisions();
+    eq('he finished it', finishingPitcher('visiting'), 1);
+    eq('but one out of a six-run game is no save', d.sv, null);
+  });
+
+  // No pitcher holds a win and a save in the same game, so handing the win to
+  // the man who finished it has to take the save off him.
+  test('giving the win to the pitcher who finished takes his save away', () => {
+    solo('visiting', 0, 0); solo('visiting', 2, 0);
+    threeK('visiting', 4, 0);
+    threeK('home', 0, 0);
+    threeK('visiting', 0, 1);
+    sel('home', 0, 1); usePitcher(1);
+    threeK('home', 0, 1);
+    eq('the rules give him the save', decisions().sv, 1);
+    gameState.decisions = { wp: 1 };
+    const d = decisions();
+    eq('now he has the win', d.wp, 1);
+    eq('and no save', d.sv, null);
+  });
+
+  test('the scorer can take a save away', () => {
+    solo('visiting', 0, 0); solo('visiting', 2, 0);
+    threeK('visiting', 4, 0);
+    threeK('home', 0, 0);
+    threeK('visiting', 0, 1);
+    sel('home', 0, 1); usePitcher(1);
+    threeK('home', 0, 1);
+    eq('the rules give one', decisions().sv, 1);
+    gameState.decisions = { sv: -1 };
+    eq('the scorer takes it back', decisions().sv, -1);
+  });
+
+  // A game saved before `ab.seq` existed has no play order to sort runs by, so
+  // the timeline falls back to column-then-batting-order and says so.
+  test('a game with no recorded play order is flagged approximate', () => {
+    solo('visiting', 0, 0); threeK('visiting', 2, 0);
+    threeK('home', 0, 0);
+    gameState.teams.visiting.players[0].atBats[0].seq = 0;   // as an older save has it
+    ok('the summary will say so', decisions().approximate);
+  });
+
+  /* =====================================================================
      #29 — a popup's Confirm holds state captured when it opened
      ===================================================================== */
 

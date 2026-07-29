@@ -4447,6 +4447,283 @@ function importGameJSON(input) {
   reader.readAsText(file);
 }
 
+/* ------------------------------------------- pitcher decisions (Phase 8b) ---
+   Replaces a heuristic that guessed: most IP on the winning side took the win,
+   most ER on the losing side took the loss (and with no ER recorded that was
+   always the losing team's first row), and the save test was
+   `margin <= 3 || IP >= 3`, which is not the save rule. All three were printed
+   in the summary as fact (#18).
+
+   The rules need three things the card now records: when each run scored
+   (`ab.seq`), who put that runner on (`ab.pitcher` — which is exactly the
+   pitcher Rule 9.16 charges with the run), and which pitcher was on the mound
+   for each out (`inn.outsLog`). Nothing here re-infers any of that.
+
+   Where a rule is explicitly the scorer's judgment — 9.17(b)'s starter who did
+   not go five — this offers the candidates rather than picking one. Every
+   decision can also be overridden by hand; overrides persist in
+   `gameState.decisions`. */
+
+function pitcherLabel(team, idx) {
+  const p = gameState.teams[team].pitchers[idx];
+  if (!p) return '';
+  if (!p.name && !p.num) return 'Pitcher ' + (idx + 1);
+  return (p.num ? '#' + p.num + ' ' : '') + (p.name || 'Pitcher ' + (idx + 1));
+}
+
+function cmpPlayOrder(a, b) {
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] - b[i];
+  return 0;
+}
+
+// Every run in the game, in the order it was scored, with the running score
+// after each. A runner's own plate appearance is the ordering key inside a
+// half-inning: runners can't pass each other, so they cross the plate in the
+// order they reached. A game saved before `ab.seq` existed has none, and falls
+// back to column-then-batting-order — flagged as approximate rather than
+// presented as exact.
+function runTimeline() {
+  const runs = [];
+  ['visiting','home'].forEach(battingTeam => {
+    const players = gameState.teams[battingTeam].players;
+    const half = battingTeam === 'visiting' ? 0 : 1;
+    for (let ri = 0; ri < INNINGS; ri++) {
+      for (const col of getColumnsForInning(battingTeam, ri)) {
+        for (let p = 0; p < players.length; p++) {
+          const ab = players[p].atBats[col];
+          if (!ab || !ab.play) continue;
+          if (!(ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3])) continue;
+          if (ab.outOnBase != null) continue;
+          runs.push({
+            battingTeam, realInn: ri, col,
+            order: [ri, half, ab.seq || 0, col, p],
+            hasSeq: !!ab.seq,
+            chargedPitcher: ab.pitcher || 0
+          });
+        }
+      }
+    }
+  });
+  runs.sort((a, b) => cmpPlayOrder(a.order, b.order));
+  let v = 0, h = 0;
+  runs.forEach(r => {
+    if (r.battingTeam === 'visiting') v++; else h++;
+    r.scoreAfter = { visiting: v, home: h };
+  });
+  return runs;
+}
+
+// Outs charged to each pitcher of `pitchingTeam`, straight off the out log.
+function pitcherOutCounts(pitchingTeam) {
+  const battingTeam = pitchingTeam === 'visiting' ? 'home' : 'visiting';
+  const counts = {};
+  for (let ri = 0; ri < INNINGS; ri++) {
+    for (const o of inningOutsLog(battingTeam, ri)) {
+      const i = o.pitcher || 0;
+      counts[i] = (counts[i] || 0) + 1;
+    }
+  }
+  return counts;
+}
+
+// The winning team's pitcher of record when their go-ahead run scored: the last
+// man to have pitched for them, which is whoever was on the mound the last time
+// the losing team batted before that run.
+function pitcherOfRecordAt(winTeam, loseTeam, ri) {
+  const lastRi = winTeam === 'visiting' ? ri - 1 : ri;
+  if (lastRi < 0) return 0;   // nobody has pitched yet — the starter
+  const cols = getColumnsForInning(loseTeam, lastRi);
+  return getEffectivePitcher(loseTeam, cols.length ? cols[cols.length - 1] : lastRi);
+}
+
+// Who finished the game for `pitchingTeam` — the man on the mound for the last
+// out the other side made. -1 if they never retired anybody.
+function finishingPitcher(pitchingTeam) {
+  const battingTeam = pitchingTeam === 'visiting' ? 'home' : 'visiting';
+  for (let ri = INNINGS - 1; ri >= 0; ri--) {
+    const log = inningOutsLog(battingTeam, ri);
+    if (log.length) return log[log.length - 1].pitcher || 0;
+  }
+  return -1;
+}
+
+// How the game stood when a reliever came in: the score before his first batter
+// and how many runners he inherited. The runner count is read off the records of
+// the half-inning he walked into — men who reached earlier in it and neither
+// scored nor were put out — so it is exactly as good as the card is.
+function pitcherEntryState(pitchingTeam, pIdx, timeline) {
+  const battingTeam = pitchingTeam === 'visiting' ? 'home' : 'visiting';
+  const players = gameState.teams[battingTeam].players;
+  const half = battingTeam === 'visiting' ? 0 : 1;
+  let first = null;
+  for (let ri = 0; ri < INNINGS; ri++) {
+    for (const col of getColumnsForInning(battingTeam, ri)) {
+      for (let p = 0; p < players.length; p++) {
+        const ab = players[p].atBats[col];
+        if (!ab || !ab.play || (ab.pitcher || 0) !== pIdx) continue;
+        const key = [ri, half, ab.seq || 0, col, p];
+        if (!first || cmpPlayOrder(key, first.key) < 0) first = { key, ri };
+      }
+    }
+  }
+  if (!first) return null;
+  const before = timeline.filter(r => cmpPlayOrder(r.order, first.key) < 0);
+  const scoreAt = before.length ? before[before.length - 1].scoreAfter : { visiting: 0, home: 0 };
+  let onBase = 0;
+  for (const col of getColumnsForInning(battingTeam, first.ri)) {
+    for (let p = 0; p < players.length; p++) {
+      const ab = players[p].atBats[col];
+      if (!ab || !ab.play) continue;
+      if (cmpPlayOrder([first.ri, half, ab.seq || 0, col, p], first.key) >= 0) continue;
+      if (ab.bases[0] && !ab.bases[3] && ab.outOnBase == null) onBase++;
+    }
+  }
+  return { ri: first.ri, scoreAt, onBase };
+}
+
+// How many innings the game actually went, for 9.17(b)'s "game of 6 or more".
+function inningsPlayed() {
+  let last = -1;
+  for (let ri = 0; ri < INNINGS; ri++) {
+    if (inningHasRecords('visiting', ri) || inningHasRecords('home', ri)) last = ri;
+  }
+  return last + 1;
+}
+
+function teamRunTotal(team) {
+  const el = document.querySelector(`input[data-ls="${team}"][data-stat="r"]`);
+  return parseInt(el && el.value) || 0;
+}
+
+function computePitcherDecisions() {
+  const res = {
+    winTeam: null, loseTeam: null, wp: null, lp: null, sv: null,
+    judgment: null, winCandidates: [], approximate: false
+  };
+  const vR = teamRunTotal('visiting'), hR = teamRunTotal('home');
+  if (vR === hR) return res;                       // a tie yields no decisions
+
+  const winTeam = res.winTeam = vR > hR ? 'visiting' : 'home';
+  const loseTeam = res.loseTeam = vR > hR ? 'home' : 'visiting';
+  const timeline = runTimeline();
+  if (!timeline.length) return res;
+  res.approximate = timeline.some(r => !r.hasSeq);
+
+  // The go-ahead run: the earliest run from which the winner led without ever
+  // giving it back. Scanning from the end, it is the first run at which the
+  // winner's lead becomes unbroken.
+  let idx = timeline.length;
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    if (timeline[i].scoreAfter[winTeam] > timeline[i].scoreAfter[loseTeam]) idx = i;
+    else break;
+  }
+  if (idx === timeline.length) return res;         // shouldn't happen with a winner
+  const goAhead = timeline[idx];
+
+  // Rule 9.17(d): the loss goes to the pitcher charged with the go-ahead run —
+  // which `ab.pitcher` already records, since it is the man who put that runner
+  // on base.
+  res.lp = goAhead.chargedPitcher;
+
+  // Rule 9.17: the win goes to the winning team's pitcher of record at that run.
+  const ofRecord = pitcherOfRecordAt(winTeam, loseTeam, goAhead.realInn);
+  res.wp = ofRecord;
+
+  const winOuts = pitcherOutCounts(winTeam);
+  // Rule 9.17(b): a starter who did not complete 5 innings in a game of 6 or
+  // more cannot be credited with the win — it goes to the most effective
+  // reliever, and the rule says that is the scorer's call. Offer the relievers
+  // who appeared; don't pick one.
+  if (ofRecord === 0 && (winOuts[0] || 0) < 15 && inningsPlayed() >= 6) {
+    res.winCandidates = Object.keys(winOuts).map(Number).filter(i => i !== 0 && winOuts[i] > 0);
+    if (res.winCandidates.length) {
+      res.judgment = 'The starter did not go 5 innings (Rule 9.17(b)) — the win is the scorer\'s call.';
+      res.wp = null;
+    }
+  }
+
+  // A hand override wins over what the rules worked out — and it has to land
+  // before the save is computed, or a scorer who hands the win to the man who
+  // finished the game leaves him holding both the W and the save.
+  const ov = gameState.decisions || {};
+  if (ov.lp !== undefined && ov.lp !== null) res.lp = ov.lp;
+  if (ov.wp !== undefined && ov.wp !== null) { res.wp = ov.wp; res.judgment = null; }
+
+  // Rule 9.19: the save goes to the pitcher who finished the game, is not the
+  // winner, and is charged with at least a third of an inning, provided he also
+  // met one of the three qualifying conditions.
+  const finisher = finishingPitcher(winTeam);
+  if (finisher >= 0 && finisher !== res.wp && (winOuts[finisher] || 0) >= 1) {
+    const entry = pitcherEntryState(winTeam, finisher, timeline);
+    const outs = winOuts[finisher] || 0;
+    const leadAtEntry = entry ? entry.scoreAt[winTeam] - entry.scoreAt[loseTeam] : null;
+    const qualifies =
+      (leadAtEntry !== null && leadAtEntry > 0 && leadAtEntry <= 3 && outs >= 3) ||
+      // The tying run on base, at bat, or on deck: runners inherited, plus the
+      // batter and the man behind him.
+      (leadAtEntry !== null && leadAtEntry > 0 && leadAtEntry <= entry.onBase + 2) ||
+      outs >= 9;
+    if (qualifies) res.sv = finisher;
+  }
+  if (ov.sv !== undefined && ov.sv !== null) res.sv = ov.sv;
+
+  res.overridden = ['wp','lp','sv'].filter(k => ov[k] !== undefined && ov[k] !== null);
+  return res;
+}
+
+/* The decision override picker. Lists the pitchers on the relevant side who
+   actually appeared, plus "Auto" to hand the choice back to the rules. */
+function promptPitcherDecision(which) {
+  const d = computePitcherDecisions();
+  if (!d.winTeam) return;
+  const team = which === 'lp' ? d.loseTeam : d.winTeam;
+  const outs = pitcherOutCounts(team);
+  const appeared = Object.keys(outs).map(Number).filter(i => outs[i] > 0).sort((a, b) => a - b);
+  const title = which === 'wp' ? 'Winning Pitcher' : which === 'lp' ? 'Losing Pitcher' : 'Save';
+
+  let popup = document.getElementById('decision-popup');
+  if (!popup) {
+    popup = document.createElement('div');
+    popup.id = 'decision-popup';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:400;box-shadow:0 8px 40px rgba(26,39,68,0.4);min-width:240px;font-family:var(--font);';
+    document.body.appendChild(popup);
+  }
+  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:10px;font-family:var(--heading)">' + title + '</div>';
+  if (!appeared.length) {
+    html += '<div style="font-size:11px;color:var(--text-light);margin-bottom:10px">No pitcher on that side has recorded an out.</div>';
+  }
+  appeared.forEach(i => {
+    html += '<button class="dp-opt" data-idx="' + i + '" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-bottom:4px;border:1.5px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-family:var(--font)">' +
+      escapeHtml(pitcherLabel(team, i)) + ' <span style="color:var(--text-light);font-size:10px">' + outsToIP(outs[i]) + ' IP</span></button>';
+  });
+  if (which === 'sv') {
+    html += '<button class="dp-opt" data-idx="none" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-bottom:4px;border:1.5px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-family:var(--font)">No save</button>';
+  }
+  html += '<button class="dp-opt" data-idx="auto" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-top:6px;border:1.5px solid var(--navy);border-radius:4px;background:var(--cream);cursor:pointer;font-size:12px;font-weight:700;font-family:var(--font)">Auto (apply the rules)</button>';
+  popup.innerHTML = html;
+  popup.style.display = 'block';
+  popup.querySelectorAll('.dp-opt').forEach(btn => {
+    btn.onclick = function() {
+      popup.style.display = 'none';
+      setPitcherDecision(which, this.dataset.idx);
+    };
+  });
+}
+
+function setPitcherDecision(which, raw) {
+  if (!gameState.decisions) gameState.decisions = {};
+  if (raw === 'auto') delete gameState.decisions[which];
+  else if (raw === 'none') gameState.decisions[which] = -1;
+  else gameState.decisions[which] = parseInt(raw);
+  autoSave();
+  showGameSummary();   // rebuild the card with the new decision
+}
+
+function outsToIP(outs) {
+  const n = outs || 0;
+  return Math.floor(n / 3) + '.' + (n % 3);
+}
+
 /* Game Summary */
 function showGameSummary() {
   let modal = document.getElementById('game-summary-modal');
@@ -4554,50 +4831,6 @@ function showGameSummary() {
       rows += '<tr><td>' + escapeHtml(name) + '</td><td>' + (p.ip || '0') + '</td><td>' + (p.pc || '0') + '</td><td>' + (p.h || '0') + '</td><td>' + (p.r || '0') + '</td><td>' + (p.er || '0') + '</td><td>' + (p.k || '0') + '</td><td>' + (p.bb || '0') + '</td></tr>';
     }
     return rows;
-  }
-
-  // Determine W/L/S pitchers
-  function findPitcherDecisions() {
-    const result = { wp: '', lp: '', sv: '' };
-    // Winning pitcher: last pitcher for winning team when they took the lead for good
-    // Simplified: winning team's pitcher with most IP, losing team's pitcher who allowed the go-ahead run
-    const wTeam = vR > hR ? 'visiting' : 'home';
-    const lTeam = vR > hR ? 'home' : 'visiting';
-    const wPitchers = gameState.teams[wTeam].pitchers;
-    const lPitchers = gameState.teams[lTeam].pitchers;
-    // Find pitcher with most outs on winning side
-    let bestIP = -1, bestIdx = 0;
-    for (let i = 0; i < PITCHER_ROWS; i++) {
-      const ip = parseFloat(wPitchers[i].ip) || 0;
-      if (ip > bestIP) { bestIP = ip; bestIdx = i; }
-    }
-    if (wPitchers[bestIdx]?.name || wPitchers[bestIdx]?.num) {
-      result.wp = (wPitchers[bestIdx].num ? '#' + wPitchers[bestIdx].num + ' ' : '') + (wPitchers[bestIdx].name || 'Pitcher ' + (bestIdx + 1));
-    }
-    // Losing pitcher: pitcher with most ER on losing side
-    let worstER = -1, worstIdx = 0;
-    for (let i = 0; i < PITCHER_ROWS; i++) {
-      const er = parseInt(lPitchers[i].er) || 0;
-      if (er > worstER) { worstER = er; worstIdx = i; }
-    }
-    if (lPitchers[worstIdx]?.name || lPitchers[worstIdx]?.num) {
-      result.lp = (lPitchers[worstIdx].num ? '#' + lPitchers[worstIdx].num + ' ' : '') + (lPitchers[worstIdx].name || 'Pitcher ' + (worstIdx + 1));
-    }
-    // Save: last pitcher for winning team if they pitched the final inning and lead was ≤3
-    const lastPitcherIdx = (() => {
-      for (let i = PITCHER_ROWS - 1; i >= 0; i--) {
-        if (wPitchers[i].ip && parseFloat(wPitchers[i].ip) > 0) return i;
-      }
-      return -1;
-    })();
-    if (lastPitcherIdx > 0 && lastPitcherIdx !== bestIdx) {
-      const lastP = wPitchers[lastPitcherIdx];
-      const margin = Math.abs(vR - hR);
-      if (margin <= 3 || parseFloat(lastP.ip) >= 3) {
-        result.sv = (lastP.num ? '#' + lastP.num + ' ' : '') + (lastP.name || 'Pitcher ' + (lastPitcherIdx + 1));
-      }
-    }
-    return result;
   }
 
   // Player of the game: highest combined (H + RBI + R) weighted
@@ -4714,7 +4947,7 @@ function showGameSummary() {
     return [...new Set(plays)];
   }
 
-  const decisions = vR !== hR ? findPitcherDecisions() : { wp: '', lp: '', sv: '' };
+  const decisions = computePitcherDecisions();
   const potg = findPlayerOfGame();
   const notable = findNotablePlays();
 
@@ -4743,11 +4976,21 @@ function showGameSummary() {
     }
     html += '<div class="gs-hl-detail" style="color:var(--text-light)">' + escapeHtml(potg.team) + '</div></div>';
   }
-  if (decisions.wp) {
+  if (decisions.winTeam) {
+    const change = w => '<button onclick="promptPitcherDecision(\'' + w + '\')" style="margin-left:6px;font-size:9px;padding:1px 5px;border:1px solid var(--border);border-radius:3px;background:transparent;color:var(--text-light);cursor:pointer;font-family:var(--font)">change</button>';
+    const nameOf = (team, idx) => (idx === null || idx === undefined || idx < 0) ? '—' : escapeHtml(pitcherLabel(team, idx));
     html += '<div class="gs-highlight-card"><div class="gs-hl-label">Pitching Decision</div>';
-    html += '<div class="gs-pitching-line"><b>W:</b> ' + escapeHtml(decisions.wp) + '</div>';
-    html += '<div class="gs-pitching-line"><b>L:</b> ' + escapeHtml(decisions.lp) + '</div>';
-    if (decisions.sv) html += '<div class="gs-pitching-line"><b>SV:</b> ' + escapeHtml(decisions.sv) + '</div>';
+    html += '<div class="gs-pitching-line"><b>W:</b> ' + nameOf(decisions.winTeam, decisions.wp) + change('wp') + '</div>';
+    html += '<div class="gs-pitching-line"><b>L:</b> ' + nameOf(decisions.loseTeam, decisions.lp) + change('lp') + '</div>';
+    html += '<div class="gs-pitching-line"><b>SV:</b> ' + nameOf(decisions.winTeam, decisions.sv) + change('sv') + '</div>';
+    if (decisions.judgment) {
+      html += '<div class="gs-hl-detail" style="color:var(--red);margin-top:4px">' + escapeHtml(decisions.judgment) + '</div>';
+      html += '<div class="gs-hl-detail" style="color:var(--text-light)">Candidates: ' +
+        decisions.winCandidates.map(i => escapeHtml(pitcherLabel(decisions.winTeam, i))).join(', ') + '</div>';
+    }
+    if (decisions.approximate) {
+      html += '<div class="gs-hl-detail" style="color:var(--text-light);margin-top:4px">Approximate: this game was saved before play order was recorded.</div>';
+    }
     html += '</div>';
   }
   html += '</div>';
