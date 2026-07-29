@@ -794,10 +794,6 @@ function getActivePlayerIndex(team, pIdx, innIdx) {
   return (ab && ab.subChange) ? sp + 1 : sp;
 }
 
-function getActivePlayer(team, pIdx, innIdx) {
-  return gameState.teams[team].players[getActivePlayerIndex(team, pIdx, innIdx)];
-}
-
 // A row's `num`/`name` as they stand on the card. `collectState` only scrapes the
 // lineup inputs on the debounced save (~400ms after the last keystroke), so
 // anything that puts a player's name in front of the scorer has to read the
@@ -3834,8 +3830,6 @@ function newGame() {
   gameOverShown = false;
   applyState();
 }
-
-function printScorecard() { window.print(); }
 
 /* Position play popup input */
 function showPositionPopup(prefix, placeholder, target) {
