@@ -897,16 +897,32 @@ Recorded so they aren't re-discovered as bugs:
 - **Force vs tag outs** not distinguished; no automatic force logic — the scorer
   picks every runner destination.
 - **Substitutions:** one sub row per lineup slot, so a second PH at the same spot
-  can't be recorded; no re-entry rules and no re-entry prevention (`markSub` 2947).
-- **DH / pitcher batting:** `DH` is a position option only; nothing enforced.
+  can't be recorded (`SUBS_PLAN.md` Step 4 — spiked, sized at medium). ✅ Re-entry
+  rules and prevention landed in Step 3.
+- **DH / pitcher batting:** ✅ **done** — `checkDHRules` (OBR 5.11), Step 2 of
+  `SUBS_PLAN.md`.
 - **Runner passing another runner** not tracked (#4 is the mechanical version).
-- **Derived stats:** only AVG is computed (`H/AB`, correctly, 3574) plus
-  IP/PC/H/R/ER/K/BB. No OBP, SLG, OPS, WHIP. `era` is a manual field that
-  `updatePitcherStats` never computes or overwrites.
+- **Derived stats:** only AVG is computed (`H/AB`, correctly, in `playerBox`) plus
+  IP/PC/H/R/ER/K/BB. No OBP, SLG, OPS, WHIP. ✅ **ERA now computed** — and the
+  note this entry used to carry was wrong: `era` was never a *manual field*, it
+  was a state key with **no input anywhere**, while the pitcher header promised
+  "Pitcher / ERA". It is now a derived cell (`ER × 27 ÷ outs`, `INF` when a
+  pitcher is charged an earned run without retiring anybody), shown in the pitcher
+  grid and the summary box score.
 - **Innings:** hard cap at 15, and batting around consumes an inning column, so a
   batted-around game can't reach the 15th. `overflowToNextColumn` returns silently
   at the cap (1199), leaving no batter selected.
-- **Game-over logic hardcodes 9 innings** (`realInn >= 8` at 1009, 1024, 1515).
+- **Game-over logic hardcodes 9 innings** — ✅ **done.** Regulation length is
+  `gameState.rules.regulationInnings` (the **Innings** select in the game-info
+  header, 9/7/6/5), read through `regulationInnings()` / `lastRegulationIdx()`.
+  Setting it pulls the inning columns back with it but never below the last column
+  that has plays in it; `+EI` still extends past regulation into extras. Five
+  scattered `visibleInnings || 9` fallbacks were routed through
+  `visibleInningCount()` at the same time so a literal nine can't leak back in.
+  *Not changed, and correct as-is:* Rule 9.17(a)'s five-innings-for-a-win test
+  applies to any game of six innings or more, so a 6- or 7-inning game needs no
+  adjustment there. A 5-inning game would — the rule drops to four innings — and
+  that is not implemented.
 - **Test coverage before Phase 1:** `tests.html` covers only extra-inning linescore
   columns and R totals (16/16 passing). No coverage of outs, transitions, batting
   order, RBI, ER, undo, or persistence.
