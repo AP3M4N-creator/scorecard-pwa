@@ -104,8 +104,14 @@
   const POPUP_IDS = [
     'runner-popup', 'outcome-popup', 'base-picker', 'edit-play-popup',
     'move-runner-popup', 'pos-popup', 'k-popup', 'spray-popup', 'er-review-popup',
-    'pitcher-popup', 'recompute-popup', 'popup-backdrop', 'play-reject'
+    'pitcher-popup', 'recompute-popup', 'popup-backdrop', 'play-reject',
+    'sub-popup', 'dh-popup', 'pos-change-popup'
   ];
+
+  // The lineup inputs and position selects hold state the grid never rebuilds
+  // and `reset` does not re-render, so a case that fills any of them in has to
+  // have them cleared — but only the cases that do pay for the sweep.
+  let lineupDirty = false;
 
   function touch(col) {
     dirtyCols.add(col);
@@ -157,6 +163,11 @@
     rawAll('.at-bat-cell.selected').forEach(c => c.classList.remove('selected'));
     // Only the cases that reveal extra innings need the (expensive) re-toggle.
     if (visibilityDirty) updateInningVisibility();
+    if (lineupDirty) {
+      rawAll('select[data-field="pos"]').forEach(s => { s.value = ''; });
+      rawAll('input[data-field="num"],input[data-field="name"]').forEach(i => { i.value = ''; });
+      lineupDirty = false;
+    }
   }
 
   /* -------------------------------------------------------- assertions ---*/
@@ -2230,5 +2241,287 @@
     play('SH'); runnerPopup({ 0: 0, batter: 0 });   // the runner holds
     eq('nobody advanced', onB('visiting', 0, 0), 0);
     eq('so it is an ordinary out', bStat('visiting', 2, 'ab'), '1');
+  });
+
+  /* ============================== substitutions, re-entry and the DH ======
+     SUB used to be a plain toggle, so the second press granted a re-entry with
+     no record and no warning — and was indistinguishable from taking back a
+     mis-press. `DH` was a position option with no rules behind it. */
+
+  function posSel(team, p) {
+    return document.querySelector(`select[data-field="pos"][data-team="${team}"][data-p="${p}"]`);
+  }
+  // Change a position the way a scorer does: set the select and let it fire.
+  function setPos(team, p, value) {
+    lineupDirty = true;
+    const s = posSel(team, p);
+    if (!s) fail(`no pos select for ${team} p${p}`);
+    s.value = value;
+    s.dispatchEvent(new Event('change', { bubbles: true }));
+    return s;
+  }
+  // Type a player in the way a scorer does — into the inputs. `collectState`
+  // only scrapes them on the debounced save, so anything that names a player has
+  // to work off the inputs, and a case that wrote straight to the state would
+  // never notice.
+  function setPlayer(team, p, num, name) {
+    lineupDirty = true;
+    [['num', num], ['name', name]].forEach(([f, v]) => {
+      const inp = document.querySelector(`input[data-field="${f}"][data-team="${team}"][data-p="${p}"]`);
+      if (!inp) fail(`no ${f} input for ${team} p${p}`);
+      inp.value = v;
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+  // Click an option in one of the new popups by the text it starts with.
+  function clickOpt(popupId, cls, startsWith) {
+    if (!visible(popupId)) fail(`#${popupId} is not open`);
+    const btns = Array.from(document.getElementById(popupId).querySelectorAll(cls));
+    const btn = btns.find(b => b.textContent.startsWith(startsWith));
+    if (!btn) fail(`#${popupId} has no option starting "${startsWith}" (got: ${btns.map(b => JSON.stringify(b.textContent.slice(0, 40))).join(', ')})`);
+    btn.onclick();
+  }
+  function subLine(team, p) {
+    return gameState.teams[team].players[p].atBats.map(a => (a.subChange ? '1' : '0')).join('');
+  }
+
+  test('SUB marks the sub in from the selected column to the end of the card', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    ok('no question asked on the way in', !visible('sub-popup'));
+    eq('the line runs to the end', subLine('visiting', 0), '011111111111111');
+  });
+
+  test('taking a sub out who never batted is an undo, not a re-entry', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    markSub();                                      // second press, nothing recorded
+    ok('nothing to decide, so nothing is asked', !visible('sub-popup'));
+    eq('the line is gone', subLine('visiting', 0), '000000000000000');
+    eq('and no re-entry was logged', gameState.reentries.length, 0);
+  });
+
+  test('taking out a sub who has batted asks instead of toggling', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    play('1B');                                     // the sub singles in the 2nd
+    sel('visiting', 0, 3);
+    markSub();
+    ok('the question is put', visible('sub-popup'));
+    eq('and nothing has changed yet', subLine('visiting', 0), '011111111111111');
+  });
+
+  test('a re-entry is recorded, and flagged illegal under OBR 5.10(d)', () => {
+    setPlayer('visiting', 0, '12', 'Alou');
+    setPlayer('visiting', 1, '30', 'Ruiz');
+    sel('visiting', 0, 1);
+    markSub();
+    play('1B');
+    sel('visiting', 0, 3);
+    markSub();
+    clickOpt('sub-popup', '.sub-opt', '#12 Alou re-enters');
+    eq('the starter is back from the 4th on', subLine('visiting', 0), '011000000000000');
+    eq('one re-entry logged', gameState.reentries.length, 1);
+    const r = gameState.reentries[0];
+    eq('in the right half-inning', r.inning, 'T4');
+    eq('for the right spot', r.spot, 1);
+    eq('naming the starter', r.starter, '#12 Alou');
+    eq('and the man he replaced', r.sub, '#30 Ruiz');
+    eq('flagged illegal by default', r.legal, false);
+    eq('the sub keeps the hit', bStat('visiting', 1, 'h'), '1');
+    eq('and the starter has none', bStat('visiting', 0, 'h'), '');
+  });
+
+  // `collectState` scrapes the lineup inputs on the debounced save, ~400ms after
+  // the last keystroke. A scorer who types a name and reaches straight for SUB
+  // was shown — and had recorded — "Batter 1".
+  test('a name typed a moment ago is the name in the prompt and the log', () => {
+    setPlayer('visiting', 0, '12', 'Alou');
+    setPlayer('visiting', 1, '30', 'Ruiz');
+    eq('the state has not caught up yet', gameState.teams.visiting.players[0].name, '');
+    sel('visiting', 0, 1);
+    markSub();
+    play('1B');
+    sel('visiting', 0, 3);
+    markSub();
+    ok('the prompt names the typed player',
+      document.getElementById('sub-popup').innerHTML.includes('#12 Alou'));
+    clickOpt('sub-popup', '.sub-opt', '#12 Alou re-enters');
+    eq('and so does the record', gameState.reentries[0].starter, '#12 Alou');
+    eq('on both sides of it', gameState.reentries[0].sub, '#30 Ruiz');
+  });
+
+  test('a league that allows re-entry says so once and the record shows it legal', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    play('1B');
+    sel('visiting', 0, 3);
+    markSub();
+    document.getElementById('sub-allow-reentry').checked = true;
+    clickOpt('sub-popup', '.sub-opt', 'Batter 1 re-enters');
+    eq('the game now allows it', gameState.rules.allowReentry, true);
+    eq('and the entry is not flagged', gameState.reentries[0].legal, true);
+  });
+
+  test('undoing the substitution clears the whole line and gives the at-bats back', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    play('1B');
+    eq('the sub owns the hit first', bStat('visiting', 1, 'h'), '1');
+    sel('visiting', 0, 3);
+    markSub();
+    clickOpt('sub-popup', '.sub-opt', 'Undo the substitution');
+    eq('no sub line left', subLine('visiting', 0), '000000000000000');
+    eq('nothing logged as a re-entry', gameState.reentries.length, 0);
+    eq('the hit is the starter\'s again', bStat('visiting', 0, 'h'), '1');
+    eq('and the sub row is empty', bStat('visiting', 1, 'h'), '');
+  });
+
+  test('cancelling the re-entry question leaves the card alone', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    play('1B');
+    sel('visiting', 0, 3);
+    markSub();
+    clickOpt('sub-popup', '.sub-opt', 'Cancel');
+    eq('the sub line stands', subLine('visiting', 0), '011111111111111');
+    eq('and nothing was logged', gameState.reentries.length, 0);
+  });
+
+  test('undo is refused while the re-entry question is open', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    play('1B');
+    sel('visiting', 0, 3);
+    markSub();
+    ok('the question is open', visible('sub-popup'));
+    undoLastPlay();
+    eq('the single is still there', ab('visiting', 0, 1).play, '1B');
+    clickOpt('sub-popup', '.sub-opt', 'Cancel');
+  });
+
+  test('a second DH asks which one to keep', () => {
+    setPlayer('visiting', 0, '12', 'Alou');
+    setPos('visiting', 0, 'DH');
+    ok('one DH raises nothing', !visible('dh-popup'));
+    setPos('visiting', 2, 'DH');
+    ok('two does', visible('dh-popup'));
+    clickOpt('dh-popup', '.dh-opt', 'Keep this one');
+    eq('the first DH is cleared', posSel('visiting', 0).value, '');
+    eq('and the new one stands', posSel('visiting', 2).value, 'DH');
+  });
+
+  test('undoing the second DH puts the row back as it was', () => {
+    setPos('visiting', 0, 'DH');
+    setPos('visiting', 2, '1B');
+    setPos('visiting', 2, 'DH');
+    clickOpt('dh-popup', '.dh-opt', 'Undo');
+    eq('the row goes back to 1B', posSel('visiting', 2).value, '1B');
+    eq('and the DH is unchanged', posSel('visiting', 0).value, 'DH');
+  });
+
+  test('a pitcher listed alongside a DH is a notice while the lineup is being typed', () => {
+    setPos('visiting', 0, 'DH');
+    setPos('visiting', 2, 'P');
+    ok('no modal in the way', !visible('dh-popup'));
+    ok('but it says so', visible('play-reject'));
+    eq('and the entry stands', posSel('visiting', 2).value, 'P');
+    eq('nothing is recorded as terminated', gameState.dhTerminated.visiting, null);
+  });
+
+  test('once the game is under way, a pitcher in the order asks', () => {
+    sel('visiting', 4, 0);
+    play('1B');                                    // this side has batted
+    setPos('visiting', 0, 'DH');
+    setPos('visiting', 2, 'P');
+    ok('the question is put', visible('dh-popup'));
+    clickOpt('dh-popup', '.dh-opt', 'The DH was lost');
+    ok('the DH is recorded lost', !!gameState.dhTerminated.visiting);
+    eq('in the half-inning the card was on', gameState.dhTerminated.visiting.inning, 'T1');
+    eq('with the reason', gameState.dhTerminated.visiting.reason, 'the pitcher entered the batting order');
+  });
+
+  test('calling it a mistake instead reverts the position', () => {
+    sel('visiting', 4, 0);
+    play('1B');
+    setPos('visiting', 0, 'DH');
+    setPos('visiting', 2, '3B');
+    setPos('visiting', 2, 'P');
+    clickOpt('dh-popup', '.dh-opt', 'A mistake');
+    eq('the row is 3B again', posSel('visiting', 2).value, '3B');
+    eq('and no termination is on the card', gameState.dhTerminated.visiting, null);
+  });
+
+  test('a DH who takes the field loses the role without being asked', () => {
+    setPlayer('visiting', 0, '12', 'Alou');
+    setPos('visiting', 0, 'DH');
+    setPos('visiting', 0, 'LF');
+    ok('no question — the rule is not ambiguous', !visible('dh-popup'));
+    ok('it is recorded', !!gameState.dhTerminated.visiting);
+    eq('naming who and where', gameState.dhTerminated.visiting.reason, '#12 Alou took the field at LF');
+  });
+
+  test('the mid-game position popup terminates the DH the same way', () => {
+    setPlayer('visiting', 0, '12', 'Alou');
+    setPos('visiting', 0, 'DH');
+    sel('visiting', 0, 2);
+    changeFieldPos();
+    const btn = document.getElementById('pos-change-popup').querySelector('[data-pos="1B"]');
+    if (!btn) fail('the position popup has no 1B option');
+    btn.click();
+    eq('the select moved', posSel('visiting', 0).value, '1B');
+    ok('and the DH is recorded lost', !!gameState.dhTerminated.visiting);
+    eq('in the inning the popup was opened on', gameState.dhTerminated.visiting.inning, 'T3');
+    eq('with the defensive change alongside it', gameState.defChanges[0].changes[0].toPos, '1B');
+  });
+
+  test('a DH lineup with no pitcher in the order raises nothing', () => {
+    sel('visiting', 4, 0);
+    play('1B');
+    setPos('visiting', 0, 'DH');
+    setPos('visiting', 2, 'C');
+    setPos('visiting', 4, '1B');
+    ok('no question', !visible('dh-popup'));
+    ok('and no notice', !visible('play-reject'));
+    eq('nothing terminated', gameState.dhTerminated.visiting, null);
+  });
+
+  test('the DH and any re-entry survive a round trip through storage', () => {
+    clearStorage();
+    try {
+      setPlayer('visiting', 0, '12', 'Alou');
+      setPos('visiting', 0, 'DH');
+      setPos('visiting', 0, 'LF');                 // terminates the DH
+      sel('visiting', 2, 1);
+      markSub();
+      play('1B');
+      sel('visiting', 2, 3);
+      markSub();
+      clickOpt('sub-popup', '.sub-opt', 'Batter 2 re-enters');
+      flushSave();
+      const back = mergeStateDefaults(JSON.parse(safeStorage.getItem(CURRENT_GAME_KEY)));
+      eq('the termination came back', back.dhTerminated.visiting.reason, '#12 Alou took the field at LF');
+      eq('and the re-entry', back.reentries.length, 1);
+      eq('in the right inning', back.reentries[0].inning, 'T4');
+    } finally { clearStorage(); }
+  });
+
+  test('an older save without the new logs gets them backfilled', () => {
+    const old = JSON.parse(JSON.stringify(createEmptyState()));
+    delete old.rules; delete old.reentries; delete old.dhTerminated;
+    const merged = mergeStateDefaults(old);
+    eq('re-entry is off by default', merged.rules.allowReentry, false);
+    ok('the log is a list', Array.isArray(merged.reentries));
+    ok('and both sides have a DH slot', 'visiting' in merged.dhTerminated && 'home' in merged.dhTerminated);
+  });
+
+  test('an old save carrying subChange as a boolean still resolves the batter', () => {
+    const old = JSON.parse(JSON.stringify(createEmptyState()));
+    old.teams.visiting.players[0].atBats[2].subChange = true;
+    const merged = mergeStateDefaults(old);
+    eq('the flag is intact', merged.teams.visiting.players[0].atBats[2].subChange, true);
+    gameState.teams.visiting.players[0].atBats[2].subChange = true;
+    setPlayer('visiting', 1, '30', 'Ruiz');
+    eq('and the sub is the man batting', getActivePlayerName('visiting', 0, 2), '#30 Ruiz');
   });
 })();
