@@ -20,8 +20,8 @@ DOM in jsdom — 47 diagnostic probes — and reproduced C1, C2 and H1 by hand i
 live browser at `http://localhost:8765` (`preview_start` → `scorecard`).
 
 **Progress:** Phases 1–4 are done (C1, C2, C3, H1, H4, M1, M2, H2, H3), and so are
-M3, M4, M5, M6 and M7 of Phase 5 — one commit per fix. What is left is **L1, L2, L4
-and L5** (L3 and L6–L7 are design gaps, not work). This document is the whole state
+M3, M4, M5, M6, M7, L1, L2 and L4 of Phase 5 — one commit per fix. What is left is
+**L5** (L3 and L6–L7 are design gaps, not work). This document is the whole state
 of the work.
 
 ---
@@ -514,7 +514,7 @@ single-double-homer across the three rows of spot 1 splitting 1/1 · 1/1 · 1/1/
 | L1 ✅ | `WP`/`PB`/`BK` with the bases empty record nothing but still **push an undo entry** (2 no-op undos to press through). | [app.js:2748] |
 | L2 ✅ | A play refused because the inning already has 3 outs **returns silently** — no `showPlayReject`, unlike every other refusal. | [app.js:1368] |
 | L3 | A **balk** is visible only as a `BK` advancement label on the runner's diamond; no BK count on the pitcher line. | [app.js:2809] |
-| L4 | Batting around in the **15th column can't overflow** (`nextCol >= INNINGS` returns), leaving the selection on a filled cell and further batters silently unenterable. | [app.js:2211] |
+| L4 ✅ | Batting around in the **15th column can't overflow** (`nextCol >= INNINGS` returns), leaving the selection on a filled cell and further batters silently unenterable. | [app.js:2211] |
 | L5 | A home half **never played stays blank** rather than showing `X`. | [app.js:3394] |
 
 ### M3 — the `SF`/`SH` runner popup offers a batter destination it discards — ✅ **FIXED**
@@ -710,6 +710,31 @@ each gaining the assertion that the refusal is now visible. Those three are the 
 met from the other side: every one of them passed while the app said nothing. Reverting
 the toasts fails all six and nothing else.
 
+### L4 — batting around in the last column can't overflow — ✅ **FIXED**
+`overflowToNextColumn` [app.js:2548]
+
+**What was done.** Said which wall was hit. The card is fifteen columns wide, an inning
+that bats around claims the next one, and the fifteenth has nothing after it — so the
+function returned bare, leaving the selection sitting on the filled cell it had just
+been called from. Every batter after that was refused for a reason the scorer had no way
+to see: the *cell* was full, and before **L2** that refusal was silent too.
+
+Two walls, two messages, deliberately. The card being full has no answer inside this
+inning (the scorer needs the second card the 15-column grid was always the limit of),
+while a filled cell has an obvious one (Change Play Type, or the next empty cell), and a
+single message would have sent the scorer looking for the wrong fix.
+
+Not widened into a fix for the limit itself — a 16th column, or dynamic columns. Fifteen
+columns is a deliberate design constraint (iPad width, and the grid is built once at
+boot), the state, headers and column map are all sized by `INNINGS`, and a nine-batter
+inning reaching column 15 means a game already 15 innings long *and* batting around in
+its last one. What that scorer needs is to be told, not to be given a sixteenth column.
+
+Verified: 1 new case (275 passed · 0 failed) — nine walks in the last column, then the
+assertion that the toast names the card, followed by a tenth batter proving the
+follow-on refusal names the *cell* instead. Reverting the toast fails it and nothing
+else.
+
 **Not defects — design gaps, listed so they aren't re-found:**
 
 - **L6** Force out vs tag out isn't distinguished — the popup offers "Out at *N*"
@@ -751,7 +776,7 @@ is where those rows were when the finding was written.
 | **L1** ✅ | low | `WP`/`PB`/`BK` with bases empty record nothing but push an undo entry | applyRunnerEvent [2748] | `applyRunnerEvent('BK')` with nobody on → `playHistory.length` +1, card unchanged |
 | **L2** ✅ | low | A play refused for 3 outs gives no feedback | applyPlay [1368] | enter a play in a 3-out inning → silent return |
 | **L3** | low | Balk isn't counted on the pitcher line | [2809] | — |
-| **L4** | low | Bat-around in the 15th column can't overflow; further batters silently unenterable | overflowToNextColumn [2211] | 9 × `play('BB')` in col 14 → selection stuck on a filled cell |
+| **L4** ✅ | low | Bat-around in the 15th column can't overflow; further batters silently unenterable | overflowToNextColumn [2211] | 9 × `play('BB')` in col 14 → selection stuck on a filled cell |
 | **L5** | low | A home half never played stays blank rather than `X` | fillLinescoreZeros [3394] | visitor wins in the top of the 9th → home 9th cell blank |
 | **L6** | gap | Force out vs tag out not distinguished (notation-level; correct runner always recorded) | — | — |
 | **L7** | gap | No batting-out-of-order detection | — | — |

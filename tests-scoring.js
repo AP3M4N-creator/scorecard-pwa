@@ -987,6 +987,24 @@
     eq('IP', pStat('visiting', 0, 'ip'), '1.0');
   });
 
+  // L4 — batting around needs a column to spill into, and there is nothing after the
+  // 15th. The overflow used to return bare, leaving the selection on the filled cell it
+  // came from and the card looking dead.
+  test('an inning that bats around in the last column says the card is full', () => {
+    sel('visiting', 0, INNINGS - 1);
+    for (let i = 0; i < 9; i++) play('BB');          // fills all 9 spots, inning still live
+    eq('no column to spill into', curCol(), INNINGS - 1);
+    ok('the wall is announced', visible('play-reject'));
+    ok('and it names the card, not the cell',
+      document.getElementById('play-reject').textContent.indexOf('card is full') >= 0);
+    // The scorer is now parked on a filled cell, which is its own refusal (L2) — the
+    // two walls have different answers, so they must not read the same.
+    play('1B');
+    eq('and the 10th batter is still not recorded anywhere', ab('visiting', 0, INNINGS - 1).play, 'BB');
+    ok('the second wall speaks too',
+      document.getElementById('play-reject').textContent.indexOf('already has a play') >= 0);
+  });
+
   // #9 — a batter's SECOND time up in a batted-around inning is a different runner
   // on the bases than his first. `getRunnerCol` scanned columns forward and found
   // the first PA, so the second one's advancement was written onto a cell that

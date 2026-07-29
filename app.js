@@ -2547,7 +2547,15 @@ function selectNextBatter(team, innIdx) {
 
 function overflowToNextColumn(team, innIdx) {
   const nextCol = innIdx + 1;
-  if (nextCol >= INNINGS) return;
+  // L4: an inning that bats around needs a column to spill into, and the card has
+  // fifteen. Reaching the last one used to return bare, leaving the selection on the
+  // filled cell it came from — where every further batter was refused, silently until
+  // L2 gave that cell a voice. Say which wall was hit, since the two refusals a scorer
+  // then meets ("this cell is full", "no column left") have different answers.
+  if (nextCol >= INNINGS) {
+    showPlayReject('The card is full — no column left for this inning.');
+    return;
+  }
 
   // Mark the next column as a continuation of the same real inning
   if (!gameState.columnMap) gameState.columnMap = { visiting:defaultColumnMap(), home:defaultColumnMap() };
