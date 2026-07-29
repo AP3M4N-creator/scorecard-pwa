@@ -423,6 +423,49 @@
     eq('pitch count', ab('visiting', 0, 0).pitches.length, 4);
   });
 
+  // M7 — a play the scorer taps rather than pitches into left a count the play could
+  // not have happened on. A `K` pushed one 'X', which `getPitchCount` reads as neither
+  // a ball nor a strike and `renderPitches` draws as nothing: the cell claimed a pitch
+  // over an empty track, at 0-0, on a strikeout.
+  test('a strikeout entered by button is three strikes', () => {
+    sel('visiting', 0, 0);
+    play('K');
+    eq('pitches', ab('visiting', 0, 0).pitches.join(''), 'SSS');
+    eq('count', JSON.stringify(getPitchCount(ab('visiting', 0, 0).pitches)), '{"balls":0,"strikes":3}');
+    ok('and the track draws them', document.getElementById('pt-visiting-0-0').innerHTML.indexOf('strike') >= 0);
+  });
+
+  test('a strikeout on a worked count only pads what is missing', () => {
+    sel('visiting', 0, 0);
+    pitch('B'); pitch('F'); pitch('B');
+    play('ꓘ');
+    eq('pitches', ab('visiting', 0, 0).pitches.join(''), 'BFBSS');
+    eq('count', JSON.stringify(getPitchCount(ab('visiting', 0, 0).pitches)), '{"balls":2,"strikes":3}');
+  });
+
+  test('a walk entered by button is four balls', () => {
+    sel('visiting', 0, 0);
+    pitch('B'); pitch('B'); pitch('B');
+    play('BB');
+    eq('pitches', ab('visiting', 0, 0).pitches.join(''), 'BBBB');
+    eq('count', JSON.stringify(getPitchCount(ab('visiting', 0, 0).pitches)), '{"balls":4,"strikes":0}');
+  });
+
+  // An intentional walk is awarded without a pitch under the current rule, so padding
+  // one to four balls would invent them.
+  test('an intentional walk is not padded to four balls', () => {
+    sel('visiting', 0, 0);
+    play('IBB');
+    eq('pitches', ab('visiting', 0, 0).pitches.join(''), 'B');
+  });
+
+  test('an auto-triggered strikeout is not padded past three strikes', () => {
+    sel('visiting', 0, 0);
+    pitch('S'); pitch('S'); pitch('S');
+    clickId('k-swinging');
+    eq('pitches', ab('visiting', 0, 0).pitches.join(''), 'SSS');
+  });
+
   test('a home run with two on scores three and credits three RBI', () => {
     sel('visiting', 0, 0);
     play('1B');

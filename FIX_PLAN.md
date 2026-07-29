@@ -19,9 +19,10 @@ engine end to end, then drove the real `app.js` against the real `index.html`
 DOM in jsdom — 47 diagnostic probes — and reproduced C1, C2 and H1 by hand in a
 live browser at `http://localhost:8765` (`preview_start` → `scorecard`).
 
-**Progress:** Phases 1–4 are done (C1, C2, C3, H1, H4, M1, M2, H2, H3) — one commit
-per fix. What is left is **Phase 5 polish**: M3–M7 and L1–L5, whose decisions are
-D8–D11 below. This document is the whole state of the work.
+**Progress:** Phases 1–4 are done (C1, C2, C3, H1, H4, M1, M2, H2, H3), and so are
+M3, M4, M6 and M7 of Phase 5 — one commit per fix. What is left is **M5 and L1–L5**
+(L3 and L6–L7 are design gaps, not work). This document is the whole state of the
+work.
 
 ---
 
@@ -509,7 +510,7 @@ single-double-homer across the three rows of spot 1 splitting 1/1 · 1/1 · 1/1/
 | M4 ✅ | An **`FC` can record three outs** — `maxOuts` is 3 for anything not DP/TP, and `playEntryReject` doesn't constrain FC. (Folds into the D2 work — **it did not**; see below.) | [app.js:1761], [app.js:1344] |
 | M5 | **Undo history is memory-only** — after a refresh `undoLastPlay` does nothing (`historyDepth: 0`, state unchanged). `clearSelectedCell` still works correctly post-refresh. The 2026-07-28 plan deliberately left this; re-confirm rather than assume. | [app.js:2817] |
 | M6 ✅ | A pitcher who records **no outs shows blank IP**, not `0.0` — `s.outs > 0 ? fullInnings : ''`. Run/ER attribution across a mid-inning change is otherwise **correct** (`ab.pitcher` is frozen at entry). | [app.js:4047] |
-| M7 | **Manually-entered `BB`/`K` leave the pitch count inconsistent.** A `BB` tapped on a 3-ball count stays at 3 pitches (the `push('B')` only fires when `pitches.length === 0`); a `K` tapped by button pushes `'X'`, which `getPitchCount` reads as 0 strikes and `renderPitches` draws as nothing — so the cell shows "1 pitch" over an empty pitch track. | [app.js:1382–1392], [app.js:2327] |
+| M7 ✅ | **Manually-entered `BB`/`K` leave the pitch count inconsistent.** A `BB` tapped on a 3-ball count stays at 3 pitches (the `push('B')` only fires when `pitches.length === 0`); a `K` tapped by button pushes `'X'`, which `getPitchCount` reads as 0 strikes and `renderPitches` draws as nothing — so the cell shows "1 pitch" over an empty pitch track. | [app.js:1382–1392], [app.js:2327] |
 | L1 | `WP`/`PB`/`BK` with the bases empty record nothing but still **push an undo entry** (2 no-op undos to press through). | [app.js:2748] |
 | L2 | A play refused because the inning already has 3 outs **returns silently** — no `showPlayReject`, unlike every other refusal. | [app.js:1368] |
 | L3 | A **balk** is visible only as a `BK` advancement label on the runner's diamond; no BK count on the pitcher line. | [app.js:2809] |
@@ -582,12 +583,39 @@ A consequence worth naming: IP is now always `full.remainder`, so a whole inning
 `1.0` where it read `1`. That is the convention `0.1` and `0.2` were already using, and
 `0.0` beside a bare `1` would have been the odd pair.
 
-Verified: 3 new cases (263 passed · 0 failed) — the 0-out appearance, the row that
+Verified: 3 new cases (261 passed · 0 failed) — the 0-out appearance, the row that
 never pitched staying blank, and a walk counting as an appearance. Eight existing
 assertions moved with the format: four full innings `'1'` → `'1.0'`, and four that read
 `''` for a pitcher who had in fact faced somebody (a home run with nobody out, and
-three take-back cases where a single stays on the card). Reverting the appearance test
-alone fails 6, all of them 0-out appearances.
+three take-back cases where a single stays on the card). Those four are the finding
+itself, met from the other side — every one of them a pitcher the old code called
+absent.
+
+### M7 — a button-entered `BB`/`K` leaves the pitch count inconsistent — ✅ **FIXED**
+`applyPlay` [app.js:1592], `finishPlay` [app.js:2248]
+
+**What was done.** Fix per D10. A strikeout pads strikes to 3 and a walk pads balls to
+4, both loops reading `getPitchCount`, so they stop at the count the outcome implies and
+an auto-triggered K or auto-walk is already there — the pad only ever fires on a button
+press. `K+WP` pads too: the batter struck out, whatever else the pitch did.
+
+The `'X'` a `K` used to push was the sharper half. `getPitchCount` reads it as neither a
+ball nor a strike and `renderPitches` draws it as nothing, so the cell claimed one
+pitch, showed an empty track, and reported 0-0 on a strikeout. `'X'` stays for a ball
+put in play, which is what it means.
+
+`IBB` is left alone deliberately: since 2017 an intentional walk is awarded without a
+pitch thrown, so padding it to four balls would invent them. It keeps its single `'B'`.
+
+**Found while testing, and fixed here because M7 needs it:** `finishPlay` repainted the
+pitch *count* and not the pitch *track*, so the synthesized strikes weren't drawn — the
+same "3 pitches over an empty track" symptom, arriving from the other direction. It now
+calls `renderPitches` alongside `renderPitchCount`. Before this change nothing was lost
+by the omission, because the result pitch it added (`'H'`/`'X'`) draws as nothing.
+
+Verified: 5 new cases (266 passed · 0 failed) — the cold K, a K on a worked count
+padding only what is missing, the 3-ball walk, the IBB exemption, and an auto-triggered
+K not being padded past three.
 
 **Not defects — design gaps, listed so they aren't re-found:**
 
@@ -617,16 +645,16 @@ is where those rows were when the finding was written.
 | **C2** ✅ | critical | `DP`/`TP` confirmed on popup defaults records 1 out and **advances** the runner | showRunnerOutcomePopup [1695], applyRunnerOutcomes [1863] | `sel(v,0,0); play('1B'); sel(v,2,0); play('DP 6-4-3'); outcomePopup({})` → `outs===1`, runner on 2nd, card reads `DP 6-4-3` |
 | **C3** ✅ | critical | RBI is never recomputed when a non-latest play is cleared or edited → team RBI can exceed team R | clearSelectedCell [3296], editPlayType [2896] | `sel(v,0,0); play('1B'); sel(v,2,0); play('HR')` → R 2, p2 RBI 2. Then `sel(v,0,0); clearSelectedCell()` → R 1, **p2 RBI still 2** |
 | **H1** ✅ | high | Linescore **E** is never derived from error plays, and errors aren't attributed to the fielding team | updateLinescoreTotals [3410] | `sel(v,0,0); play('E6')` → both E inputs stay `''` |
-| **H2** | high | No pinch runner — the run goes to the starter | setSubLine [4141] | `sel(v,0,0); play('1B'); sel(v,0,0); markSub(); sel(v,2,0); play('HR')` → starter R 1, sub R blank |
-| **H3** | high | Only two players per lineup slot; a PH then a defensive replacement can't be recorded | ROWS_PER_POS [97] | third `markSub()` on the same slot opens `sub-popup` instead of adding a row |
+| **H2** ✅ | high | No pinch runner — the run goes to the starter | setSubLine [4141] | `sel(v,0,0); play('1B'); sel(v,0,0); markSub(); sel(v,2,0); play('HR')` → starter R 1, sub R blank |
+| **H3** ✅ | high | Only two players per lineup slot; a PH then a defensive replacement can't be recorded | ROWS_PER_POS [97] | third `markSub()` on the same slot opens `sub-popup` instead of adding a row |
 | **H4** ✅ | high | `editPlayType` never calls `afterStateChange` → no half-inning flip on a 3rd out, no game-over on a walk-off | editPlayType [2997] | 2 outs + a single, then `editPlay('K')` → `outs===3`, `pendingTransitionTimer === null` |
-| **M1** | med | Nothing locks the card once the game is final | checkGameOver [1916] | walk-off, `flushTimers()`, then another `play('HR')` → accepted, R +1 |
+| **M1** ✅ | med | Nothing locks the card once the game is final | checkGameOver [1916] | walk-off, `flushTimers()`, then another `play('HR')` → accepted, R +1 |
 | **M2** ✅ | med | LOB is 0 in a walk-off | recomputeInning [748] | walk-off single with a man left on 1st → `inn.lob === 0` |
-| **M3** | med | `SF`/`SH` runner popup shows a batter-destination row that is discarded and unvalidated | [1460], [2046], [2081] | `sel(v,0,0); play('3B'); sel(v,2,0); play('SF')` → popup has 3 `[data-base="batter"]` buttons; picking one changes nothing |
-| **M4** | med | An `FC` can record three outs | [1761], [1344] | `FC 6` with 2 on → `outcomePopup({1:['out',2],0:['out',1],batter:['out']})` → `outs===3` |
+| **M3** ✅ | med | `SF`/`SH` runner popup shows a batter-destination row that is discarded and unvalidated | [1460], [2046], [2081] | `sel(v,0,0); play('3B'); sel(v,2,0); play('SF')` → popup has 3 `[data-base="batter"]` buttons; picking one changes nothing |
+| **M4** ✅ | med | An `FC` can record three outs | [1761], [1344] | `FC 6` with 2 on → `outcomePopup({1:['out',2],0:['out',1],batter:['out']})` → `outs===3` |
 | **M5** | med | Undo history is memory-only; after a refresh the last play can't be undone | playHistory [2817] | `flushSave(); loadState(); applyState();` with `playHistory` empty → `undoLastPlay()` is a no-op |
-| **M6** | med | A pitcher with 0 outs shows blank IP, not `0.0` | updatePitcherStats [4047] | single, then mid-inning `usePitcher(1)` → starter IP `''` |
-| **M7** | med | Manually-entered `BB`/`K` leave the pitch count inconsistent (3-ball walk; `K` as an `'X'` pitch with 0 strikes) | [1382], [2327] | `pitch('B')×3; play('BB')` → 3 pitches. `play('K')` cold → `pitches===['X']`, `getPitchCount` 0/0 |
+| **M6** ✅ | med | A pitcher with 0 outs shows blank IP, not `0.0` | updatePitcherStats [4047] | single, then mid-inning `usePitcher(1)` → starter IP `''` |
+| **M7** ✅ | med | Manually-entered `BB`/`K` leave the pitch count inconsistent (3-ball walk; `K` as an `'X'` pitch with 0 strikes) | [1382], [2327] | `pitch('B')×3; play('BB')` → 3 pitches. `play('K')` cold → `pitches===['X']`, `getPitchCount` 0/0 |
 | **L1** | low | `WP`/`PB`/`BK` with bases empty record nothing but push an undo entry | applyRunnerEvent [2748] | `applyRunnerEvent('BK')` with nobody on → `playHistory.length` +1, card unchanged |
 | **L2** | low | A play refused for 3 outs gives no feedback | applyPlay [1368] | enter a play in a 3-out inning → silent return |
 | **L3** | low | Balk isn't counted on the pitcher line | [2809] | — |

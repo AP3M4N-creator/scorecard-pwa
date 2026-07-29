@@ -1592,16 +1592,29 @@ function applyPlay(play, target) {
   ab.play = play;
   // Every at-bat ends on a pitch — add the final pitch that produced the result
   if (!ab.pitches) ab.pitches = [];
-  if (play !== 'BB' && play !== 'IBB' && play !== 'HBP') {
-    // The result pitch: ball was put in play (hit/out) or swung through (K already tracked by auto-trigger)
-    // Only add if this wasn't an auto-triggered K (which already has 3 strikes)
+  // A play the scorer taps rather than pitches into has to leave a count the play
+  // could actually have happened on (M7). A strikeout is three strikes and a walk is
+  // four balls, so pad to them; an auto-triggered K or auto-walk is already there, so
+  // this only ever fires for a button press.
+  if (play === 'K' || play === 'ꓘ' || play === 'K+WP') {
+    // The old code pushed a single 'X' here, which `getPitchCount` reads as neither a
+    // ball nor a strike and `renderPitches` draws as nothing: the cell claimed one
+    // pitch over an empty pitch track and a 0-0 count on a strikeout.
+    while (getPitchCount(ab.pitches).strikes < 3) ab.pitches.push('S');
+  } else if (play === 'BB') {
+    // A walk tapped on a 3-ball count stayed at three pitches. Not IBB: since 2017 an
+    // intentional walk is awarded without a pitch thrown, so padding it to four balls
+    // would invent them.
+    while (getPitchCount(ab.pitches).balls < 4) ab.pitches.push('B');
+  } else if (play !== 'IBB' && play !== 'HBP') {
+    // The result pitch: ball was put in play (hit/out).
     const count = getPitchCount(ab.pitches);
     if (count.strikes < 3 && count.balls < 4) {
       if (isHitPlay(play) || isErrorPlay(play) || play === 'HR') ab.pitches.push('H');
       else ab.pitches.push('X');
     }
   } else if (ab.pitches.length === 0) {
-    ab.pitches.push('B'); // HBP/walks always involve at least 1 pitch
+    ab.pitches.push('B'); // an IBB/HBP always involves at least 1 pitch
   }
   // Track which pitcher the batter faced
   ab.pitcher = getEffectivePitcher(team, innIdx);
@@ -2246,6 +2259,11 @@ function finishPlay(team, pIdx, innIdx, snapshot) {
   renderPlayText(team, pIdx, innIdx);
   renderRBI(team, pIdx, innIdx);
   renderPitchCount(team, pIdx, innIdx);
+  // The track as well as the count. Entering a play changes the pitch list — the
+  // result pitch, and since M7 the strikes or balls the play implies — and only the
+  // count was being repainted, so a button-entered K read "3 pitches" over an empty
+  // pitch track until something else happened to redraw the cell.
+  renderPitches(team, pIdx, innIdx);
   redoHistory.length = 0;
   playHistory.push(snapshot);
 
