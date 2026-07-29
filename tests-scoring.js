@@ -107,7 +107,7 @@
     'runner-popup', 'outcome-popup', 'base-picker', 'edit-play-popup',
     'move-runner-popup', 'pos-popup', 'k-popup', 'spray-popup', 'er-review-popup',
     'pitcher-popup', 'recompute-popup', 'popup-backdrop', 'play-reject',
-    'sub-popup', 'dh-popup', 'pos-change-popup'
+    'sub-popup', 'dh-popup', 'pos-change-popup', 'backup-reminder'
   ];
 
   // The lineup inputs and position selects hold state the grid never rebuilds
@@ -131,6 +131,7 @@
     erReviewList.length = 0;
     gameOverShown = false;
     finalNoticeShown = false;   // one notice per final game, so it can't cross cases
+    backupPromptDismissed = false;   // and one backup ask, likewise
     pendingTransitionTimer = null;
     if (selectedCell) selectedCell.classList.remove('selected');
     selectedCell = null;
@@ -1794,6 +1795,92 @@
     play('K'); play('K'); play('K');
     ok('the game is final', gameIsFinal());
     eq('the figure stands', lsInput('home', 8).value, '2');
+  });
+
+  /* The backup prompt. A finished card lives in one browser's localStorage and nowhere
+     else until it is exported, and nothing used to say so. Derived from the records the
+     way FINAL and the X are, so it comes and goes with the game being over. */
+
+  // exportGameJSON's download plumbing is Blob + createObjectURL + a synthetic anchor
+  // click, none of which jsdom implements. Stub the writer only — the real
+  // exportGameJSON, collectState and stateForStorage stay on the path.
+  function exportWithoutDownloading() {
+    const real = downloadTextFile;
+    let written = null;
+    downloadTextFile = function (name, text) { written = { name, text }; };
+    try { exportGameJSON(); } finally { downloadTextFile = real; }
+    return written;
+  }
+
+  test('a game in progress is not asked to be backed up', () => {
+    sel('visiting', 0, 0);
+    play('1B'); play('HR');
+    ok('no banner mid-game', !visible('backup-reminder'));
+  });
+
+  test('a finished game asks to be backed up', () => {
+    sel('home', 0, 8);
+    play('HR');                                     // walk-off, 1-0
+    ok('the game is final', gameIsFinal());
+    ok('and the card asks for a backup', visible('backup-reminder'));
+  });
+
+  test('exporting answers the ask, and the file says it is the backup', () => {
+    clearStorage();
+    try {
+      sel('home', 0, 8);
+      play('HR');
+      ok('asked first', visible('backup-reminder'));
+      const written = exportWithoutDownloading();
+      ok('a file was written', !!written && written.name.indexOf('.json') > 0);
+      eq('and it carries the stamp', JSON.parse(written.text).backedUp, true);
+      eq('the card knows it is backed up', gameState.backedUp, true);
+      ok('so the banner is gone', !visible('backup-reminder'));
+    } finally { clearStorage(); }
+  });
+
+  // A correction after the export means the file no longer matches the card.
+  test('a change after the export asks again', () => {
+    clearStorage();
+    try {
+      sel('home', 0, 8);
+      play('HR');
+      exportWithoutDownloading();
+      ok('answered', !visible('backup-reminder'));
+      sel('home', 3, 8);
+      play('1B');                                   // correcting the final card (M1)
+      eq('the stamp is off', gameState.backedUp, false);
+      ok('and it asks again', visible('backup-reminder'));
+    } finally { clearStorage(); }
+  });
+
+  // "Not now" is the session's answer, not the card's — nothing is written, so a
+  // reload asks again. What it must not do is come back mid-session.
+  test('Not now holds for the session, through later changes', () => {
+    sel('home', 0, 8);
+    play('HR');
+    dismissBackupReminder();
+    ok('hidden', !visible('backup-reminder'));
+    eq('and nothing was recorded as backed up', gameState.backedUp, false);
+    sel('home', 3, 8);
+    play('1B');
+    ok('still hidden', !visible('backup-reminder'));
+  });
+
+  test('taking the winning run back off the card takes the ask with it', () => {
+    sel('home', 0, 8);
+    play('HR');
+    ok('asked', visible('backup-reminder'));
+    sel('home', 0, 8);
+    clearSelectedCell();
+    ok('the game is live again', !gameIsFinal());
+    ok('so nothing is asked', !visible('backup-reminder'));
+  });
+
+  test('a save written before the stamp existed reads as not backed up', () => {
+    const saved = JSON.parse(JSON.stringify(createEmptyState()));
+    delete saved.backedUp;
+    eq('backfilled', mergeStateDefaults(saved).backedUp, false);
   });
 
   // M1's folded-in leftover: Clear is reachable past the popup backdrop through the

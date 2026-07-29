@@ -34,6 +34,15 @@
   <button data-act="downloadUnreadableSaves" style="background:#fff;color:#8a5a1f;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer">Download unreadable save</button>
   <button data-act="discardUnreadableSaves" style="background:transparent;color:#fff;border:2px solid #fff;border-radius:6px;padding:5px 11px;font-weight:700;cursor:pointer">Discard</button>
 </div>
+<!-- Shown once a game is final and no backup file has been taken of it: until it is
+     exported the finished card exists only in this browser's storage. Navy, not the
+     red and amber above — nothing has gone wrong, this is the last step of scoring a
+     game. `role="status"` so it is announced rather than only seen. -->
+<div id="backup-reminder" role="status" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;z-index:1000;background:#1a2744;color:#fff;padding:10px 14px;font-family:-apple-system,sans-serif;font-size:13px;font-weight:600">
+  <span style="flex:1;min-width:200px">Game final — this card exists only on this device. Download a backup to keep it.</span>
+  <button data-act="exportGameJSON" style="background:#fff;color:#1a2744;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer">Download backup</button>
+  <button data-act="dismissBackupReminder" style="background:transparent;color:#fff;border:2px solid #fff;border-radius:6px;padding:5px 11px;font-weight:700;cursor:pointer">Not now</button>
+</div>
 <!-- Off-screen live region: selecting a cell changes nothing a screen reader
      would otherwise notice, so selectCell() says what was selected here. -->
 <div id="a11y-live" role="status" aria-live="polite" style="position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0"></div>

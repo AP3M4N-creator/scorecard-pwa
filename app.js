@@ -226,6 +226,11 @@ function createEmptyState() {
     notes: '',
     currentGameId: null,
     lastSaved: null,
+    // Has a backup file been taken of the card as it now stands? Persisted, so the
+    // prompt doesn't reappear on a card that has already been exported; absent in an
+    // older save, which reads as false and asks — the honest answer for a card
+    // nobody knows the history of.
+    backedUp: false,
     timerStart: null,
     timerElapsed: 0,
     timerRunning: false,
@@ -2246,6 +2251,7 @@ function afterStateChange(team, innIdx, opts) {
     if (opts && opts.advanceBatter) selectNextBatter(team, innIdx);
     checkGameOver(team, innIdx);   // walk-off: the run ends it, not the out
   }
+  noteCardChanged();
   updateSituation();
   autoSave();
 }
@@ -2861,6 +2867,7 @@ function updateSituation() {
   // then went back to reading "▼ 9 · 0-0 · nobody out" for a game that was over
   // (M1). Derived, so correcting the score back to a tie restores the live panel.
   if (gameIsFinal()) renderFinalReadout();
+  updateBackupReminder();
 
   // (count, batter, LOB now handled in the panel loop above)
 }
@@ -2868,6 +2875,10 @@ function updateSituation() {
 function updateLiveStatsFromState() {
   const half = lastHalfWithPlays();
   if (!half) return;
+  // The reload path: `updateSituation` bails with no cell selected, so a card that
+  // comes back final and unbacked-up gets its ask from here (M1's reasoning, applied
+  // to the banner).
+  updateBackupReminder();
   if (gameIsFinal()) { renderFinalReadout(); return; }
   const lsInn = document.getElementById('ls-inning');
   const arrow = half.team === 'visiting' ? '▲' : '▼';
@@ -2926,6 +2937,41 @@ function noteEntryAfterFinal() {
   if (finalNoticeShown) return;
   finalNoticeShown = true;
   showPlayNotice('Game is final — recording anyway.');
+}
+
+/* The last step of scoring a game: get it off this device.
+
+   A finished card lives in one browser's `localStorage` and nowhere else until it is
+   exported, and nothing ever said so — the scorer with the best possible reason to
+   care (the game is over, the record is complete) was the one least likely to think
+   of it. So the banner asks, once the game is final, and stops asking as soon as a
+   file exists.
+
+   Derived like FINAL and the linescore's X, from the records rather than a flag: a
+   score corrected back to a tie takes the banner away, and any later change to the
+   card brings it back, because the file no longer matches what is on the screen.
+   `backedUp` is persisted; the dismissal is not — "Not now" holds for this session,
+   and a reload of a card that still has no backup asks again. That is the point of
+   it. */
+let backupPromptDismissed = false;
+
+function updateBackupReminder() {
+  const el = document.getElementById('backup-reminder');
+  if (!el) return;
+  const ask = gameIsFinal() && !gameState.backedUp && !backupPromptDismissed;
+  el.style.display = ask ? 'flex' : 'none';
+}
+
+function dismissBackupReminder() {
+  backupPromptDismissed = true;
+  updateBackupReminder();
+}
+
+/* The exported file no longer matches the card. Called from the two tails every
+   scoring change ends in, so the prompt re-arms on a correction — but not on typing
+   the attendance or a player's name, which don't change what was scored. */
+function noteCardChanged() {
+  if (gameState.backedUp) gameState.backedUp = false;
 }
 
 /* The live panel, for a game that is over. Nothing is at bat, nobody is on, and
@@ -3796,6 +3842,7 @@ function clearSelectedCell() {
   // branch reinstates the snapshot's inning records wholesale, so a recompute over
   // it is a no-op unless the snapshot and the at-bats disagree — records win.
   recomputeInning(team, getRealInning(team, innIdx));
+  noteCardChanged();
   updateSprayMini();
   updateSituation();
   updatePlayerStats(team);
@@ -4391,6 +4438,7 @@ function newGame() {
   playHistory = [];
   redoHistory = [];
   gameOverShown = false;
+  backupPromptDismissed = false;
   applyState();
 }
 
@@ -5566,6 +5614,7 @@ function loadGameFromLibrary(idx) {
   playHistory = [];
   redoHistory = [];
   gameOverShown = false;
+  backupPromptDismissed = false;   // a different card gets its own ask
   applyState();
   closeGameLibrary();
   flushSave();
@@ -5598,10 +5647,17 @@ function downloadTextFile(filename, text) {
 
 function exportGameJSON() {
   collectState();
+  // Stamped before serialising, so the file records that it *is* the backup — import
+  // it later and the card doesn't immediately ask to be backed up again. `flushSave`
+  // rather than `autoSave` because the stamp is the point: a debounced save that the
+  // scorer closes the tab ahead of would lose it.
+  gameState.backedUp = true;
   const slug = s => (s || '').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase();
   const vis = slug(gameState.info.visitingTeam) || 'visiting';
   const hom = slug(gameState.info.homeTeam) || 'home';
   downloadTextFile(`scorecard-${vis}-vs-${hom}.json`, JSON.stringify(stateForStorage(gameState), null, 2));
+  flushSave();
+  updateBackupReminder();
 }
 
 function importGameJSON(input) {
@@ -5631,6 +5687,7 @@ function importGameJSON(input) {
     playHistory = [];
     redoHistory = [];
     gameOverShown = false;
+    backupPromptDismissed = false;
     applyState();
     flushSave();
     updateLibraryButtons();
