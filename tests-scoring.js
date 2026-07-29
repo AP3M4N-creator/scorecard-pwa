@@ -1749,6 +1749,53 @@
     eq('the panel is live again', document.getElementById('ls-inning').textContent, '▼ 9');
   });
 
+  /* L5 — the home team doesn't bat in the bottom of the last inning when it is already
+     ahead. That half stayed blank, which on a linescore means "batted, scored nothing"
+     — the 0 of a team that lost, printed on the row of the team that won. */
+  test('a home half never played reads X once the game is final', () => {
+    lsInput('home', 0).value = '2';                 // home leads 2-0
+    updateLinescoreTotals('home');
+    sel('visiting', 0, 8);                          // top of the 9th
+    play('K'); play('K'); play('K');                // three outs, and that is the game
+    ok('the game is final', gameIsFinal());
+    eq('the home 9th', lsInput('home', 8).value, 'X');
+    eq('and nothing else', lsInput('home', 7).value, '');
+    eq('the R total is untouched by it', rTotal('home'), '2');
+  });
+
+  test('a home team that batted last gets no X', () => {
+    sel('home', 0, 8);
+    play('HR');                                     // walk-off, 1-0
+    ok('the game is final', gameIsFinal());
+    for (let i = 0; i < 9; i++) ok(`home inning ${i + 1} is not an X`, lsInput('home', i).value !== 'X');
+  });
+
+  // Derived on every pass, like FINAL: the X is not a mark anything has to remember to
+  // take back off.
+  test('correcting the score back to a tie takes the X away again', () => {
+    lsInput('home', 0).value = '2';
+    updateLinescoreTotals('home');
+    sel('visiting', 0, 8);
+    play('K'); play('K'); play('K');
+    eq('the X is on the line', lsInput('home', 8).value, 'X');
+    lsInput('home', 0).value = '';                  // those two runs were a mistake
+    updateLinescoreTotals('home');
+    sel('visiting', 9, 8);                          // any tap repaints the line
+    eq('the X is gone', lsInput('home', 8).value, '');
+    eq('and so is it in the state', gameState.linescore.home.innings[8], '');
+  });
+
+  // A figure already on the line is a scorer saying the half *was* played, with no
+  // at-bats to find — the card of someone keeping the other side on the line only.
+  test('a run already on the line is not overwritten by an X', () => {
+    lsInput('home', 8).value = '2';                 // home scored in the 9th, line only
+    updateLinescoreTotals('home');
+    sel('visiting', 0, 8);
+    play('K'); play('K'); play('K');
+    ok('the game is final', gameIsFinal());
+    eq('the figure stands', lsInput('home', 8).value, '2');
+  });
+
   // M1's folded-in leftover: Clear is reachable past the popup backdrop through the
   // `c` hotkey, and it deleted the play the popup was still deciding — leaving the
   // popup up over an empty cell, and `entryInProgress()` then refusing every other

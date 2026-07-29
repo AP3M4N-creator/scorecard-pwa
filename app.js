@@ -3841,6 +3841,39 @@ function fillLinescoreZeros() {
       }
     }
   });
+  markUnplayedHomeHalf();
+}
+
+/* The other blank the line has to account for (L5): the home team doesn't bat in the
+   bottom of the last inning when it is already ahead, and a blank there reads as
+   "nobody scored" — the 0 of a team that lost, on the row of the team that won. That
+   half is an X.
+
+   Only ever the home team, and only ever one cell. The visitor bats first, so every
+   half the game got *past* was played whether or not anyone recorded its at-bats, and
+   every inning after the last one with plays was never reached. The single half in
+   between — the bottom of the inning the game ended in the top of — is the X. Asking
+   it that way also keeps the X off the card of a scorer who tracks the other side on
+   the line only, with no at-bats to find.
+
+   Derived on every pass, like FINAL: a score corrected back to a tie takes the X away
+   again, and so does scoring the half after all. */
+function markUnplayedHomeHalf() {
+  const half = gameIsFinal() ? lastHalfWithPlays() : null;
+  const skipped = half && half.team === 'visiting' ? getRealInning('visiting', half.innIdx) : -1;
+  for (let realInn = 0; realInn < INNINGS; realInn++) {
+    const inp = document.querySelector(`input[data-ls="home"][data-inn="${realInn}"]`);
+    if (!inp) continue;
+    // Never over the top of a figure already on the line: a run recorded there is a
+    // scorer saying the half *was* played, and they outrank this derivation.
+    if (realInn === skipped && inp.value === '') {
+      inp.value = 'X';
+      if (gameState.linescore.home) gameState.linescore.home.innings[realInn] = 'X';
+    } else if (realInn !== skipped && inp.value === 'X') {
+      inp.value = '';
+      if (gameState.linescore.home) gameState.linescore.home.innings[realInn] = '';
+    }
+  }
 }
 
 function updateLinescoreTotals(team) {
@@ -6352,7 +6385,9 @@ function renderManualWinProbChart(containerId) {
       awayTotal += parseInt(av) || 0;
       data.push({ homeTeamWinProbability: winProbFromDiff(homeTotal - awayTotal, (vis * 2) - (i * 2 + 1)) * 100 });
     }
-    if (hv !== '') {
+    // An `X` is a half nobody batted in (L5), not a scoreless one — it gets no point
+    // on the curve, or the chart grows a step for an inning that was never played.
+    if (hv !== '' && hv !== 'X') {
       homeTotal += parseInt(hv) || 0;
       data.push({ homeTeamWinProbability: winProbFromDiff(homeTotal - awayTotal, (vis * 2) - (i * 2 + 2)) * 100 });
     }

@@ -19,10 +19,11 @@ engine end to end, then drove the real `app.js` against the real `index.html`
 DOM in jsdom — 47 diagnostic probes — and reproduced C1, C2 and H1 by hand in a
 live browser at `http://localhost:8765` (`preview_start` → `scorecard`).
 
-**Progress:** Phases 1–4 are done (C1, C2, C3, H1, H4, M1, M2, H2, H3), and so are
-M3, M4, M5, M6, M7, L1, L2 and L4 of Phase 5 — one commit per fix. What is left is
-**L5** (L3 and L6–L7 are design gaps, not work). This document is the whole state
-of the work.
+**Progress: every finding is closed.** Phases 1–4 (C1, C2, C3, H1, H4, M1, M2, H2,
+H3) and all of Phase 5 (M3, M4, M5, M6, M7, L1, L2, L4, L5) are done, one commit per
+fix; L3 and L6–L7 are design gaps, not work. The suite is at **279 passed · 0 failed**.
+By the repo's convention this document is now finished work and gets dropped, the way
+`19d1690` retired the 2026-07-28 audit's plan — git history keeps it.
 
 ---
 
@@ -515,7 +516,7 @@ single-double-homer across the three rows of spot 1 splitting 1/1 · 1/1 · 1/1/
 | L2 ✅ | A play refused because the inning already has 3 outs **returns silently** — no `showPlayReject`, unlike every other refusal. | [app.js:1368] |
 | L3 | A **balk** is visible only as a `BK` advancement label on the runner's diamond; no BK count on the pitcher line. | [app.js:2809] |
 | L4 ✅ | Batting around in the **15th column can't overflow** (`nextCol >= INNINGS` returns), leaving the selection on a filled cell and further batters silently unenterable. | [app.js:2211] |
-| L5 | A home half **never played stays blank** rather than showing `X`. | [app.js:3394] |
+| L5 ✅ | A home half **never played stays blank** rather than showing `X`. | [app.js:3394] |
 
 ### M3 — the `SF`/`SH` runner popup offers a batter destination it discards — ✅ **FIXED**
 `showRunnerPopup` [app.js:2245]
@@ -735,6 +736,52 @@ assertion that the toast names the card, followed by a tenth batter proving the
 follow-on refusal names the *cell* instead. Reverting the toast fails it and nothing
 else.
 
+### L5 — a home half never played stays blank instead of `X` — ✅ **FIXED**
+`markUnplayedHomeHalf` [app.js:3861], called from `fillLinescoreZeros` [app.js:3830]
+
+**What was done.** The home team doesn't bat in the bottom of the last inning when it is
+already ahead, and that half stayed blank. On a linescore a blank in a played inning
+means nothing — but read across a finished row it means *batted, scored nothing*: the 0
+of a team that lost, printed on the row of the team that won. It is now an `X`, which is
+the notation the blank was standing in for.
+
+The finding pointed at `fillLinescoreZeros`, and this is the same job — saying what a
+blank cell doesn't — so it goes in beside it as its own function.
+
+**Asked as one question, not scanned for.** The obvious implementation is "which home
+halves have no at-bats", and it is wrong: a scorer who keeps the *other* side on the
+line only, with no at-bats anywhere, would get an X in every home inning of the game.
+The structural fact is better. The visitor bats first, so every half the game got past
+was played whether or not anyone wrote it down, and every inning after the last half
+with plays was never reached — which leaves exactly one candidate, the bottom of the
+inning the game ended in the top of. So the X is `lastHalfWithPlays()` being the
+visiting team's, and nothing else, and it is at most one cell on the card. A figure
+already on the line is never overwritten: that is a scorer saying the half *was* played,
+and they outrank the derivation.
+
+Derived on every pass, like `FINAL` and for the same reason (M1): correcting the score
+back to a tie takes the X off again, and so does scoring the half after all. Nothing has
+to remember to clear it.
+
+`'X'` is a new kind of value in `linescore[team].innings`, so its readers were checked
+rather than assumed: `updateLinescoreTotals` and the summary's own totals run it through
+`parseInt(…) || 0`, which is 0, and the printed linescore prints the raw string, which is
+the X a box score should show. One reader did need it — `renderManualWinProbChart` treated
+any non-blank cell as a half that was played and grew the curve a step for it, so it now
+skips `'X'`.
+
+Verified: 4 new cases (279 passed · 0 failed) — the plan's own repro (home ahead, the
+visitor's 9th ends on the third out, the home 9th reads `X` and no other cell does), a
+walk-off getting no X anywhere, the score corrected back to a tie taking it off the line
+*and* out of the state, and a run already on the line surviving. `tests.html`
+("Linescore & extra innings") stayed green alongside. Reverting the call fails the first
+and third and nothing else.
+
+Not verified in a live browser, deliberately: the X lands in a linescore inning input the
+suite already drives in the real DOM, one character where a `0` goes, and the only path
+onto the card is a *saved* final game — which on the real origin is the scorer's own card
+(a live-origin check has destroyed one before).
+
 **Not defects — design gaps, listed so they aren't re-found:**
 
 - **L6** Force out vs tag out isn't distinguished — the popup offers "Out at *N*"
@@ -777,7 +824,7 @@ is where those rows were when the finding was written.
 | **L2** ✅ | low | A play refused for 3 outs gives no feedback | applyPlay [1368] | enter a play in a 3-out inning → silent return |
 | **L3** | low | Balk isn't counted on the pitcher line | [2809] | — |
 | **L4** ✅ | low | Bat-around in the 15th column can't overflow; further batters silently unenterable | overflowToNextColumn [2211] | 9 × `play('BB')` in col 14 → selection stuck on a filled cell |
-| **L5** | low | A home half never played stays blank rather than `X` | fillLinescoreZeros [3394] | visitor wins in the top of the 9th → home 9th cell blank |
+| **L5** ✅ | low | A home half never played stays blank rather than `X` | fillLinescoreZeros [3394] | visitor wins in the top of the 9th → home 9th cell blank |
 | **L6** | gap | Force out vs tag out not distinguished (notation-level; correct runner always recorded) | — | — |
 | **L7** | gap | No batting-out-of-order detection | — | — |
 
