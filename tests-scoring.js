@@ -261,6 +261,7 @@
   function lsInput(team, i) { return document.querySelector(`input[data-ls="${team}"][data-inn="${i}"]`); }
   function rTotal(team) { return document.querySelector(`input[data-ls="${team}"][data-stat="r"]`).value; }
   function lobTotal(team) { return document.querySelector(`input[data-ls="${team}"][data-stat="lob"]`).value; }
+  function eTotal(team) { return document.querySelector(`input[data-ls="${team}"][data-stat="e"]`).value; }
 
   function visible(id) {
     const el = document.getElementById(id);
@@ -1403,6 +1404,99 @@
     eq('1st inning', inn('visiting', 0).lob, 1);
     eq('2nd inning', inn('visiting', 1).lob, 2);
     eq('three left on for the game', lobTotal('visiting'), '3');
+  });
+
+  // H1 — E was a hand-typed input while R, H and LOB were all derived, so the card
+  // read `E: ""` after an E5 and the box score never reconciled. Errors are recorded
+  // on the card of the team that was batting, so the count belongs to the other team.
+  test('an error charges E to the fielding team, not the batting team', () => {
+    sel('visiting', 0, 0);
+    play('E5');
+    eq('the home fielders wear it', eTotal('home'), '1');
+    eq('the batting team has none', eTotal('visiting'), '');
+  });
+
+  test('E is nothing until an error happens', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    eq('a clean single charges nobody', eTotal('home'), '');
+  });
+
+  test('E adds up across errors and innings', () => {
+    sel('visiting', 0, 0);
+    play('E5'); play('K'); play('K'); play('K');
+    flushTimers();                                  // to the bottom of the 1st
+    sel('visiting', 0, 1);                          // top of the 2nd
+    play('E');
+    eq('two errors by the home team', eTotal('home'), '2');
+  });
+
+  // A throwing error on a steal leaves no error play on any cell — it is recorded
+  // only as an 'E' advancement reason — so a scan of plays alone would miss it.
+  test('a throwing error on a steal reaches the linescore', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    applySBAtBase('visiting', 0, 0, true);          // steals 2nd, takes 3rd on the throw
+    eq('the error is charged', eTotal('home'), '1');
+    eq('the steal itself is not an error', ab('visiting', 0, 0).advReason[1], 'SB');
+  });
+
+  test('a throwing error on a pickoff reaches the linescore', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    applyPickoff('visiting', 0, 0, true);           // bad throw, runner takes 2nd
+    eq('the error is charged', eTotal('home'), '1');
+  });
+
+  // Two physical errors on one man's card: he reached on a fielding error, then took
+  // an extra base on a throwing error. Both count (D3 — count every signal).
+  test('one player can be the subject of two errors', () => {
+    sel('visiting', 0, 0);
+    play('E5');
+    applySBAtBase('visiting', 0, 0, true);
+    eq('both errors are charged', eTotal('home'), '2');
+  });
+
+  // The runner-popup out path stamps the *batter's* play as the advancement reason,
+  // so a runner thrown out during an E5 carries 'E5' — a label for the error already
+  // counted, not a second error. Only the exact string 'E' is a second signal.
+  test('a runner retired on the error play does not double the count', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('E5'); runnerPopup({ 0: -2, batter: 0 });  // lead runner out at 2nd
+    eq('one error, not two', eTotal('home'), '1');
+  });
+
+  test('clearing the error play takes E back off the board', () => {
+    sel('visiting', 0, 0);
+    play('E5');
+    eq('charged', eTotal('home'), '1');
+    sel('visiting', 0, 0);                          // the play advanced the batter
+    clearSelectedCell();
+    eq('and back off', eTotal('home'), '');
+  });
+
+  test('the derived E is what gets persisted', () => {
+    clearStorage();
+    try {
+      sel('visiting', 0, 0);
+      play('E5');
+      flushSave();
+      const back = mergeStateDefaults(JSON.parse(safeStorage.getItem(CURRENT_GAME_KEY)));
+      eq('charged to the fielders in storage', back.linescore.home.e, '1');
+      eq('and not to the batting team', back.linescore.visiting.e, '');
+    } finally { clearStorage(); }
+  });
+
+  // A save from an older build carries whatever the scorer typed into the old manual
+  // box. The records are the authority now, so a recompute has to correct it — the
+  // same reasoning that re-derives LOB on load.
+  test('a stale hand-typed E is corrected, not kept', () => {
+    sel('visiting', 0, 0);
+    play('E5');
+    document.querySelector('input[data-ls="home"][data-stat="e"]').value = '9';
+    updateLinescoreErrors();
+    eq('the card wins', eTotal('home'), '1');
   });
 
   // #22 — the change wrote the batter's four bases and stopped, so the runners a

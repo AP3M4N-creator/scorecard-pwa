@@ -49,7 +49,7 @@ Standalone: M2, M3, M5, M6, M7, L1–L7.
 |---|---|---|
 | ~~D1~~ **answered: Block** | **C1 fix shape.** Block the tap (backdrop + `pendingEntryPopupOpen()` guard), or let the tap through and *cancel* the pending play? | **Block.** Add `runner-popup` / `outcome-popup` to `BACKDROP_GUARDED` and refuse `applyPlay` / `selectCell` while one is open, with a `showPlayReject('Finish or close the open entry first.')` — the message `undoLastPlay` already uses. Consistent with how undo/redo already treat these popups. |
 | ~~D2~~ **answered: Both** | **C2 fix shape.** Require an explicit outcome for every runner on a DP/TP (the way `showRunnerPopup` flashes unanswered rows), or default the forced runner to *out*? | **Both.** Default the lead forced runner to `out` (that is what a DP *means*), **and** refuse Confirm when a play labelled `DP` would record fewer than 2 outs / `TP` fewer than 3. A DP that records one out is not a DP. |
-| D3 | **H1 scope.** Derive E from `E`-play cells and credit it to the fielding team, or leave E manual and just stop pretending? | **Derive it.** Count cells where `isErrorPlay(ab.play)`, plus `advReason` containing `'E'` (throwing errors on steals/pickoffs, which leave no error play), and write it to the *other* team's E input. Needs a decision on whether two errors on one play can be recorded at all — currently they can't. |
+| ~~D3~~ **answered: Derive, read-only, count every signal** | **H1 scope.** Derive E from `E`-play cells and credit it to the fielding team, or leave E manual and just stop pretending? | **Derive it.** Count cells where `isErrorPlay(ab.play)`, plus `advReason` containing `'E'` (throwing errors on steals/pickoffs, which leave no error play), and write it to the *other* team's E input. Adam's call: the box becomes **read-only** like R/H/LOB, and **every signal counts** — so a man who reaches on E5 and then takes an extra base on a bad throw is two errors, which is right. The two `'E'` advancement writers are steals and pickoffs, always a physically separate error from any batter's error play, so nothing double-counts. |
 | D4 | **H2 pinch runner.** New mechanism, or overload SUB? | A distinct **PR** action that transfers the *run* to the sub row while leaving AB/H on the starter. Overloading SUB can't work — `setSubLine` skipping the played column is correct for a PH. |
 | D5 | **H3 third player in a slot.** Raise `ROWS_PER_POS` to 3, or make sub rows dynamic? | **`ROWS_PER_POS = 3`** is the cheap correct answer — it is already a constant that sizes the grid, the state and ~12 loops, and `stateForStorage` / `refillAtBats` already handle "rows whose at-bats are dropped on the way out". Dynamic rows are a much larger change for a rarer case. Confirm the row-height cost on iPad is acceptable. |
 | D6 | **M1 lock.** Hard-refuse entry after the game is final, or warn once and allow? | **Warn and allow.** A scorer sometimes needs to correct a final card, and this app's standing policy is "record what happened, never refuse" (see the re-entry prompt). A one-time toast + a FINAL marker is enough. |
@@ -141,7 +141,7 @@ steered the scorer into it. `TP` was identical (1 out).
 
 ---
 
-## Phase 2 — make the box score reconcile
+## Phase 2 — make the box score reconcile ✅ DONE
 
 ### C3 — RBI is never recomputed when a non-latest play is cleared or edited (RC-C) — ✅ **FIXED**
 Fixed in `takeBackPlay`, the one function all three take-back paths share
@@ -196,7 +196,7 @@ available without guessing.
 Watch out: `adjustRBI` overrides must survive a clamp that doesn't contradict
 them, or the scorer's manual correction gets silently undone.
 
-### H1 — linescore **E** is never derived; errors never reach the box score (RC-E)
+### H1 — linescore **E** is never derived; errors never reach the box score (RC-E) — ✅ **FIXED**
 `updateLinescoreTotals` [app.js:3410], input built at [app.js:411], read back at [app.js:3523]
 
 R, H and LOB are computed; **E is a hand-typed input only.** Confirmed in both
@@ -209,6 +209,30 @@ pitcher line (1.0 IP, 3 H, 2 R, 1 ER) but **E blank despite a fielded error in
 the inning**.
 
 Fix per **D3**.
+
+**What was done.** `countErrorSignals(battingTeam)` scans that team's card for the two
+signals — an error play (`E`, `E5`, …) and an exact `'E'` advancement reason — and
+`updateLinescoreErrors()` writes each team's box from the *opposing* card, since an
+error is recorded where the batting was. It hangs off `updateLinescoreTotals`
+alongside `updateLinescoreHits`, so every path that already re-derives R/H/LOB
+(`afterStateChange` → `recomputeInning` → `updateInningRuns`, plus the load path)
+re-derives E too. The input at [app.js:411] is now `readonly tabindex="-1"` like the
+other three, so a save carrying a hand-typed E from an older build is corrected on
+load rather than kept.
+
+Only the exact string `'E'` counts as the second signal. `showRunnerPopup`'s out path
+stamps the *batter's* play as the advancement reason, so a runner thrown out during an
+E5 carries `'E5'` — a label for an error already counted, not a second one.
+
+Verified: 10 new tests (227 passed · 0 failed), and in the browser an `E5` by a
+visiting batter puts `1` in the **home** E box, blank in the visiting one, and does
+not touch H.
+
+**Noticed while verifying, not fixed (out of H1's scope):** `clearSelectedCell` does
+not dismiss a runner popup that is still open, which leaves the popup up over a cell
+whose play is gone — and `entryInProgress()` then refuses all further entry until it
+is closed. Only reachable if Clear can be tapped while a popup is open, i.e. if Clear
+is outside the C1 guard. Worth a look when M1/H4 are in hand.
 
 ---
 
@@ -313,7 +337,7 @@ queued transitions. Odd player indices are sub rows — batters are `0, 2, 4, �
 | **C1b** ✅ | critical | Answering the stale popup afterwards writes runs/advancement into a state that never happened | same | continue C1a, then click `.rp-btn[data-base="0"][data-dest="3"]` + confirm → phantom run, `R` +1, `p0.bases===[t,t,t,t]` |
 | **C2** ✅ | critical | `DP`/`TP` confirmed on popup defaults records 1 out and **advances** the runner | showRunnerOutcomePopup [1695], applyRunnerOutcomes [1863] | `sel(v,0,0); play('1B'); sel(v,2,0); play('DP 6-4-3'); outcomePopup({})` → `outs===1`, runner on 2nd, card reads `DP 6-4-3` |
 | **C3** ✅ | critical | RBI is never recomputed when a non-latest play is cleared or edited → team RBI can exceed team R | clearSelectedCell [3296], editPlayType [2896] | `sel(v,0,0); play('1B'); sel(v,2,0); play('HR')` → R 2, p2 RBI 2. Then `sel(v,0,0); clearSelectedCell()` → R 1, **p2 RBI still 2** |
-| **H1** | high | Linescore **E** is never derived from error plays, and errors aren't attributed to the fielding team | updateLinescoreTotals [3410] | `sel(v,0,0); play('E6')` → both E inputs stay `''` |
+| **H1** ✅ | high | Linescore **E** is never derived from error plays, and errors aren't attributed to the fielding team | updateLinescoreTotals [3410] | `sel(v,0,0); play('E6')` → both E inputs stay `''` |
 | **H2** | high | No pinch runner — the run goes to the starter | setSubLine [4141] | `sel(v,0,0); play('1B'); sel(v,0,0); markSub(); sel(v,2,0); play('HR')` → starter R 1, sub R blank |
 | **H3** | high | Only two players per lineup slot; a PH then a defensive replacement can't be recorded | ROWS_PER_POS [97] | third `markSub()` on the same slot opens `sub-popup` instead of adding a row |
 | **H4** | high | `editPlayType` never calls `afterStateChange` → no half-inning flip on a 3rd out, no game-over on a walk-off | editPlayType [2997] | 2 outs + a single, then `editPlay('K')` → `outs===3`, `pendingTransitionTimer === null` |

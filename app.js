@@ -408,7 +408,7 @@ function buildLinescore() {
     }
     html += `<td class="total"><input type="text" data-ls="${t}" data-stat="r" readonly tabindex="-1"></td>`;
     html += `<td class="total"><input type="text" data-ls="${t}" data-stat="h" readonly tabindex="-1"></td>`;
-    html += `<td class="total"><input type="text" data-ls="${t}" data-stat="e" maxlength="2" data-act="autoSave" data-act-on="input"></td>`;
+    html += `<td class="total"><input type="text" data-ls="${t}" data-stat="e" readonly tabindex="-1"></td>`;
     html += `<td class="total ls-lob"><input type="text" data-ls="${t}" data-stat="lob" readonly tabindex="-1"></td>`;
     row.innerHTML = `<td class="team-col">${t === 'visiting' ? '<span id="ls-v-label">Visiting</span>' : '<span id="ls-h-label">Home</span>'}</td>` + html;
   });
@@ -2316,6 +2316,42 @@ function updateLinescoreHits(team) {
   if (gameState.linescore[team]) gameState.linescore[team].h = totalHits;
 }
 
+// H1: errors are recorded on the card of the team that was *batting*, so the count
+// they produce belongs in the other team's E box. Two distinct signals, and a cell
+// can legitimately carry both: an error play (`E`, `E5`, …) is a fielding error on
+// the batter, and an exact `'E'` advancement reason is a throwing error on a steal
+// or a pickoff (the only two writers — applySBWithError and the pickoff path), which
+// leaves no error play on any cell. A player who reaches on E5 and later steals on a
+// bad throw made two errors happen, and this counts two.
+//
+// Only the exact string counts. `showRunnerPopup`'s out path stamps the *batter's*
+// play as the reason ('E5' on a runner thrown out during the error play), which is a
+// label for an error already counted, not a second one.
+function countErrorSignals(battingTeam) {
+  let n = 0;
+  for (const player of gameState.teams[battingTeam].players) {
+    for (const ab of player.atBats) {
+      if (isErrorPlay(ab.play)) n++;
+      if (Array.isArray(ab.advReason)) {
+        for (const r of ab.advReason) if (r === 'E') n++;
+      }
+    }
+  }
+  return n;
+}
+
+// Recomputes both boxes: the figure for either team is read off the opposing card,
+// so there is no per-team call that wouldn't have to reach across anyway.
+function updateLinescoreErrors() {
+  const other = { visiting: 'home', home: 'visiting' };
+  ['visiting', 'home'].forEach(team => {
+    const e = countErrorSignals(other[team]);
+    const inp = document.querySelector(`input[data-ls="${team}"][data-stat="e"]`);
+    if (inp) inp.value = e || '';
+    if (gameState.linescore[team]) gameState.linescore[team].e = e ? String(e) : '';
+  });
+}
+
 function selectNextBatter(team, innIdx) {
   const players = gameState.teams[team].players;
   const sameTeam = selectedCell && selectedCell.dataset.team === team;
@@ -3550,6 +3586,7 @@ function updateLinescoreTotals(team) {
   if (rInp) rInp.value = r || '';
   gameState.linescore[team].r = r;
   updateLinescoreHits(team);
+  updateLinescoreErrors();
   // #16: this used to be the *second* writer of `inn.lob`, and the two disagreed.
   // Its own scan counted every at-bat that reached and hadn't scored, in every
   // column including innings still in progress — so LOB climbed as runners reached
