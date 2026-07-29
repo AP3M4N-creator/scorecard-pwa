@@ -1900,6 +1900,14 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
   // starts on what the label asserts instead of on a green "Safe" that contradicts
   // it (#C2). A runner is forced only while every base behind him is occupied.
   const requiredOuts = /^TP/.test(play) ? 3 : /^DP/.test(play) ? 2 : 0;
+  // And the out count the label *allows*. A fielder's choice retires one man — that
+  // the fielder chose which one is the whole play — so two outs on it is a double
+  // play wearing an FC's label, and the popup used to accept three (M4). Capping FC
+  // at 1 puts all three plays under one rule: FC 1, DP 2, TP 3.
+  const maxOuts = /^TP/.test(play) ? 3 : /^DP/.test(play) ? 2 : /^FC/.test(play) ? 1 : 3;
+  const playLabel = /^TP/.test(play) ? 'triple play'
+    : /^DP/.test(play) ? 'double play'
+    : /^FC/.test(play) ? "fielder's choice" : play;
   const forcedBases = [];
   for (let b = 0; b < 3; b++) {
     if (inn.bases[b] === null) break;
@@ -1992,8 +2000,13 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
     if (row) { row.style.outline = '2px solid var(--accent)'; setTimeout(() => row.style.outline = '', 800); }
   }
 
+  // Who a reverted row is, for the toast below. The runners are named by the base
+  // they started on, which is how their own row is labelled.
+  function ocWho(key) {
+    return key === 'batter' ? 'batter' : `runner on ${baseNames[key]}`;
+  }
+
   // Button handlers
-  const maxOuts = /^TP/.test(play) ? 3 : /^DP/.test(play) ? 2 : 3;
   popup.querySelectorAll('.oc-btn').forEach(btn => {
     btn.onclick = function() {
       if (isOptionBlocked(this)) return;
@@ -2012,9 +2025,11 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
         for (let b = 0; b < 3; b++) {
           if (outcomes[b] && outcomes[b].action === 'out') { outCount++; outKeys.push(b); }
         }
+        const reverted = [];
         while (outCount > maxOuts) {
           const revertKey = outKeys.find(k => String(k) !== base);
           if (revertKey === undefined) break;
+          reverted.push(ocWho(revertKey));
           if (revertKey === 'batter') {
             outcomes.batter = { action: 'safe', dest: 0 };
           } else {
@@ -2032,6 +2047,13 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
           }
           outKeys.splice(outKeys.indexOf(revertKey), 1);
           outCount--;
+        }
+        // An out taken off the board without a word reads as a dead button — the
+        // scorer marked it and the row went green on its own. Say what the cap did
+        // (M4); it applies to the DP and TP flips as well, which were just as silent.
+        if (reverted.length) {
+          const n = maxOuts === 1 ? 'one' : maxOuts === 2 ? 'two' : String(maxOuts);
+          showPlayReject(`A ${playLabel} records ${n} out${maxOuts === 1 ? '' : 's'} — ${reverted.join(' and ')} set back to safe.`);
         }
       }
       // Update button styles in this row
@@ -2068,13 +2090,12 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
         if (outcomes[b] && outcomes[b].action === 'out') outCount++;
       }
       if (outCount < requiredOuts) {
-        const label = requiredOuts === 3 ? 'triple play' : 'double play';
         popup.querySelectorAll('.oc-row').forEach(row => {
           const key = row.dataset.base;
           const oc = key === 'batter' ? outcomes.batter : outcomes[parseInt(key)];
           if (!oc || oc.action !== 'out') flashOcRow(key);
         });
-        showPlayReject(`A ${label} needs ${requiredOuts} outs — ${outCount} marked.`);
+        showPlayReject(`A ${playLabel} needs ${requiredOuts} outs — ${outCount} marked.`);
         return;
       }
     }

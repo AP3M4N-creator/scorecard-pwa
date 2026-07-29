@@ -506,7 +506,7 @@ single-double-homer across the three rows of spot 1 splitting 1/1 · 1/1 · 1/1/
 | # | Finding | Location |
 |---|---|---|
 | M3 | The runner popup offers a **batter-destination row on `SF`/`SH`** that is silently discarded. `defaultAdv` is 1 for a sacrifice → `batterDefaultBase` is 0 → the row renders (3 buttons); the callback then calls `recordBatterOut` and ignores the choice. Also excluded from collision validation, since `rpParties` only adds the batter when `batterTakesBase`. | [app.js:1460], [app.js:2046], [app.js:2081] |
-| M4 | An **`FC` can record three outs** — `maxOuts` is 3 for anything not DP/TP, and `playEntryReject` doesn't constrain FC. (Folds into the D2 work.) | [app.js:1761], [app.js:1344] |
+| M4 ✅ | An **`FC` can record three outs** — `maxOuts` is 3 for anything not DP/TP, and `playEntryReject` doesn't constrain FC. (Folds into the D2 work — **it did not**; see below.) | [app.js:1761], [app.js:1344] |
 | M5 | **Undo history is memory-only** — after a refresh `undoLastPlay` does nothing (`historyDepth: 0`, state unchanged). `clearSelectedCell` still works correctly post-refresh. The 2026-07-28 plan deliberately left this; re-confirm rather than assume. | [app.js:2817] |
 | M6 | A pitcher who records **no outs shows blank IP**, not `0.0` — `s.outs > 0 ? fullInnings : ''`. Run/ER attribution across a mid-inning change is otherwise **correct** (`ab.pitcher` is frozen at entry). | [app.js:4047] |
 | M7 | **Manually-entered `BB`/`K` leave the pitch count inconsistent.** A `BB` tapped on a 3-ball count stays at 3 pitches (the `push('B')` only fires when `pitches.length === 0`); a `K` tapped by button pushes `'X'`, which `getPitchCount` reads as 0 strikes and `renderPitches` draws as nothing — so the cell shows "1 pitch" over an empty pitch track. | [app.js:1382–1392], [app.js:2327] |
@@ -515,6 +515,36 @@ single-double-homer across the three rows of spot 1 splitting 1/1 · 1/1 · 1/1/
 | L3 | A **balk** is visible only as a `BK` advancement label on the runner's diamond; no BK count on the pitcher line. | [app.js:2809] |
 | L4 | Batting around in the **15th column can't overflow** (`nextCol >= INNINGS` returns), leaving the selection on a filled cell and further batters silently unenterable. | [app.js:2211] |
 | L5 | A home half **never played stays blank** rather than showing `X`. | [app.js:3394] |
+
+### M4 — an `FC` can record three outs — ✅ **FIXED**
+`showRunnerOutcomePopup` [app.js:1879]
+
+Checked before assuming, since the plan expected this to fold into D2's work: it did
+not. C2 added `requiredOuts`, a *floor* for DP and TP; the ceiling was still
+`maxOuts = 3` for anything that wasn't one of them, and `playEntryReject` says nothing
+about FC. Reproduced against the real DOM — `FC 6` with men on 1st and 2nd, all three
+marked out, gave `outs: 3 · outsRecorded: 3 · play "FC 6"`, accepted with the popup
+closing and no complaint. Two outs on an FC was equally free.
+
+**What was done.** Fix per D8. `maxOuts` gains an FC clause of 1, so the cap that
+already existed does the work and the three plays that own this popup read as one
+rule — FC 1, DP 2, TP 3, each beside its floor. `playLabel` is now computed once
+next to them and the Confirm refusal's own `label` reads from it, so the two messages
+can't drift apart.
+
+The other half of D8 is that the cap stopped being silent. Exceeding it reverts an
+*earlier* row to safe, and it did so with nothing said — the scorer marks an out and
+watches a different row go green, which reads as a dead button. It now toasts what it
+flipped (`A fielder's choice records one out — batter set back to safe.`), naming
+runners by the base they started on, the way their own row is labelled. That lands on
+the DP and TP flips too, which were just as silent.
+
+Verified: 4 new cases (255 passed · 0 failed) — the plan's own repro, the two-out FC
+with the flip and its message, a one-out FC left alone, and the DP flip now announcing
+itself. Reverting the FC clause fails the first two and nothing else; reverting only
+the toast fails the two that assert it. Not verified in a live browser: the suite
+drives the real popup through its own buttons, and the toast is `showPlayReject`, whose
+surface M1 already verified.
 
 **Not defects — design gaps, listed so they aren't re-found:**
 

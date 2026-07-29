@@ -1122,6 +1122,65 @@
     eq('outs', inn('visiting', 0).outs, 2);
   });
 
+  // M4 — an FC's out count was capped at 3 like anything that isn't a DP or a TP, so
+  // a `FC 6` with two on took the batter and both runners and recorded a triple play
+  // under a fielder's choice's label. One out is what the play is: the fielder chose
+  // which man to retire.
+  test('an FC cannot record three outs', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });   // p3 on 1st, p0 to 2nd
+    promptPositionPlay('FC ');
+    positionPopup('6');
+    outcomePopup({ 1: ['out', 2], 0: ['out', 1], batter: ['out'] });
+    eq('one out, not three', inn('visiting', 0).outs, 1);
+    eq('outs recorded on the play', ab('visiting', 6, 0).outsRecorded, 1);
+  });
+
+  test('a second out on an FC sets the first one back, and says so', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    promptPositionPlay('FC ');
+    positionPopup('6');
+    ocBtn('batter', 'out').onclick();               // batter out …
+    ocBtn(0, 'out', 1).onclick();                   // … then the runner: two on an FC
+    ok('the cap said what it did', visible('play-reject'));
+    ok('and named the row it flipped',
+      document.getElementById('play-reject').textContent.indexOf('batter set back to safe') >= 0);
+    clickId('oc-confirm');
+    eq('outs', inn('visiting', 0).outs, 1);
+    eq('the runner is the out', ab('visiting', 0, 0).outOnBase, 1);
+    eq('the batter took the base he was given', onB('visiting', 0, 0), 3);
+  });
+
+  test('an FC that records its one out is unaffected', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    promptPositionPlay('FC ');
+    positionPopup('6');
+    outcomePopup({ 0: ['out', 1], batter: ['safe', 0] });
+    ok('no refusal', !visible('play-reject'));
+    eq('outs', inn('visiting', 0).outs, 1);
+    eq('outs recorded on the play', ab('visiting', 3, 0).outsRecorded, 1);
+    eq('batter on 1st', onB('visiting', 0, 0), 3);
+  });
+
+  // The cap itself is not new for a DP — the silence was. A third out flipped a row
+  // green with nothing said, which reads as a dead button.
+  test('a third out on a DP sets a row back, and says so', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });   // p3 on 1st, p0 to 2nd
+    promptPositionPlay('DP ');
+    positionPopup('5-4-3');                        // opens on batter + the forced man out
+    ocBtn(1, 'out', 2).onclick();                   // a third out
+    ok('the cap said what it did', visible('play-reject'));
+    ok('and named the double play',
+      document.getElementById('play-reject').textContent.indexOf('double play records two outs') >= 0);
+    clickId('oc-confirm');
+    eq('outs', inn('visiting', 0).outs, 2);
+  });
+
   // #4 — the steal picker used to offer a base someone was already standing on.
   test('a steal into an occupied base is not offered', () => {
     sel('visiting', 0, 0);
