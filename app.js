@@ -1108,6 +1108,35 @@ function hidePopupBackdrop() {
   if (bd) bd.style.display = 'none';
 }
 
+// Popups whose Confirm writes to an at-bat and an inning captured when they
+// opened. Undo restores an older snapshot, and the confirm then applies its
+// advancements on top of that — the runners land in a state that never
+// happened (#29). So undo and redo refuse to run until the entry is resolved:
+// answer the popup, or close it, first.
+//
+// `spray-popup` is deliberately not on the list. It opens by itself after every
+// hit, so blocking undo behind it would block undo on the commonest path there
+// is — and all it writes is `hitLoc`. Undo dismisses it instead: the play it was
+// asking about is the one being taken back.
+const PENDING_ENTRY_POPUPS = [
+  'runner-popup', 'outcome-popup', 'base-picker', 'pos-popup', 'k-popup',
+  'edit-play-popup', 'move-runner-popup', 'er-review-popup', 'recompute-popup'
+];
+
+function pendingEntryPopupOpen() {
+  if (typeof document === 'undefined') return false;
+  return PENDING_ENTRY_POPUPS.some(id => {
+    const p = document.getElementById(id);
+    return p && p.style.display && p.style.display !== 'none';
+  });
+}
+
+function dismissSprayPopup() {
+  if (typeof document === 'undefined') return;
+  const p = document.getElementById('spray-popup');
+  if (p) p.style.display = 'none';
+}
+
 /* ------------------------------------------------ undo: the whole inning ---
    A snapshot used to hold one column: `atBats[innIdx]` for every player, plus
    that column's inning record. A batted-around inning lives in two or more
@@ -2718,6 +2747,8 @@ function restoreSnapshot(snap) {
 }
 
 function undoLastPlay() {
+  if (pendingEntryPopupOpen()) { showPlayReject('Finish or close the open entry first.'); return; }
+  dismissSprayPopup();
   if (pendingTransitionTimer) { clearTimeout(pendingTransitionTimer); pendingTransitionTimer = null; }
   gameOverShown = false;
   if (!playHistory.length) return;
@@ -2729,6 +2760,8 @@ function undoLastPlay() {
 }
 
 function redoLastPlay() {
+  if (pendingEntryPopupOpen()) { showPlayReject('Finish or close the open entry first.'); return; }
+  dismissSprayPopup();
   if (!redoHistory.length) return;
   const next = redoHistory[redoHistory.length - 1];
   const undo = snapshotForRedo(next.team, next.pIdx, next.innIdx);

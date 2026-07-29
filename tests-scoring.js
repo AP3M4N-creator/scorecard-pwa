@@ -1769,6 +1769,48 @@
   });
 
   /* =====================================================================
+     #29 — a popup's Confirm holds state captured when it opened
+     ===================================================================== */
+
+  // Undo restored an older snapshot while the runner popup was still up, and
+  // confirming then applied its advancements on top of that — the runners ended
+  // on bases that no sequence of plays would have put them on.
+  test('undo is refused while a runner popup is waiting to be answered', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                     // p0 on 1st
+    play('2B');                                     // opens the runner popup
+    ok('the popup is up', visible('runner-popup'));
+    const before = JSON.stringify(inn('visiting', 0).bases);
+    key('u');
+    ok('the popup is still up', visible('runner-popup'));
+    eq('and nothing was reverted', JSON.stringify(inn('visiting', 0).bases), before);
+    ok('the refusal is shown', visible('play-reject'));
+    runnerPopup({ 0: 2, batter: 1 });               // answer it — the entry completes
+    eq('the runner is on 3rd', onB('visiting', 0, 2), 0);
+    eq('the batter on 2nd', onB('visiting', 0, 1), 2);
+  });
+
+  test('undo works again once the popup is answered', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('2B'); runnerPopup({ 0: 2, batter: 1 });
+    key('u');
+    eq('the double is gone', ab('visiting', 2, 0).play, '');
+    eq('and the runner is back on 1st', onB('visiting', 0, 0), 0);
+  });
+
+  // The spray popup opens by itself after every hit and only writes hitLoc, so
+  // it must not stand between the scorer and undo.
+  test('the spray popup does not block undo', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    ok('the spray popup is up', visible('spray-popup'));
+    key('u');
+    eq('the single is gone', ab('visiting', 0, 0).play, '');
+    ok('and the spray popup went with it', !visible('spray-popup'));
+  });
+
+  /* =====================================================================
      Phase 9 — storage that doesn't lose things quietly
      ===================================================================== */
 
