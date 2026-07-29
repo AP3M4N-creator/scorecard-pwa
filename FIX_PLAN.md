@@ -254,8 +254,8 @@ be close to a one-line redirect — but check the interaction with the rollback
 path at [app.js:2975], which pops the undo snapshot on a refused change, and
 make sure a transition isn't scheduled from a change that then gets rolled back.
 
-### M1 — nothing locks the card once the game is final (RC-G)
-`checkGameOver` [app.js:1916]
+### M1 — nothing locks the card once the game is final (RC-G) — ✅ **FIXED**
+`checkGameOver` [app.js:2093]
 
 After a walk-off (`gameOverShown: true`), another HR was accepted and moved R
 from 1 to 2. Fix per **D6** — a one-time toast plus a FINAL marker, entry still
@@ -266,6 +266,52 @@ does not dismiss an open runner popup, so Clear tapped over one leaves it up on 
 cell whose play is gone, and `entryInProgress()` then refuses *all* entry until it
 is closed. Same guard family as M1's toast, and a lockup is worse than the bug it
 came from.
+
+**What was done.** The audit found the missing lock; the code turned out to have a
+*third* copy of the game-over condition as well. `updateLiveStatsFromState` carried
+its own `isComplete`, and it had drifted from the other two: it had no walk-off
+clause (so the card that ends on the winning run never read FINAL) and no
+`vR !== hR` (so a tied bottom of the 9th read FINAL on the way to extras). All
+three now go through one `halfEndsGame(team, realInn, outs)`; `halfInningIsOver`
+asks it for its walk-off case rather than restating it, and `checkGameOver` is two
+lines.
+
+The FINAL marker is the live panel's `ls-inning` readout, which already existed and
+was already tested — it was just never refreshed. `updateSituation` is the one
+writer that repaints on every selection, and it unconditionally wrote `▼ 9`, so a
+reloaded final card showed FINAL until the scorer's first tap and then went back to
+reading a live count for a game that was over. It now ends by handing off to
+`renderFinalReadout()` when `gameIsFinal()`.
+
+`gameIsFinal()` is derived on every call, not read off the memory-only
+`gameOverShown` flag: it survives a reload, and taking the winning run back off the
+card restores the live panel with nothing having to remember to clear a flag. It
+asks `halfEndsGame` about `lastHalfWithPlays()` — the half the card is furthest
+into — because the condition can't be applied to a half nobody has batted in, or a
+home team leading in the 5th would satisfy the home clause and a mid-game card
+would read FINAL.
+
+The toast is `showPlayNotice`, a neutral-navy tone split out of `showPlayReject`
+(both now wrap `showPlayToast`, so the ~15 existing reject call sites are
+untouched). An accepted entry must not be dressed in the refusal's red. It fires
+from `noteEntryAfterFinal()` on `applyPlay`'s accepted path, before the play lands,
+so a *rejected* play doesn't burn the one notice. The flag re-arms itself — an entry
+made while the game is not final clears it — so there is nothing to reset alongside
+`gameOverShown`, and a card corrected back to a live game and finished again warns
+again.
+
+The folded-in leftover: `clearSelectedCell` now takes the same
+`entryInProgress()` guard `applyPlay` and `selectCell` use, with the same message
+(D1's shape). Clear reaches past the popup backdrop through the `c` hotkey, and it
+was deleting the play the popup was still deciding.
+
+Verified: 5 new tests (235 passed · 0 failed). Reverting the three changes
+individually fails exactly their own tests and nothing else (4 failures, since the
+FINAL-marker revert also takes down the clear-the-winning-run case). In the browser,
+a walk-off HR reads `FINAL · 0-1` and still reads FINAL after tapping a cell back in
+the 2nd; a second HR is recorded (R 1 → 2) with `Game is final — recording anyway.`
+in navy, and no notice on the third entry; `c` over an open runner popup leaves the
+popup up and the play intact, and the popup still confirms afterwards.
 
 ### M2 — LOB is 0 in a walk-off — ✅ **FIXED**
 `recomputeInning` [app.js:748]

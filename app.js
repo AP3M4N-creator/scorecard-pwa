@@ -711,13 +711,33 @@ function runsOnLine(team) {
    runners still standing. Those runners were left on base, and LOB read 0 for
    every walk-off because the only test was `outs >= 3` (M2).
 
-   Deliberately the same condition `checkGameOver` [app.js:2052] ends the game on,
-   through the same `runsOnLine`, so the card can't call a game final and its LOB
-   column still say the inning is being played. */
+   Deliberately the same condition `checkGameOver` ends the game on, through the
+   same `halfEndsGame`, so the card can't call a game final and its LOB column
+   still say the inning is being played. */
 function halfInningIsOver(team, realInn, outs) {
   if (outs >= 3) return true;
-  return team === 'home' && realInn >= lastRegulationIdx()
-    && runsOnLine('home') > runsOnLine('visiting');
+  // With fewer than 3 outs the only thing that ends a half is a walk-off, which
+  // is the home clause of `halfEndsGame` — asked there rather than restated here.
+  return team === 'home' && halfEndsGame('home', realInn, outs);
+}
+
+/* Does this half-inning end the *game*? The one copy of that condition.
+   There were three: `checkGameOver`, the walk-off clause above, and
+   `updateLiveStatsFromState`'s `isComplete`, which had drifted — it missed the
+   walk-off entirely (so the card that ends on the winning run never read FINAL)
+   and forgot `vR !== hR` (so a tied bottom of the 9th read FINAL when the game
+   was headed for extras). M1.
+
+   The home half ends the instant the home team goes ahead: a walk-off doesn't wait
+   for a 3rd out, and it doesn't care whether the run came in on a hit or a wild
+   pitch. Otherwise the half has to be complete and the game not tied. */
+function halfEndsGame(team, realInn, outs) {
+  if (realInn < lastRegulationIdx()) return false;
+  const vR = runsOnLine('visiting');
+  const hR = runsOnLine('home');
+  return team === 'home'
+    ? (hR > vR || (outs >= 3 && vR !== hR))
+    : (outs >= 3 && hR > vR);
 }
 
 /* ------------------------------------------------- recomputing an inning ---
@@ -1279,22 +1299,29 @@ function runnerOrderMessage(parties) {
 
 let playRejectTimer = null;
 
-// Brief, non-blocking notice for a refused entry. A rejected play has to say so:
-// silently dropping it is how a scorer ends up trusting a wrong card.
-function showPlayReject(msg) {
+// Brief, non-blocking notice about an entry. `tone` is 'reject' for an entry that
+// was refused — a rejected play has to say so, since silently dropping it is how a
+// scorer ends up trusting a wrong card — or 'notice' for one that was *accepted*
+// with a caveat, which must not be dressed in the refusal's red (M1).
+function showPlayToast(msg, tone) {
   if (typeof document === 'undefined') return;
   let el = document.getElementById('play-reject');
   if (!el) {
     el = document.createElement('div');
     el.id = 'play-reject';
-    el.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);background:var(--accent,#c62828);color:#fff;padding:10px 18px;border-radius:6px;z-index:400;font-family:var(--heading);font-size:13px;font-weight:700;letter-spacing:0.5px;text-align:center;max-width:80vw;box-shadow:0 4px 20px rgba(0,0,0,0.35);';
+    el.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);color:#fff;padding:10px 18px;border-radius:6px;z-index:400;font-family:var(--heading);font-size:13px;font-weight:700;letter-spacing:0.5px;text-align:center;max-width:80vw;box-shadow:0 4px 20px rgba(0,0,0,0.35);';
     document.body.appendChild(el);
   }
+  el.dataset.tone = tone === 'notice' ? 'notice' : 'reject';
+  el.style.background = tone === 'notice' ? 'var(--navy,#1a2744)' : 'var(--accent,#c62828)';
   el.textContent = msg;
   el.style.display = 'block';
   if (playRejectTimer) clearTimeout(playRejectTimer);
   playRejectTimer = setTimeout(() => { playRejectTimer = null; el.style.display = 'none'; }, 2200);
 }
+
+function showPlayReject(msg) { showPlayToast(msg, 'reject'); }
+function showPlayNotice(msg) { showPlayToast(msg, 'notice'); }
 
 // Popups that own the current entry get a backdrop, so a tap meant for the popup
 // can't land on the grid and move the selection underneath it (#1, #29).
@@ -1494,6 +1521,8 @@ function applyPlay(play, target) {
   // Reject before the at-bat is touched — no play, no result pitch.
   const reject = playEntryReject(team, innIdx, play);
   if (reject) { showPlayReject(reject); return; }
+
+  noteEntryAfterFinal();
 
   // Save undo snapshot
   const prevTab = document.querySelector('.tab-btn.active')?.dataset.tab;
@@ -2081,16 +2110,7 @@ function scheduleTransition(fn, delay) {
 // game ending on one just rolled on into the bottom of the 9th (#5).
 function checkGameOver(team, innIdx) {
   const inn = getInnState(team, innIdx);
-  const realInn = getRealInning(team, innIdx);
-  const vR = runsOnLine('visiting');
-  const hR = runsOnLine('home');
-  // The bottom half ends the instant the home team goes ahead — a walk-off doesn't
-  // wait for a 3rd out, and it doesn't care whether the run came in on a hit or on
-  // a wild pitch. Otherwise the half has to be complete and the game not tied.
-  const isGameOver = realInn >= lastRegulationIdx() && (team === 'home'
-    ? (hR > vR || (inn.outs >= 3 && vR !== hR))
-    : (inn.outs >= 3 && hR > vR));
-  if (!isGameOver || gameOverShown) return false;
+  if (!halfEndsGame(team, getRealInning(team, innIdx), inn.outs) || gameOverShown) return false;
   gameOverShown = true;
   scheduleTransition(showGameSummary, 1000);
   return true;
@@ -2711,54 +2731,99 @@ function updateSituation() {
   highlightLinescore(team, innIdx);
   fillLinescoreZeros();
 
+  // Last, over the top of everything above: a finished game reads FINAL. The panel
+  // is the only standing sign that the card is closed once the summary modal has
+  // been dismissed, and this is the one writer that repaints on every selection —
+  // so without this, a reloaded final card showed FINAL until the first tap and
+  // then went back to reading "▼ 9 · 0-0 · nobody out" for a game that was over
+  // (M1). Derived, so correcting the score back to a tie restores the live panel.
+  if (gameIsFinal()) renderFinalReadout();
+
   // (count, batter, LOB now handled in the panel loop above)
 }
 
 function updateLiveStatsFromState() {
-  const vR = parseInt(document.querySelector('input[data-ls="visiting"][data-stat="r"]')?.value) || 0;
-  const hR = parseInt(document.querySelector('input[data-ls="home"][data-stat="r"]')?.value) || 0;
-  // Find the last inning with plays
-  let lastTeam = 'visiting', lastInn = 0, hasPlays = false;
+  const half = lastHalfWithPlays();
+  if (!half) return;
+  if (gameIsFinal()) { renderFinalReadout(); return; }
+  const lsInn = document.getElementById('ls-inning');
+  const arrow = half.team === 'visiting' ? '▲' : '▼';
+  if (lsInn) lsInn.textContent = arrow + ' ' + (getRealInning(half.team, half.innIdx) + 1);
+}
+
+/* The half-inning the card is furthest into: the highest column either side has a
+   recorded play in, the home half winning a tie because it is played second.
+   Returns null for an empty card.
+
+   This is what "has the game reached its end" has to be asked about — the
+   condition can't be applied to a half nobody has batted in, or a home team
+   leading in the 5th would satisfy `halfEndsGame`'s home clause and the card would
+   read FINAL in the middle of the game. */
+function lastHalfWithPlays() {
+  let lastTeam = null, lastInn = -1;
   ['visiting','home'].forEach(team => {
     const players = gameState.teams[team].players;
     for (let col = INNINGS - 1; col >= 0; col--) {
-      for (let p = 0; p < players.length; p++) {
-        if (players[p].atBats[col].play) {
-          if (col > lastInn || (col === lastInn && team === 'home')) {
-            lastInn = col; lastTeam = team; hasPlays = true;
-          }
-          break;
-        }
-      }
-      if (hasPlays && col < lastInn) break;
+      if (col < lastInn) break;
+      const played = players.some(pl => pl.atBats[col] && pl.atBats[col].play);
+      if (played && (col > lastInn || team === 'home')) { lastInn = col; lastTeam = team; }
     }
   });
-  if (!hasPlays) return;
-  const inn = getInnState(lastTeam, lastInn);
-  const realInn = getRealInning(lastTeam, lastInn);
-  const isComplete = (lastTeam === 'home' && realInn >= lastRegulationIdx() && inn.outs >= 3) ||
-                     (lastTeam === 'visiting' && realInn >= lastRegulationIdx() && inn.outs >= 3 && hR > vR);
+  return lastTeam === null ? null : { team: lastTeam, innIdx: lastInn };
+}
+
+/* Is this card a finished game? Derived from the records and the line every time
+   it is asked, not from the memory-only `gameOverShown` flag — so it survives a
+   reload, and an edit that puts the score back to a tie takes FINAL away again
+   without anything having to remember to clear it (M1). */
+function gameIsFinal() {
+  const half = lastHalfWithPlays();
+  if (!half) return false;
+  return halfEndsGame(half.team, getRealInning(half.team, half.innIdx), getInnState(half.team, half.innIdx).outs);
+}
+
+/* Say once that the card being written to is a finished game. Nothing locked the
+   card after a walk-off, so another home run was accepted and quietly moved R from
+   1 to 2 with no sign anything unusual had happened (M1).
+
+   Warn, don't refuse (D6): a scorer does sometimes have to correct a final card,
+   and this app's standing policy is to record what happened rather than argue. The
+   caveat is the whole point, so it goes on the *accepted* path, before the play
+   lands — `gameIsFinal()` is about to be true either way, and what the scorer needs
+   told is that it was already true before they typed.
+
+   One notice per final game, and it re-arms itself: an entry made while the game is
+   not final clears the flag here, so a card corrected back to a live game and then
+   finished again gets a fresh warning. That is why there is nothing to reset
+   alongside `gameOverShown`. */
+let finalNoticeShown = false;
+
+function noteEntryAfterFinal() {
+  if (!gameIsFinal()) { finalNoticeShown = false; return; }
+  if (finalNoticeShown) return;
+  finalNoticeShown = true;
+  showPlayNotice('Game is final — recording anyway.');
+}
+
+/* The live panel, for a game that is over. Nothing is at bat, nobody is on, and
+   the count slot shows the final score instead. */
+function renderFinalReadout() {
   const lsInn = document.getElementById('ls-inning');
   const lsCount = document.getElementById('ls-count');
   const lsBatter = document.getElementById('ls-batter');
-  if (isComplete) {
-    if (lsInn) lsInn.textContent = 'FINAL';
-    if (lsCount) lsCount.textContent = vR + '-' + hR;
-    if (lsBatter) lsBatter.textContent = '';
-    for (let i = 1; i <= 3; i++) {
-      const od = document.getElementById('ls-out-' + i);
-      if (od) od.classList.remove('active');
-    }
-    ['ls-b1','ls-b2','ls-b3'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.setAttribute('fill', 'rgba(255,255,255,0.2)');
-    });
-    const lsPitches = document.getElementById('ls-pitches');
-    if (lsPitches) lsPitches.textContent = '';
-  } else {
-    const half = lastTeam === 'visiting' ? '▲' : '▼';
-    if (lsInn) lsInn.textContent = half + ' ' + (realInn + 1);
+  const lsPitches = document.getElementById('ls-pitches');
+  if (lsInn) lsInn.textContent = 'FINAL';
+  if (lsCount) lsCount.textContent = runsOnLine('visiting') + '-' + runsOnLine('home');
+  if (lsBatter) lsBatter.textContent = '';
+  if (lsPitches) lsPitches.textContent = '';
+  for (let i = 1; i <= 3; i++) {
+    const od = document.getElementById('ls-out-' + i);
+    if (od) od.classList.remove('active');
   }
+  ['ls-b1','ls-b2','ls-b3'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.setAttribute('fill', 'rgba(255,255,255,0.2)');
+  });
 }
 
 /* Runner events (mid-at-bat, don't end the at-bat) */
@@ -3500,6 +3565,14 @@ function setRunEarnedByIndex(idx, unearned) {
 
 function clearSelectedCell() {
   if (!selectedCell) return;
+  // The last hole in the C1 guard family. Clear is reachable past the backdrop
+  // through the `c` hotkey, and it deleted the play a pending runner/outcome popup
+  // was still deciding — leaving the popup up over a cell with nothing in it. Its
+  // Confirm would then write advancements for a play that no longer exists, and
+  // until it was answered `entryInProgress()` refused *every* other entry: a
+  // lockup worse than the bug it came from. Refuse, the way `applyPlay` and
+  // `selectCell` do, with the same message.
+  if (entryInProgress()) { showPlayReject('Finish the open entry first.'); return; }
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);

@@ -130,6 +130,7 @@
     redoHistory.length = 0;
     erReviewList.length = 0;
     gameOverShown = false;
+    finalNoticeShown = false;   // one notice per final game, so it can't cross cases
     pendingTransitionTimer = null;
     if (selectedCell) selectedCell.classList.remove('selected');
     selectedCell = null;
@@ -1439,6 +1440,79 @@
     play('1B');                                     // a man on, still nobody out
     eq('ahead', rTotal('visiting'), '1');
     eq('the inning is still being played', inn('visiting', 8).lob, 0);
+  });
+
+  /* M1 — nothing marked the card as closed once the game was final. After a
+     walk-off another home run was accepted and moved R from 1 to 2 with no sign
+     anything unusual had happened. Per D6 the entry is still allowed — a scorer
+     does have to correct a final card — but it says so once, and the card carries
+     a standing FINAL. */
+  test('an entry made after a walk-off is accepted, with one notice', () => {
+    sel('home', 0, 8);
+    play('HR');                                     // walk-off, 1-0
+    ok('game recognised as over', gameOverShown);
+    ok('no notice for the play that ended it', !visible('play-reject'));
+    sel('home', 2, 8);
+    play('HR');                                     // the extra one
+    eq('it was recorded', rTotal('home'), '2');
+    ok('and the card said so', visible('play-reject'));
+    eq('as a notice, not a refusal', document.getElementById('play-reject').dataset.tone, 'notice');
+    // Once. A second correction on the same final card doesn't nag.
+    document.getElementById('play-reject').style.display = 'none';
+    sel('home', 4, 8);
+    play('1B');
+    ok('no second notice', !visible('play-reject'));
+  });
+
+  test('the live panel reads FINAL after a walk-off, and keeps reading it', () => {
+    sel('home', 0, 8);
+    play('HR');
+    eq('the panel', document.getElementById('ls-inning').textContent, 'FINAL');
+    eq('with the score', document.getElementById('ls-count').textContent, '0-1');
+    // The one writer that repaints on every selection used to overwrite it, so the
+    // marker survived until the scorer's next tap and no further.
+    sel('visiting', 4, 2);
+    eq('still FINAL after selecting an earlier cell', document.getElementById('ls-inning').textContent, 'FINAL');
+  });
+
+  test('a tied bottom of the last inning does not read FINAL', () => {
+    lsInput('visiting', 0).value = '1';
+    updateLinescoreTotals('visiting');
+    sel('home', 0, 8);
+    play('HR');                                     // ties it 1-1, headed for extras
+    ok('game still going', !gameOverShown);
+    eq('the panel', document.getElementById('ls-inning').textContent, '▼ 9');
+  });
+
+  // Derived, not remembered: taking the winning run back off the card puts the
+  // panel back to the inning being played, with nothing having to clear a flag.
+  test('clearing the winning run takes FINAL back off the card', () => {
+    sel('home', 0, 8);
+    play('HR');
+    eq('final', document.getElementById('ls-inning').textContent, 'FINAL');
+    sel('home', 0, 8);                              // back onto the home run itself
+    clearSelectedCell();
+    eq('no runs left', rTotal('home'), '');
+    eq('the panel is live again', document.getElementById('ls-inning').textContent, '▼ 9');
+  });
+
+  // M1's folded-in leftover: Clear is reachable past the popup backdrop through the
+  // `c` hotkey, and it deleted the play the popup was still deciding — leaving the
+  // popup up over an empty cell, and `entryInProgress()` then refusing every other
+  // entry until it was answered.
+  test('Clear is refused while a runner popup is open', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                     // p0 on 1st
+    play('1B');                                     // opens the runner popup
+    ok('the popup is open', visible('runner-popup'));
+    key('c');                                       // CLR All, past the backdrop
+    ok('the refusal is shown', visible('play-reject'));
+    ok('the popup is still open', visible('runner-popup'));
+    eq('the play is still there', ab('visiting', 2, 0).play, '1B');
+    // And answering it still works — the refusal is not a lockup.
+    runnerPopup({ 0: 1, batter: 0 });
+    eq('runner on 2nd', onB('visiting', 0, 1), 0);
+    eq('batter on 1st', onB('visiting', 0, 0), 2);
   });
 
   // H1 — E was a hand-typed input while R, H and LOB were all derived, so the card
