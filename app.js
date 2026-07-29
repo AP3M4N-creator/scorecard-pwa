@@ -921,6 +921,58 @@ function revertAdvancesFrom(team, realInn, srcP, srcCol) {
   }
 }
 
+// Is this at-bat credited with a run right now? Every base marked, home included,
+// and not thrown out along the way.
+function runScored(ab) {
+  return !!(ab && ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null);
+}
+
+// Every run credited in this at-bat's inning right now, each with the plate
+// appearance that drove it in — `advSrc[3]`, the stamp `markAdvance` puts on the
+// segment that brought him home. A run nobody stamped (a steal of home, a wild
+// pitch) has no source, and no RBI was credited for it either.
+function scoredRunsWithSource(team, cols) {
+  const players = gameState.teams[team].players;
+  const runs = [];
+  for (const col of cols) {
+    for (let p = 0; p < players.length; p++) {
+      const ab = players[p].atBats[col];
+      if (!runScored(ab)) continue;
+      runs.push({ p, col, src: Array.isArray(ab.advSrc) ? ab.advSrc[3] : null });
+    }
+  }
+  return runs;
+}
+
+// A run that comes off the board takes its RBI with it (#C3). `recomputeInning`
+// re-derives outs, bases, runs and LOB but not `ab.rbi`, which `countRunnersScored`
+// freezes at entry — so clearing or rewriting the man who scored used to leave the
+// batter credited with driving in a run that no longer exists, and team RBI could
+// exceed team runs.
+//
+// RBI can't simply be re-derived: it is a scorer judgement (9.04(b) suppresses it
+// on a double play and on a K+WP, and `adjustRBI` exists so a human can override).
+// So only the credit for runs that actually disappeared is dropped, and only from
+// the play each run was stamped to — an override survives anything it doesn't
+// contradict. The taken-back cell is skipped: the caller wipes its whole at-bat.
+function dropRbiForLostRuns(team, col, pIdx, runsBefore) {
+  const players = gameState.teams[team].players;
+  for (const run of runsBefore) {
+    if (!run.src) continue;
+    if (run.src.p === pIdx && run.src.col === col) continue;
+    // The taken-back cell's own runner is coming off the card with his play, so his
+    // run is gone whatever his bases still read at this point.
+    const gone = (run.p === pIdx && run.col === col) || !runScored(players[run.p].atBats[run.col]);
+    if (!gone) continue;
+    const sab = players[run.src.p].atBats[run.src.col];
+    if (!sab || !sab.rbi) continue;
+    sab.rbi = Math.max(0, sab.rbi - 1);
+    renderRBI(team, run.src.p, run.src.col);
+    renderPlayText(team, run.src.p, run.src.col);
+  }
+  updatePlayerStats(team);
+}
+
 // Take a plate appearance's effects back off the inning: the outs it made (its
 // batter's own and any runner it doubled off) and the bases it handed out. Both
 // halves of #21. `fallbackOuts` is how many outs to subtract when there is no log
@@ -933,6 +985,10 @@ function revertAdvancesFrom(team, realInn, srcP, srcCol) {
 function takeBackPlay(team, col, pIdx, fallbackOuts) {
   const inn = getInnState(team, col);
   const players = gameState.teams[team].players;
+  const realInn = getRealInning(team, col);
+  // Who is credited with a run, and off whose play, before any of this comes off —
+  // compared again once it has, to take the RBI down with the run (#C3).
+  const runsBefore = scoredRunsWithSource(team, getColumnsForInning(team, realInn));
   // Read the runner outs before the log entries go: after this the only record
   // that they happened is the `out` / `outOnBase` marks on the runners' own cells.
   const runnerOuts = outsFromPlay(inn, pIdx, col).filter(o => o.pIdx !== pIdx || o.col !== col);
@@ -946,7 +1002,8 @@ function takeBackPlay(team, col, pIdx, fallbackOuts) {
   }
   // The bases it handed out go back too. A base a runner stole, or took on a wild
   // pitch, isn't this play's to take away.
-  revertAdvancesFrom(team, getRealInning(team, col), pIdx, col);
+  revertAdvancesFrom(team, realInn, pIdx, col);
+  dropRbiForLostRuns(team, col, pIdx, runsBefore);
 }
 
 // The at-bat cell a runner on base is running from — his own record, where his
@@ -1352,7 +1409,7 @@ function renderInning(team, prev) {
 // on an earlier trip through the order still earns the RBI.
 function countRunnersScored(team, prev) {
   const players = gameState.teams[team].players;
-  const didScore = ab => !!(ab && ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null);
+  const didScore = runScored;
   let scored = 0;
   for (const col of prev.cols) {
     for (let p = 0; p < players.length; p++) {

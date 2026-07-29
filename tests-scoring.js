@@ -1612,6 +1612,60 @@
     eq('and off the linescore', lsInput('visiting', 0).value, '');
   });
 
+  // #C3: `recomputeInning` owns outs, bases, runs and LOB but not `ab.rbi`, which is
+  // frozen at entry — so a run taken off an older play used to leave the batter
+  // credited with driving in a run that no longer existed, and team RBI could run
+  // ahead of team R.
+  test('clearing the man who scored takes the RBI off the batter who drove him in', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st
+    play('HR');                                      // p2 drives him in and himself
+    eq('two runs', lsInput('visiting', 0).value, '2');
+    eq('two RBI', ab('visiting', 2, 0).rbi, 2);
+    sel('visiting', 0, 0);
+    clearSelectedCell();                             // the man who scored comes off
+    eq('one run left', lsInput('visiting', 0).value, '1');
+    eq('and one RBI', ab('visiting', 2, 0).rbi, 1);
+  });
+
+  test('rewriting the man who scored as an out takes the RBI with it', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('HR');
+    sel('visiting', 0, 0);
+    editPlay('K');                                   // the leadoff single never happened
+    eq('only the home run scored', lsInput('visiting', 0).value, '1');
+    eq('so one RBI', ab('visiting', 2, 0).rbi, 1);
+  });
+
+  // The run is stamped to the play that drove it in, so clearing a play in the
+  // middle of the chain debits the right batter: p4's single loses its RBI because
+  // p0 is no longer standing on 2nd to be driven in from.
+  test('clearing a play that only set up a run debits the batter who drove it in', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });     // p2 singles, p0 to 2nd
+    play('1B'); runnerPopup({ 1: 3, 0: 1, batter: 0 });  // p4 singles p0 home, p2 to 2nd
+    eq('p4 has the RBI', ab('visiting', 4, 0).rbi, 1);
+    sel('visiting', 2, 0);
+    clearSelectedCell();                             // clear the single that moved p0 up
+    eq('the run came off', lsInput('visiting', 0).value, '');
+    eq('so did the RBI', ab('visiting', 4, 0).rbi, 0);
+  });
+
+  // A scorer's manual RBI override is not contradicted by a run that is still on the
+  // board — only lost runs debit anybody.
+  test('an unrelated clear leaves a credited RBI alone', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 3, batter: 0 });     // p2 singles p0 home
+    play('K');
+    sel('visiting', 4, 0);
+    clearSelectedCell();                             // clear the strikeout
+    eq('the run stands', lsInput('visiting', 0).value, '1');
+    eq('and so does the RBI', ab('visiting', 2, 0).rbi, 1);
+  });
+
   test('clearing a double play gives back both outs and the runner', () => {
     sel('visiting', 0, 0);
     play('1B');                                      // p0 on 1st

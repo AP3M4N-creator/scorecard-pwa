@@ -19,8 +19,8 @@ engine end to end, then drove the real `app.js` against the real `index.html`
 DOM in jsdom — 47 diagnostic probes — and reproduced C1, C2 and H1 by hand in a
 live browser at `http://localhost:8765` (`preview_start` → `scorecard`).
 
-**Progress:** Phase 1 is done — C1 and C2 are fixed. Everything else is open. This
-document is the whole state of the work.
+**Progress:** Phase 1 is done (C1, C2) and C3 is fixed. Everything else is open.
+This document is the whole state of the work.
 
 ---
 
@@ -33,7 +33,7 @@ families at once.
 |---|---|---|
 | RC-A | The entry path has no pending-popup guard, and `applyPlay` commits `ab.play` + the result pitch **before** the popup that decides the play resolves | C1 |
 | RC-B | The DP/FC/TP outcome popup accepts unanswered defaults and never validates its out count against the play code it is labelled with | C2, M4 |
-| RC-C | `recomputeInning` owns outs / bases / runs / LOB but **not** `ab.rbi`, which is frozen at entry time | C3 |
+| RC-C | `recomputeInning` owns outs / bases / runs / LOB but **not** `ab.rbi`, which is frozen at entry time | C3 ✅ |
 | RC-D | `editPlayType` ends with its own render tail instead of routing through `afterStateChange` | H4 |
 | RC-E | Box-score **E** has no derivation and no batting-team → fielding-team attribution | H1 |
 | RC-F | A lineup slot is two fixed rows, and a substitution is a *column range* on the starter's row | H2, H3 |
@@ -143,7 +143,33 @@ steered the scorer into it. `TP` was identical (1 out).
 
 ## Phase 2 — make the box score reconcile
 
-### C3 — RBI is never recomputed when a non-latest play is cleared or edited (RC-C)
+### C3 — RBI is never recomputed when a non-latest play is cleared or edited (RC-C) — ✅ **FIXED**
+Fixed in `takeBackPlay`, the one function all three take-back paths share
+(`clearSelectedCell`, `editPlayType`, clear-and-keep-pitches). It now snapshots
+who is credited with a run and *off whose play* (`scoredRunsWithSource`, reading
+the `advSrc[3]` stamp) before the take-back, and afterwards
+`dropRbiForLostRuns` debits one RBI from the stamped play for each run that
+disappeared. `recomputeInning` still doesn't own RBI, per the fix direction — only
+lost runs debit anybody, so an `adjustRBI` override survives anything it doesn't
+contradict, and a run with no stamp (steal of home, wild pitch) debits nobody
+because no RBI was credited for it either.
+
+Covered by 4 new cases in `tests-scoring.js` next to the existing clear/revert
+group: the plan's repro (clear the man who scored), the edit variant
+(`editPlay('K')` on him), the cascade case (clear a play that only *set up* the
+run — the RBI comes off the batter who drove it in, not off the cleared cell), and
+a negative case (an unrelated clear leaves a credited RBI alone). Suite:
+**217 passed, 0 failed**.
+
+Not verified in a live browser — the suite drives the real `app.js` against the
+real `index.html` DOM, and this is state logic with no layout surface.
+
+One pre-existing oddity surfaced while testing, **not** part of C3: when a revert
+takes back only a *middle* segment of a runner who scored, his cell keeps `bases[3]`
+marked while the segment below it goes false. He correctly stops counting as a
+run everywhere (`runScored` needs all four), but the diamond draws home filled
+with a gap beneath it. Cosmetic; worth a Phase 5 line if it bothers you.
+
 `clearSelectedCell` [app.js:3296], `editPlayType` [app.js:2896], `recomputeInning` [app.js:712]
 
 `recomputeInning` re-derives outs, bases, runs and LOB but not `ab.rbi`, which
@@ -286,7 +312,7 @@ queued transitions. Odd player indices are sub rows — batters are `0, 2, 4, �
 | **C1a** ✅ | critical | A play entered while a runner/outcome popup is pending is orphaned: play on the card, nobody on base, no out, but counted in **H** | applyPlay [1360], selectCell [420], BACKDROP_GUARDED [1199] | `sel(v,0,0); play('1B'); sel(v,2,0); play('1B'); sel(v,4,0); play('K')` → `ab(v,2,0).play==='1B'` but `bases` all false, `H` reads 2 |
 | **C1b** ✅ | critical | Answering the stale popup afterwards writes runs/advancement into a state that never happened | same | continue C1a, then click `.rp-btn[data-base="0"][data-dest="3"]` + confirm → phantom run, `R` +1, `p0.bases===[t,t,t,t]` |
 | **C2** ✅ | critical | `DP`/`TP` confirmed on popup defaults records 1 out and **advances** the runner | showRunnerOutcomePopup [1695], applyRunnerOutcomes [1863] | `sel(v,0,0); play('1B'); sel(v,2,0); play('DP 6-4-3'); outcomePopup({})` → `outs===1`, runner on 2nd, card reads `DP 6-4-3` |
-| **C3** | critical | RBI is never recomputed when a non-latest play is cleared or edited → team RBI can exceed team R | clearSelectedCell [3296], editPlayType [2896] | `sel(v,0,0); play('1B'); sel(v,2,0); play('HR')` → R 2, p2 RBI 2. Then `sel(v,0,0); clearSelectedCell()` → R 1, **p2 RBI still 2** |
+| **C3** ✅ | critical | RBI is never recomputed when a non-latest play is cleared or edited → team RBI can exceed team R | clearSelectedCell [3296], editPlayType [2896] | `sel(v,0,0); play('1B'); sel(v,2,0); play('HR')` → R 2, p2 RBI 2. Then `sel(v,0,0); clearSelectedCell()` → R 1, **p2 RBI still 2** |
 | **H1** | high | Linescore **E** is never derived from error plays, and errors aren't attributed to the fielding team | updateLinescoreTotals [3410] | `sel(v,0,0); play('E6')` → both E inputs stay `''` |
 | **H2** | high | No pinch runner — the run goes to the starter | setSubLine [4141] | `sel(v,0,0); play('1B'); sel(v,0,0); markSub(); sel(v,2,0); play('HR')` → starter R 1, sub R blank |
 | **H3** | high | Only two players per lineup slot; a PH then a defensive replacement can't be recorded | ROWS_PER_POS [97] | third `markSub()` on the same slot opens `sub-popup` instead of adding a row |
