@@ -3165,11 +3165,12 @@ function editPlayType() {
       renderOut(team, pIdx, innIdx);
       renderDiamond(team, pIdx, innIdx);
       renderRBI(team, pIdx, innIdx);
-      recomputeInning(team, realInn);
-      updatePlayerStats(team);
-      updatePitcherStats(team);
-      updateSituation();
-      autoSave();
+      // The same tail every other mutator runs (#RC-D). This used to recompute
+      // and re-render on its own, so an edit that made the 3rd out left the half
+      // -inning open and an edit that scored the winning run never ended the
+      // game. No `advanceBatter`: changing what a play was is not a new plate
+      // appearance, so the selection stays on the cell being edited.
+      afterStateChange(team, innIdx);
     });
   };
 }
