@@ -1773,6 +1773,56 @@
   });
 
   /* =====================================================================
+     Phase 10 — no inline handlers, so the CSP can forbid inline script
+     ===================================================================== */
+
+  // Every element carrying an on* attribute is a hole in `script-src 'self'`.
+  function inlineHandlerAttrs(root) {
+    const found = [];
+    root.querySelectorAll('*').forEach(el => {
+      for (const a of el.attributes) if (/^on/i.test(a.name)) found.push(el.tagName + '@' + a.name);
+    });
+    return found;
+  }
+
+  test('the page carries no inline event handlers', () => {
+    eq('none in the markup', JSON.stringify(inlineHandlerAttrs(document.body)), '[]');
+  });
+
+  test('every data-act names a function that exists', () => {
+    const names = [...new Set([...document.querySelectorAll('[data-act]')].map(e => e.dataset.act))];
+    ok('there are actions to check', names.length > 20);
+    eq('and all of them resolve', JSON.stringify(names.filter(n => typeof window[n] !== 'function')), '[]');
+  });
+
+  test('a quick-play button records the play through the dispatcher', () => {
+    sel('visiting', 0, 0);
+    touch(0);
+    document.querySelector('[data-act="applyPlay"][data-arg="1B"]').click();
+    eq('the single is on the card', ab('visiting', 0, 0).play, '1B');
+    eq('and the runner is on 1st', onB('visiting', 0, 0), 0);
+  });
+
+  test('a string argument and a numeric argument both survive dispatch', () => {
+    sel('visiting', 0, 0);
+    touch(0);
+    document.querySelector('[data-act="addPitch"][data-arg="S"]').click();
+    eq('the string arg arrived as a strike', ab('visiting', 0, 0).pitches.join(''), 'S');
+    play('1B');
+    sel('visiting', 0, 0);
+    document.querySelector('[data-act="adjustRBI"][data-argnum="1"]').click();
+    eq('the numeric arg arrived as a number', ab('visiting', 0, 0).rbi, 1);
+  });
+
+  test('the popups app.js builds carry no inline handlers either', () => {
+    sel('visiting', 0, 0);
+    changePitcher();
+    eq('pitcher popup is clean', JSON.stringify(inlineHandlerAttrs(document.getElementById('pitcher-popup'))), '[]');
+    document.getElementById('pitcher-popup').querySelector('[data-act="setPitcher"][data-argnum="1"]').click();
+    eq('and its buttons still work', inn('visiting', 0).currentPitcher, 1);
+  });
+
+  /* =====================================================================
      Phase 10 — what a screen reader gets
      ===================================================================== */
 

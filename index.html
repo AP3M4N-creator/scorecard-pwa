@@ -2,6 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<!-- Everything the app loads is its own, so the policy is 'self' throughout.
+     `script-src 'self'` is the point of it: there is no inline script left on
+     the page and no `on*` attribute anywhere, so an injected name can no longer
+     become an injected script. Inline *styles* are still allowed — this card is
+     built out of style attributes, and they can't run code.
+     `data:` is for the base64 field images; `blob:` is the JSON backup
+     download. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Baseball Scorecard</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17,14 +25,14 @@
 <!-- Persistent warning shown when localStorage can't save (quota/blocked). -->
 <div id="storage-warning" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;z-index:1000;background:#8a1f1f;color:#fff;padding:10px 14px;font-family:-apple-system,sans-serif;font-size:13px;font-weight:600">
   <span style="flex:1;min-width:200px">⚠ Changes are not being saved on this device. Download a backup to avoid losing this game.</span>
-  <button onclick="exportGameJSON()" style="background:#fff;color:#8a1f1f;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer">Download backup</button>
+  <button data-act="exportGameJSON" style="background:#fff;color:#8a1f1f;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer">Download backup</button>
 </div>
 <!-- Shown when a stored game or the library could not be parsed. The raw text is
      kept rather than overwritten, so it is still recoverable by hand. -->
 <div id="unreadable-warning" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;z-index:1000;background:#8a5a1f;color:#fff;padding:10px 14px;font-family:-apple-system,sans-serif;font-size:13px;font-weight:600">
   <span style="flex:1;min-width:200px">⚠ Saved data on this device could not be read. It has been kept, not overwritten — download it if you want to recover that game.</span>
-  <button onclick="downloadUnreadableSaves()" style="background:#fff;color:#8a5a1f;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer">Download unreadable save</button>
-  <button onclick="discardUnreadableSaves()" style="background:transparent;color:#fff;border:2px solid #fff;border-radius:6px;padding:5px 11px;font-weight:700;cursor:pointer">Discard</button>
+  <button data-act="downloadUnreadableSaves" style="background:#fff;color:#8a5a1f;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer">Download unreadable save</button>
+  <button data-act="discardUnreadableSaves" style="background:transparent;color:#fff;border:2px solid #fff;border-radius:6px;padding:5px 11px;font-weight:700;cursor:pointer">Discard</button>
 </div>
 <!-- Off-screen live region: selecting a cell changes nothing a screen reader
      would otherwise notice, so selectCell() says what was selected here. -->
@@ -34,14 +42,14 @@
   <div class="header-bar">
     <h1>Baseball <span>Scorecard</span></h1>
     <div class="game-timer">
-      <button id="timer-btn" onclick="toggleGameTimer()">Start</button>
+      <button id="timer-btn" data-act="toggleGameTimer">Start</button>
       <span class="timer-display" id="timer-display">0:00</span>
     </div>
     <div class="header-actions">
-      <button onclick="showGameSummary()">Game Summary</button>
-      <button onclick="openGameLibrary()">Games</button>
-      <button id="save-btn" onclick="saveGame()">Save</button>
-      <button class="danger" onclick="newGame()">New Game</button>
+      <button data-act="showGameSummary">Game Summary</button>
+      <button data-act="openGameLibrary">Games</button>
+      <button id="save-btn" data-act="saveGame">Save</button>
+      <button class="danger" data-act="newGame">New Game</button>
     </div>
   </div>
 
@@ -70,7 +78,7 @@
   <!-- Linescore -->
   <div class="linescore-wrap" style="display:flex;gap:16px;align-items:stretch">
     <div style="flex:0 0 auto">
-    <h3 style="display:flex;align-items:center;gap:6px">Linescore <button id="add-extra-inn-btn" class="ei-btn" onclick="addExtraInning()" style="display:none">+EI</button></h3>
+    <h3 style="display:flex;align-items:center;gap:6px">Linescore <button id="add-extra-inn-btn" class="ei-btn" data-act="addExtraInning" style="display:none">+EI</button></h3>
     <table class="linescore">
       <thead>
         <!-- Inning header cells are generated from the INNINGS constant in buildLinescore() -->
@@ -122,8 +130,8 @@
 
   <!-- Tabs -->
   <div class="tab-bar">
-    <button class="tab-btn active" data-tab="visiting" onclick="switchTab('visiting')">Visiting Team</button>
-    <button class="tab-btn" data-tab="home" onclick="switchTab('home')">Home Team</button>
+    <button class="tab-btn active" data-tab="visiting" data-act="switchTab" data-arg="visiting">Visiting Team</button>
+    <button class="tab-btn" data-tab="home" data-act="switchTab" data-arg="home">Home Team</button>
   </div>
 
   <!-- Visiting Team -->
@@ -132,65 +140,65 @@
       <div class="quick-bar" id="qb-visiting">
         <div class="qb-core">
           <span class="qb-label">Pitch:</span>
-          <button class="quick-btn" onclick="addPitch('S')" style="color:var(--accent)">S<small>(s)</small></button>
-          <button class="quick-btn" onclick="addPitch('F')">F<small>(f)</small></button>
-          <button class="quick-btn" onclick="addPitch('B')" style="color:var(--blue)">B<small>(b)</small></button>
+          <button class="quick-btn" data-act="addPitch" data-arg="S" style="color:var(--accent)">S<small>(s)</small></button>
+          <button class="quick-btn" data-act="addPitch" data-arg="F">F<small>(f)</small></button>
+          <button class="quick-btn" data-act="addPitch" data-arg="B" style="color:var(--blue)">B<small>(b)</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn hit" onclick="applyPlay('1B')">1B<small>(1)</small></button>
-          <button class="quick-btn hit" onclick="applyPlay('2B')">2B<small>(2)</small></button>
-          <button class="quick-btn hit" onclick="applyPlay('3B')">3B<small>(3)</small></button>
-          <button class="quick-btn hit" onclick="applyPlay('HR')">HR<small>(4)</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="1B">1B<small>(1)</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="2B">2B<small>(2)</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="3B">3B<small>(3)</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="HR">HR<small>(4)</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn out" onclick="applyPlay('K')">K<small>(k)</small></button>
-          <button class="quick-btn out" onclick="promptGroundout()">GO<small>(g)</small></button>
+          <button class="quick-btn out" data-act="applyPlay" data-arg="K">K<small>(k)</small></button>
+          <button class="quick-btn out" data-act="promptGroundout">GO<small>(g)</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn walk" onclick="applyPlay('BB')">BB<small>(w)</small></button>
+          <button class="quick-btn walk" data-act="applyPlay" data-arg="BB">BB<small>(w)</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn undo-play" onclick="undoLastPlay()">Undo<small>(u)</small></button>
-          <button class="qb-more-btn" onclick="toggleQBDrawer()">···</button>
+          <button class="quick-btn undo-play" data-act="undoLastPlay">Undo<small>(u)</small></button>
+          <button class="qb-more-btn" data-act="toggleQBDrawer">···</button>
         </div>
         <div class="qb-drawer">
           <span class="qb-label">Out:</span>
-          <button class="quick-btn out" onclick="promptPositionPlay('F')">FO<small>(x)</small></button>
-          <button class="quick-btn out" onclick="promptPositionPlay('P')">PO<small>(p)</small></button>
-          <button class="quick-btn out" onclick="promptPositionPlay('L')">LO<small>(l)</small></button>
-          <button class="quick-btn out" onclick="promptPositionPlay('DP ')">DP<small>(d)</small></button>
+          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="F">FO<small>(x)</small></button>
+          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="P">PO<small>(p)</small></button>
+          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="L">LO<small>(l)</small></button>
+          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="DP ">DP<small>(d)</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn walk" onclick="applyPlay('HBP')">HBP<small>(h)</small></button>
-          <button class="quick-btn walk" onclick="applyPlay('IBB')">IBB<small>(i)</small></button>
-          <button class="quick-btn" onclick="applyPlay('SF')">SF<small>(q)</small></button>
-          <button class="quick-btn" onclick="applyPlay('SH')">SH</button>
-          <button class="quick-btn" onclick="promptPositionPlay('FC ')">FC</button>
-          <button class="quick-btn" onclick="promptErrorPlay()">E<small>(e)</small></button>
-          <button class="quick-btn walk" onclick="applyPlay('CI')">CI</button>
-          <button class="quick-btn" onclick="applyPlay('IF')">IF</button>
+          <button class="quick-btn walk" data-act="applyPlay" data-arg="HBP">HBP<small>(h)</small></button>
+          <button class="quick-btn walk" data-act="applyPlay" data-arg="IBB">IBB<small>(i)</small></button>
+          <button class="quick-btn" data-act="applyPlay" data-arg="SF">SF<small>(q)</small></button>
+          <button class="quick-btn" data-act="applyPlay" data-arg="SH">SH</button>
+          <button class="quick-btn" data-act="promptPositionPlay" data-arg="FC ">FC</button>
+          <button class="quick-btn" data-act="promptErrorPlay">E<small>(e)</small></button>
+          <button class="quick-btn walk" data-act="applyPlay" data-arg="CI">CI</button>
+          <button class="quick-btn" data-act="applyPlay" data-arg="IF">IF</button>
           <span class="qb-sep"></span>
           <span class="qb-label">Run:</span>
-          <button class="quick-btn runner" onclick="promptSBBase()">SB<small>(r)</small></button>
-          <button class="quick-btn runner" onclick="promptCSBase()">CS<small>(j)</small></button>
-          <button class="quick-btn runner" onclick="applyRunnerEvent('WP')">WP<small>(n)</small></button>
-          <button class="quick-btn runner" onclick="applyRunnerEvent('PB')">PB</button>
-          <button class="quick-btn runner" onclick="applyRunnerEvent('BK')">BK</button>
-          <button class="quick-btn runner" onclick="promptPickoff()">PO<small>(o)</small></button>
+          <button class="quick-btn runner" data-act="promptSBBase">SB<small>(r)</small></button>
+          <button class="quick-btn runner" data-act="promptCSBase">CS<small>(j)</small></button>
+          <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="WP">WP<small>(n)</small></button>
+          <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="PB">PB</button>
+          <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="BK">BK</button>
+          <button class="quick-btn runner" data-act="promptPickoff">PO<small>(o)</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn" onclick="applyPlay('K+WP')">K+WP</button>
-          <button class="quick-btn" onclick="promptPositionPlay('TP ')">TP</button>
-          <button class="quick-btn pitcher-change" onclick="changePitcher()">P.Chg</button>
-          <button class="quick-btn" onclick="markSub()" style="color:var(--accent)">SUB</button>
-          <button class="quick-btn" onclick="changeFieldPos()">Pos</button>
+          <button class="quick-btn" data-act="applyPlay" data-arg="K+WP">K+WP</button>
+          <button class="quick-btn" data-act="promptPositionPlay" data-arg="TP ">TP</button>
+          <button class="quick-btn pitcher-change" data-act="changePitcher">P.Chg</button>
+          <button class="quick-btn" data-act="markSub" style="color:var(--accent)">SUB</button>
+          <button class="quick-btn" data-act="changeFieldPos">Pos</button>
           <span class="qb-sep"></span>
-          <button class="quick-btn undo-play" onclick="redoLastPlay()">Redo<small>(y)</small></button>
-          <button class="quick-btn" style="color:var(--accent)" onclick="clearPlayKeepPitches()">CLR Play</button>
-          <button class="quick-btn" style="color:var(--accent)" onclick="clearSelectedCell()">CLR All<small>(c)</small></button>
+          <button class="quick-btn undo-play" data-act="redoLastPlay">Redo<small>(y)</small></button>
+          <button class="quick-btn" style="color:var(--accent)" data-act="clearPlayKeepPitches">CLR Play</button>
+          <button class="quick-btn" style="color:var(--accent)" data-act="clearSelectedCell">CLR All<small>(c)</small></button>
           <span class="qb-sep"></span>
           <span class="qb-label">Fix:</span>
-          <button class="quick-btn" onclick="editPlayType()">Edit<small>(t)</small></button>
-          <button class="quick-btn" onclick="editRunners()">Rnrs<small>(m)</small></button>
-          <button class="quick-btn" onclick="moveRunner()">Move</button>
-          <button class="quick-btn" onclick="editSprayChart()">Spray</button>
-          <button class="quick-btn" onclick="adjustRBI(1)">RBI+</button>
-          <button class="quick-btn" onclick="adjustRBI(-1)">RBI-</button>
-          <button class="quick-btn" onclick="reviewEarnedRuns()" title="Review earned/unearned runs for this inning">E/UE</button>
+          <button class="quick-btn" data-act="editPlayType">Edit<small>(t)</small></button>
+          <button class="quick-btn" data-act="editRunners">Rnrs<small>(m)</small></button>
+          <button class="quick-btn" data-act="moveRunner">Move</button>
+          <button class="quick-btn" data-act="editSprayChart">Spray</button>
+          <button class="quick-btn" data-act="adjustRBI" data-argnum="1">RBI+</button>
+          <button class="quick-btn" data-act="adjustRBI" data-argnum="-1">RBI-</button>
+          <button class="quick-btn" data-act="reviewEarnedRuns" title="Review earned/unearned runs for this inning">E/UE</button>
         </div>
       </div>
       <div class="grid-wrap" id="grid-visiting"></div>
@@ -213,65 +221,65 @@
       <div class="quick-bar" id="qb-home">
         <div class="qb-core">
           <span class="qb-label">Pitch:</span>
-          <button class="quick-btn" onclick="addPitch('S')" style="color:var(--accent)">S<small>(s)</small></button>
-          <button class="quick-btn" onclick="addPitch('F')">F<small>(f)</small></button>
-          <button class="quick-btn" onclick="addPitch('B')" style="color:var(--blue)">B<small>(b)</small></button>
+          <button class="quick-btn" data-act="addPitch" data-arg="S" style="color:var(--accent)">S<small>(s)</small></button>
+          <button class="quick-btn" data-act="addPitch" data-arg="F">F<small>(f)</small></button>
+          <button class="quick-btn" data-act="addPitch" data-arg="B" style="color:var(--blue)">B<small>(b)</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn hit" onclick="applyPlay('1B')">1B<small>(1)</small></button>
-          <button class="quick-btn hit" onclick="applyPlay('2B')">2B<small>(2)</small></button>
-          <button class="quick-btn hit" onclick="applyPlay('3B')">3B<small>(3)</small></button>
-          <button class="quick-btn hit" onclick="applyPlay('HR')">HR<small>(4)</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="1B">1B<small>(1)</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="2B">2B<small>(2)</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="3B">3B<small>(3)</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="HR">HR<small>(4)</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn out" onclick="applyPlay('K')">K<small>(k)</small></button>
-          <button class="quick-btn out" onclick="promptGroundout()">GO<small>(g)</small></button>
+          <button class="quick-btn out" data-act="applyPlay" data-arg="K">K<small>(k)</small></button>
+          <button class="quick-btn out" data-act="promptGroundout">GO<small>(g)</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn walk" onclick="applyPlay('BB')">BB<small>(w)</small></button>
+          <button class="quick-btn walk" data-act="applyPlay" data-arg="BB">BB<small>(w)</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn undo-play" onclick="undoLastPlay()">Undo<small>(u)</small></button>
-          <button class="qb-more-btn" onclick="toggleQBDrawer()">···</button>
+          <button class="quick-btn undo-play" data-act="undoLastPlay">Undo<small>(u)</small></button>
+          <button class="qb-more-btn" data-act="toggleQBDrawer">···</button>
         </div>
         <div class="qb-drawer">
           <span class="qb-label">Out:</span>
-          <button class="quick-btn out" onclick="promptPositionPlay('F')">FO<small>(x)</small></button>
-          <button class="quick-btn out" onclick="promptPositionPlay('P')">PO<small>(p)</small></button>
-          <button class="quick-btn out" onclick="promptPositionPlay('L')">LO<small>(l)</small></button>
-          <button class="quick-btn out" onclick="promptPositionPlay('DP ')">DP<small>(d)</small></button>
+          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="F">FO<small>(x)</small></button>
+          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="P">PO<small>(p)</small></button>
+          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="L">LO<small>(l)</small></button>
+          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="DP ">DP<small>(d)</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn walk" onclick="applyPlay('HBP')">HBP<small>(h)</small></button>
-          <button class="quick-btn walk" onclick="applyPlay('IBB')">IBB<small>(i)</small></button>
-          <button class="quick-btn" onclick="applyPlay('SF')">SF<small>(q)</small></button>
-          <button class="quick-btn" onclick="applyPlay('SH')">SH</button>
-          <button class="quick-btn" onclick="promptPositionPlay('FC ')">FC</button>
-          <button class="quick-btn" onclick="promptErrorPlay()">E<small>(e)</small></button>
-          <button class="quick-btn walk" onclick="applyPlay('CI')">CI</button>
-          <button class="quick-btn" onclick="applyPlay('IF')">IF</button>
+          <button class="quick-btn walk" data-act="applyPlay" data-arg="HBP">HBP<small>(h)</small></button>
+          <button class="quick-btn walk" data-act="applyPlay" data-arg="IBB">IBB<small>(i)</small></button>
+          <button class="quick-btn" data-act="applyPlay" data-arg="SF">SF<small>(q)</small></button>
+          <button class="quick-btn" data-act="applyPlay" data-arg="SH">SH</button>
+          <button class="quick-btn" data-act="promptPositionPlay" data-arg="FC ">FC</button>
+          <button class="quick-btn" data-act="promptErrorPlay">E<small>(e)</small></button>
+          <button class="quick-btn walk" data-act="applyPlay" data-arg="CI">CI</button>
+          <button class="quick-btn" data-act="applyPlay" data-arg="IF">IF</button>
           <span class="qb-sep"></span>
           <span class="qb-label">Run:</span>
-          <button class="quick-btn runner" onclick="promptSBBase()">SB<small>(r)</small></button>
-          <button class="quick-btn runner" onclick="promptCSBase()">CS<small>(j)</small></button>
-          <button class="quick-btn runner" onclick="applyRunnerEvent('WP')">WP<small>(n)</small></button>
-          <button class="quick-btn runner" onclick="applyRunnerEvent('PB')">PB</button>
-          <button class="quick-btn runner" onclick="applyRunnerEvent('BK')">BK</button>
-          <button class="quick-btn runner" onclick="promptPickoff()">PO<small>(o)</small></button>
+          <button class="quick-btn runner" data-act="promptSBBase">SB<small>(r)</small></button>
+          <button class="quick-btn runner" data-act="promptCSBase">CS<small>(j)</small></button>
+          <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="WP">WP<small>(n)</small></button>
+          <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="PB">PB</button>
+          <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="BK">BK</button>
+          <button class="quick-btn runner" data-act="promptPickoff">PO<small>(o)</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn" onclick="applyPlay('K+WP')">K+WP</button>
-          <button class="quick-btn" onclick="promptPositionPlay('TP ')">TP</button>
-          <button class="quick-btn pitcher-change" onclick="changePitcher()">P.Chg</button>
-          <button class="quick-btn" onclick="markSub()" style="color:var(--accent)">SUB</button>
-          <button class="quick-btn" onclick="changeFieldPos()">Pos</button>
+          <button class="quick-btn" data-act="applyPlay" data-arg="K+WP">K+WP</button>
+          <button class="quick-btn" data-act="promptPositionPlay" data-arg="TP ">TP</button>
+          <button class="quick-btn pitcher-change" data-act="changePitcher">P.Chg</button>
+          <button class="quick-btn" data-act="markSub" style="color:var(--accent)">SUB</button>
+          <button class="quick-btn" data-act="changeFieldPos">Pos</button>
           <span class="qb-sep"></span>
-          <button class="quick-btn undo-play" onclick="redoLastPlay()">Redo<small>(y)</small></button>
-          <button class="quick-btn" style="color:var(--accent)" onclick="clearPlayKeepPitches()">CLR Play</button>
-          <button class="quick-btn" style="color:var(--accent)" onclick="clearSelectedCell()">CLR All<small>(c)</small></button>
+          <button class="quick-btn undo-play" data-act="redoLastPlay">Redo<small>(y)</small></button>
+          <button class="quick-btn" style="color:var(--accent)" data-act="clearPlayKeepPitches">CLR Play</button>
+          <button class="quick-btn" style="color:var(--accent)" data-act="clearSelectedCell">CLR All<small>(c)</small></button>
           <span class="qb-sep"></span>
           <span class="qb-label">Fix:</span>
-          <button class="quick-btn" onclick="editPlayType()">Edit<small>(t)</small></button>
-          <button class="quick-btn" onclick="editRunners()">Rnrs<small>(m)</small></button>
-          <button class="quick-btn" onclick="moveRunner()">Move</button>
-          <button class="quick-btn" onclick="editSprayChart()">Spray</button>
-          <button class="quick-btn" onclick="adjustRBI(1)">RBI+</button>
-          <button class="quick-btn" onclick="adjustRBI(-1)">RBI-</button>
-          <button class="quick-btn" onclick="reviewEarnedRuns()" title="Review earned/unearned runs for this inning">E/UE</button>
+          <button class="quick-btn" data-act="editPlayType">Edit<small>(t)</small></button>
+          <button class="quick-btn" data-act="editRunners">Rnrs<small>(m)</small></button>
+          <button class="quick-btn" data-act="moveRunner">Move</button>
+          <button class="quick-btn" data-act="editSprayChart">Spray</button>
+          <button class="quick-btn" data-act="adjustRBI" data-argnum="1">RBI+</button>
+          <button class="quick-btn" data-act="adjustRBI" data-argnum="-1">RBI-</button>
+          <button class="quick-btn" data-act="reviewEarnedRuns" title="Review earned/unearned runs for this inning">E/UE</button>
         </div>
       </div>
       <div class="grid-wrap" id="grid-home"></div>
@@ -307,23 +315,23 @@
     <h2>Game Library</h2>
     <div id="game-library-list"></div>
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-      <button class="modal-close" onclick="exportGameJSON()">Export Game (JSON)</button>
-      <button class="modal-close" onclick="document.getElementById('import-game-file').click()">Import Game (JSON)</button>
-      <input type="file" id="import-game-file" accept="application/json,.json" style="display:none" onchange="importGameJSON(this)">
+      <button class="modal-close" data-act="exportGameJSON">Export Game (JSON)</button>
+      <button class="modal-close" data-act="openImportPicker">Import Game (JSON)</button>
+      <input type="file" id="import-game-file" accept="application/json,.json" style="display:none" data-act="importGameJSON" data-arg="this" data-act-on="change">
     </div>
     <div style="display:flex;gap:8px;margin-top:8px">
-      <button class="modal-close" onclick="closeGameLibrary()">Close</button>
-      <button class="modal-close" id="lib-update-btn" style="display:none;background:var(--navy);color:#fff;border-color:var(--navy)" onclick="updateSavedGame()">Update Saved Game</button>
-      <button class="modal-close" style="background:var(--navy);color:#fff;border-color:var(--navy)" onclick="saveAsNewGame()">Save as New Game</button>
+      <button class="modal-close" data-act="closeGameLibrary">Close</button>
+      <button class="modal-close" id="lib-update-btn" style="display:none;background:var(--navy);color:#fff;border-color:var(--navy)" data-act="updateSavedGame">Update Saved Game</button>
+      <button class="modal-close" style="background:var(--navy);color:#fff;border-color:var(--navy)" data-act="saveAsNewGame">Save as New Game</button>
     </div>
   </div>
 </div>
 
 <script src="app.js"></script>
 
-<div class="hotkey-modal" id="hotkey-modal" onclick="if(event.target===this)this.classList.remove('active')">
+<div class="hotkey-modal" id="hotkey-modal" data-act="closeModalOnBackdrop">
   <div class="hotkey-modal-inner" style="position:relative">
-    <button class="hotkey-close" onclick="document.getElementById('hotkey-modal').classList.remove('active')">&times;</button>
+    <button class="hotkey-close" data-act="closeHotkeyModal">&times;</button>
     <h2>Keyboard Shortcuts</h2>
     
     <h3>Pitch Tracking</h3>

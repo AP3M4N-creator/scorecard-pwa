@@ -329,7 +329,7 @@ function buildPitcherTable(team, containerId) {
   const labels = ['IP','PC','H','R','ER','K','BB'];
   let html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">';
   html += '<h3 style="margin:0">Pitchers</h3>';
-  html += '<button type="button" onclick="recomputePitcherAssignments()" title="Re-attribute recorded at-bats to the correct pitcher based on pitching changes" style="font-size:10px;font-weight:700;padding:2px 7px;border:1px solid var(--navy,#1a2744);border-radius:3px;background:#fff;color:var(--navy,#1a2744);cursor:pointer;font-family:var(--heading,inherit);letter-spacing:0.3px">↻ Fix Stats</button>';
+  html += '<button type="button" data-act="recomputePitcherAssignments" title="Re-attribute recorded at-bats to the correct pitcher based on pitching changes" style="font-size:10px;font-weight:700;padding:2px 7px;border:1px solid var(--navy,#1a2744);border-radius:3px;background:#fff;color:var(--navy,#1a2744);cursor:pointer;font-family:var(--heading,inherit);letter-spacing:0.3px">↻ Fix Stats</button>';
   html += '</div>';
   html += '<table class="pitcher-grid"><thead><tr>';
   html += '<th class="pitcher-num-col">#</th>';
@@ -365,11 +365,11 @@ function buildLinescore() {
     const existing = row.querySelector('.team-col');
     let html = '';
     for (let i = 0; i < INNINGS; i++) {
-      html += `<td data-inn-col="${i}"><input type="text" data-ls="${t}" data-inn="${i}" maxlength="3" oninput="updateLinescoreTotals('${t}')"></td>`;
+      html += `<td data-inn-col="${i}"><input type="text" data-ls="${t}" data-inn="${i}" maxlength="3" data-act="updateLinescoreTotals" data-arg="${t}" data-act-on="input"></td>`;
     }
     html += `<td class="total"><input type="text" data-ls="${t}" data-stat="r" readonly tabindex="-1"></td>`;
     html += `<td class="total"><input type="text" data-ls="${t}" data-stat="h" readonly tabindex="-1"></td>`;
-    html += `<td class="total"><input type="text" data-ls="${t}" data-stat="e" maxlength="2" oninput="autoSave()"></td>`;
+    html += `<td class="total"><input type="text" data-ls="${t}" data-stat="e" maxlength="2" data-act="autoSave" data-act-on="input"></td>`;
     html += `<td class="total ls-lob"><input type="text" data-ls="${t}" data-stat="lob" readonly tabindex="-1"></td>`;
     row.innerHTML = `<td class="team-col">${t === 'visiting' ? '<span id="ls-v-label">Visiting</span>' : '<span id="ls-h-label">Home</span>'}</td>` + html;
   });
@@ -3012,7 +3012,7 @@ function moveRunner() {
     html += '<button class="mr-btn mr-remove" data-from="' + r.base + '" data-to="off" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid var(--accent);border-radius:3px;background:#fff;color:var(--accent);cursor:pointer;font-family:var(--mono)">Remove</button>';
     html += '</div></div>';
   });
-  html += '<button onclick="document.getElementById(\'move-runner-popup\').style.display=\'none\'" style="margin-top:4px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Close</button>';
+  html += '<button data-act="hidePopupById" data-arg="move-runner-popup" style="margin-top:4px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Close</button>';
   popup.innerHTML = html;
   popup.style.display = 'block';
   popup.querySelectorAll('.mr-btn').forEach(btn => {
@@ -3214,12 +3214,12 @@ function reviewEarnedRuns() {
       html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--border-light,#ddd)">';
       html += `<div style="font-size:12px;line-height:1.3"><div style="font-weight:600">${escapeHtml(label)}</div><div style="font-size:10px;color:var(--text-light,#666)">${escapeHtml(describeReach(r.ab))}</div></div>`;
       html += '<div style="display:flex;gap:4px;flex:0 0 auto">';
-      html += `<button onclick="setRunEarnedByIndex(${i}, false)" style="padding:5px 9px;font-size:11px;font-weight:700;border:1.5px solid ${!unearned ? '#1565c0' : '#ccc'};border-radius:4px;background:${!unearned ? '#e3f2fd' : '#fff'};color:${!unearned ? '#1565c0' : '#666'};cursor:pointer">Earned</button>`;
-      html += `<button onclick="setRunEarnedByIndex(${i}, true)" style="padding:5px 9px;font-size:11px;font-weight:700;border:1.5px solid ${unearned ? 'var(--accent,#c41e3a)' : '#ccc'};border-radius:4px;background:${unearned ? '#fdecef' : '#fff'};color:${unearned ? 'var(--accent,#c41e3a)' : '#666'};cursor:pointer">Unearned</button>`;
+      html += `<button data-act="markRunEarned" data-argnum="${i}" style="padding:5px 9px;font-size:11px;font-weight:700;border:1.5px solid ${!unearned ? '#1565c0' : '#ccc'};border-radius:4px;background:${!unearned ? '#e3f2fd' : '#fff'};color:${!unearned ? '#1565c0' : '#666'};cursor:pointer">Earned</button>`;
+      html += `<button data-act="markRunUnearned" data-argnum="${i}" style="padding:5px 9px;font-size:11px;font-weight:700;border:1.5px solid ${unearned ? 'var(--accent,#c41e3a)' : '#ccc'};border-radius:4px;background:${unearned ? '#fdecef' : '#fff'};color:${unearned ? 'var(--accent,#c41e3a)' : '#666'};cursor:pointer">Unearned</button>`;
       html += '</div></div>';
     });
   }
-  html += '<button onclick="document.getElementById(\'er-review-popup\').style.display=\'none\'" style="margin-top:10px;width:100%;padding:6px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Done</button>';
+  html += '<button data-act="hidePopupById" data-arg="er-review-popup" style="margin-top:10px;width:100%;padding:6px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Done</button>';
 
   popup.innerHTML = html;
   popup.style.display = 'block';
@@ -4009,9 +4009,9 @@ function changePitcher() {
     const name = p.name || `Pitcher ${i + 1}`;
     const num = p.num ? '#' + p.num + ' ' : '';
     const isActive = getEffectivePitcher(battingTeam, innIdx) === i;
-    html += `<button onclick="setPitcher(${i})" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-bottom:4px;border:1.5px solid ${isActive ? '#1565c0' : '#ccc'};border-radius:4px;background:${isActive ? '#e3f2fd' : '#fff'};cursor:pointer;font-size:12px;font-weight:${isActive ? '700' : '500'};font-family:var(--font)">${escapeHtml(num)}${escapeHtml(name)}</button>`;
+    html += `<button data-act="setPitcher" data-argnum="${i}" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-bottom:4px;border:1.5px solid ${isActive ? '#1565c0' : '#ccc'};border-radius:4px;background:${isActive ? '#e3f2fd' : '#fff'};cursor:pointer;font-size:12px;font-weight:${isActive ? '700' : '500'};font-family:var(--font)">${escapeHtml(num)}${escapeHtml(name)}</button>`;
   });
-  html += '<button onclick="document.getElementById(\'pitcher-popup\').style.display=\'none\'" style="margin-top:6px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button>';
+  html += '<button data-act="hidePopupById" data-arg="pitcher-popup" style="margin-top:6px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button>';
   popup.innerHTML = html;
   popup.style.display = 'block';
 }
@@ -4060,10 +4060,10 @@ function changeFieldPos() {
   html += '<div style="display:flex;gap:4px;flex-wrap:wrap">';
   positions.forEach(pos => {
     const isCurrent = pos === current;
-    html += `<button onclick="applyFieldPos('${team}',${starterP},'${pos}','${innLabel}')" style="padding:5px 10px;font-size:11px;font-weight:${isCurrent?'700':'600'};border:1.5px solid ${isCurrent?'var(--navy)':'#ccc'};border-radius:4px;background:${isCurrent?'var(--cream)':'#fff'};color:${isCurrent?'var(--navy)':'#555'};cursor:pointer;font-family:var(--mono)">${pos}</button>`;
+    html += `<button data-act="applyFieldPosFromEl" data-arg="this" data-team="${team}" data-p="${starterP}" data-pos="${pos}" data-inn="${escapeHtml(innLabel)}" style="padding:5px 10px;font-size:11px;font-weight:${isCurrent?'700':'600'};border:1.5px solid ${isCurrent?'var(--navy)':'#ccc'};border-radius:4px;background:${isCurrent?'var(--cream)':'#fff'};color:${isCurrent?'var(--navy)':'#555'};cursor:pointer;font-family:var(--mono)">${pos}</button>`;
   });
   html += '</div>';
-  html += '<button onclick="document.getElementById(\'pos-change-popup\').style.display=\'none\'" style="margin-top:10px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button>';
+  html += '<button data-act="hidePopupById" data-arg="pos-change-popup" style="margin-top:10px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button>';
   popup.innerHTML = html;
   popup.style.display = 'block';
 }
@@ -4181,7 +4181,7 @@ function recomputePitcherAssignments() {
   let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--navy,#1a2744);margin-bottom:8px">Recompute Pitcher Stats</div>';
   if (!plan.length) {
     html += '<div style="font-size:12px;color:var(--text-light,#666);margin-bottom:10px">All at-bats are already attributed to the correct pitcher. Nothing to change.</div>';
-    html += '<button onclick="document.getElementById(\'recompute-popup\').style.display=\'none\'" style="width:100%;padding:6px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Close</button>';
+    html += '<button data-act="hidePopupById" data-arg="recompute-popup" style="width:100%;padding:6px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Close</button>';
   } else {
     html += '<div style="font-size:12px;color:var(--text-light,#666);margin-bottom:10px">Re-attributes <b>' + plan.length + '</b> at-bat' + (plan.length === 1 ? '' : 's') + ' to the correct pitcher based on the pitching changes recorded on the card. This updates IP, PC, H, R, ER, K and BB. It cannot be auto-undone.</div>';
     html += '<div style="display:flex;gap:6px"><button id="rc-apply" style="flex:1;padding:7px;font-size:12px;font-weight:700;background:var(--navy,#1a2744);color:var(--gold,#c8a44b);border:none;border-radius:4px;cursor:pointer;text-transform:uppercase">Apply</button>';
@@ -4354,8 +4354,8 @@ function renderGameLibrary() {
         ${saved ? `<div class="game-date">${saved}</div>` : ''}
       </div>
       <div>
-        <button class="load-btn" onclick="loadGameFromLibrary(${idx})">Load</button>
-        <button class="del-btn" onclick="deleteGameFromLibrary(${idx})">Delete</button>
+        <button class="load-btn" data-act="loadGameFromLibrary" data-argnum="${idx}">Load</button>
+        <button class="del-btn" data-act="deleteGameFromLibrary" data-argnum="${idx}">Delete</button>
       </div>
     </li>`;
   });
@@ -5019,7 +5019,7 @@ function showGameSummary() {
   const potg = findPlayerOfGame();
   const notable = findNotablePlays();
 
-  let html = '<div style="position:relative"><button onclick="document.getElementById(\'game-summary-modal\').classList.remove(\'active\')" style="position:absolute;top:-8px;right:-12px;font-size:24px;cursor:pointer;color:var(--text-light);background:none;border:none;font-weight:700">&times;</button>';
+  let html = '<div style="position:relative"><button data-act="closeGameSummary" style="position:absolute;top:-8px;right:-12px;font-size:24px;cursor:pointer;color:var(--text-light);background:none;border:none;font-weight:700">&times;</button>';
 
   // Header
   html += '<div class="gs-header"><h2>Game Summary</h2>';
@@ -5045,7 +5045,7 @@ function showGameSummary() {
     html += '<div class="gs-hl-detail" style="color:var(--text-light)">' + escapeHtml(potg.team) + '</div></div>';
   }
   if (decisions.winTeam) {
-    const change = w => '<button onclick="promptPitcherDecision(\'' + w + '\')" style="margin-left:6px;font-size:9px;padding:1px 5px;border:1px solid var(--border);border-radius:3px;background:transparent;color:var(--text-light);cursor:pointer;font-family:var(--font)">change</button>';
+    const change = w => '<button data-act="promptPitcherDecision" data-arg="' + w + '" style="margin-left:6px;font-size:9px;padding:1px 5px;border:1px solid var(--border);border-radius:3px;background:transparent;color:var(--text-light);cursor:pointer;font-family:var(--font)">change</button>';
     const nameOf = (team, idx) => (idx === null || idx === undefined || idx < 0) ? '—' : escapeHtml(pitcherLabel(team, idx));
     html += '<div class="gs-highlight-card"><div class="gs-hl-label">Pitching Decision</div>';
     html += '<div class="gs-pitching-line"><b>W:</b> ' + nameOf(decisions.winTeam, decisions.wp) + change('wp') + '</div>';
@@ -5291,6 +5291,73 @@ document.addEventListener('keydown', function(e) {
     const next = document.querySelector(`.at-bat-cell[data-team="${team}"][data-p="${np}"][data-inn="${ni}"]`);
     if (next) selectCell(next);
   }
+});
+
+/* -------------------------------------------------- event wiring (CSP) ---
+   index.html used to carry ~110 inline `on*` handlers, and that is what kept a
+   strict Content-Security-Policy out of reach: permitting them means permitting
+   every inline script on the page, which is the one thing the policy is for.
+
+   Each is now `data-act`, the name of a global function, with at most one
+   argument — `data-arg` for a string, `data-argnum` for a number, and
+   `data-arg="this"` for the element itself. Two listeners here do the
+   dispatching. The popups app.js builds attach their handlers in JS after
+   setting innerHTML, which is how most of them already worked. */
+
+// The generated popups dispatch through the same listener, so their buttons
+// need named actions too rather than expressions in an attribute.
+function hidePopupById(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'none';
+}
+function closeGameSummary() {
+  const el = document.getElementById('game-summary-modal');
+  if (el) el.classList.remove('active');
+}
+function markRunEarned(i) { setRunEarnedByIndex(i, false); }
+function markRunUnearned(i) { setRunEarnedByIndex(i, true); }
+// The position-change buttons carry four values, more than `data-arg` holds, so
+// they hand over the element and this reads them off it.
+function applyFieldPosFromEl(el) {
+  applyFieldPos(el.dataset.team, Number(el.dataset.p), el.dataset.pos, el.dataset.inn);
+}
+
+function closeHotkeyModal() {
+  document.getElementById('hotkey-modal').classList.remove('active');
+}
+function openImportPicker() {
+  document.getElementById('import-game-file').click();
+}
+// On a modal's own backdrop: close only when the click landed on the backdrop
+// itself, not on anything inside it.
+function closeModalOnBackdrop(el, e) {
+  if (e && e.target === el) el.classList.remove('active');
+}
+
+function runAction(el, e) {
+  const name = el.dataset.act;
+  const fn = window[name];
+  if (typeof fn !== 'function') { console.warn('no action named ' + name); return; }
+  if (name === 'closeModalOnBackdrop') return fn(el, e);
+  if (el.dataset.argnum !== undefined) return fn(Number(el.dataset.argnum));
+  if (el.dataset.arg === 'this') return fn(el);
+  if (el.dataset.arg !== undefined) return fn(el.dataset.arg);
+  return fn();
+}
+
+document.addEventListener('click', function(e) {
+  const el = e.target.closest && e.target.closest('[data-act]');
+  if (!el) return;
+  if ((el.dataset.actOn || 'click') !== 'click') return;
+  runAction(el, e);
+});
+document.addEventListener('change', function(e) {
+  const el = e.target.closest && e.target.closest('[data-act][data-act-on="change"]');
+  if (el) runAction(el, e);
+});
+document.addEventListener('input', function(e) {
+  const el = e.target.closest && e.target.closest('[data-act][data-act-on="input"]');
+  if (el) runAction(el, e);
 });
 
 /* Auto-save on any input/select change (autoSave is itself debounced) */
