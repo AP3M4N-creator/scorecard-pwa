@@ -42,10 +42,12 @@
 <script src="app.js"></script>
 <script>
 (function () {
-  const results = [];
+  // Also read by run-tests.js (`npm test`), which runs this file in jsdom.
+  const results = window.__TEST_RESULTS__ = [];
   function check(name, cond) { results.push({ name, pass: !!cond }); }
   function eq(name, actual, expected) {
-    results.push({ name: `${name} (expected ${expected}, got ${actual})`, pass: actual === expected });
+    const pass = actual === expected;
+    results.push({ name, pass, error: pass ? '' : `expected ${expected}, got ${actual}` });
   }
 
   // Reset the shared gameState object in place (can't reassign the module's
@@ -140,7 +142,7 @@
   results.forEach(r => {
     const li = document.createElement('li');
     li.className = r.pass ? 'pass' : 'fail';
-    li.textContent = r.name;
+    li.textContent = r.pass ? r.name : `${r.name} — ${r.error}`;
     ul.appendChild(li);
   });
 })();

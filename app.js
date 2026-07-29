@@ -1,17 +1,102 @@
 
 // Storage shim: use memory storage if localStorage is blocked (file:// URLs)
+// or the quota is exceeded. setItem returns true on a durable write, false when
+// it fell back to in-memory (data will be lost when the page closes) so callers
+// can warn the user instead of silently losing a game.
 const _storage = {};
 const safeStorage = {
   getItem: function(k) { try { return localStorage.getItem(k); } catch(e) { return _storage[k] || null; } },
-  setItem: function(k,v) { try { localStorage.setItem(k,v); } catch(e) { _storage[k] = v; } },
+  setItem: function(k,v) {
+    try { localStorage.setItem(k,v); return true; }
+    catch(e) { _storage[k] = v; reportStorageFailure(); return false; }
+  },
   removeItem: function(k) { try { localStorage.removeItem(k); } catch(e) { delete _storage[k]; } }
 };
+
+// Shown once when a write falls back to memory. Reveals the persistent banner
+// that warns the user their changes are not being saved on this device and
+// offers a JSON backup they can download to recover the game elsewhere.
+let _storageWarned = false;
+function reportStorageFailure() {
+  if (_storageWarned) return;
+  _storageWarned = true;
+  const banner = (typeof document !== 'undefined') && document.getElementById('storage-warning');
+  if (banner) banner.style.display = 'flex';
+}
+
+/* ------------------------------------------------ unreadable saves (#25) ---
+   A stored game that won't parse used to be discarded with a console line, and
+   the next autoSave — 400ms later — wrote over it. A corrupt library key read
+   as "no saved games yet", and saving one game then replaced however many were
+   in there. Either way the only copy of the data was gone before anybody knew
+   there was a problem.
+
+   So: keep the raw string, both in memory (for the download button, which has
+   to work even when storage is full) and under a `-unreadable` key. A write to
+   the original key is refused only if that copy could not be made — otherwise
+   the quarantined copy is the backup and the app stays usable. */
+const UNREADABLE_SUFFIX = '-unreadable';
+const _unreadable = {};   // storage key -> { raw, stashed }
+
+function quarantineUnreadable(key, raw) {
+  if (!_unreadable[key]) {
+    _unreadable[key] = { raw, stashed: safeStorage.setItem(key + UNREADABLE_SUFFIX, raw) };
+  }
+  showUnreadableBanner();
+  return _unreadable[key].stashed;
+}
+
+// True only when we could not put the unreadable text anywhere safe, which is
+// the one case where overwriting the key would actually lose it.
+function saveBlockedFor(key) {
+  return !!_unreadable[key] && !_unreadable[key].stashed;
+}
+
+// A quarantine from an earlier session is still the user's data — pick it back
+// up on load so the banner and its download button reappear.
+function adoptExistingQuarantine(key) {
+  if (_unreadable[key]) return;
+  const raw = safeStorage.getItem(key + UNREADABLE_SUFFIX);
+  if (raw === null) return;
+  _unreadable[key] = { raw, stashed: true };
+  showUnreadableBanner();
+}
+
+function showUnreadableBanner() {
+  const banner = (typeof document !== 'undefined') && document.getElementById('unreadable-warning');
+  if (banner) banner.style.display = 'flex';
+}
+
+function downloadUnreadableSaves() {
+  Object.keys(_unreadable).forEach(key => {
+    downloadTextFile(key + UNREADABLE_SUFFIX + '.txt', _unreadable[key].raw);
+  });
+}
+
+function discardUnreadableSaves() {
+  if (!confirm('Delete the unreadable saved data? Download it first if you might want to recover the game by hand.')) return;
+  Object.keys(_unreadable).forEach(key => {
+    safeStorage.removeItem(key + UNREADABLE_SUFFIX);
+    delete _unreadable[key];
+  });
+  const banner = document.getElementById('unreadable-warning');
+  if (banner) banner.style.display = 'none';
+}
+// Escapes user free-text (team/player names, notes, linescore cells) before it
+// is interpolated into an innerHTML sink — the popups, saved-game library, and
+// game summary. Without this a stray '<' breaks rendering and a crafted name
+// persists as injected markup in the saved library. `'` is escaped too because
+// several sinks build single-quoted attributes.
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 // Field image embedded directly in SVG
 const POSITIONS = 9;
 const ROWS_PER_POS = 2;
 const INNINGS = 15;
 const PITCHER_ROWS = 8;
-const STANDINGS_ROWS = 5;
 
 let selectedCell = null;
 let gameState = createEmptyState();
@@ -19,24 +104,61 @@ let gameState = createEmptyState();
 // Identity column->inning map sized to INNINGS ([0,1,2,...,INNINGS-1]).
 function defaultColumnMap() { return Array.from({ length: INNINGS }, (_, i) => i); }
 
+// Every at-bat cell on the card carries the *starter's* row index — a sub bats
+// on the starter's line — so `players[1].atBats` and every other odd row is 15
+// untouched objects. They stay allocated in memory, because a dozen loops walk
+// every player and index by column, but `stateForStorage` drops them on the way
+// out and `refillAtBats` puts them back on the way in (#33).
+function makeEmptyAtBat() {
+  return { bases:[false,false,false,false], advReason:['','','',''], outOnBase:null, play:'', out:0, outsRecorded:0, pitches:[], hitLoc:null, rbi:0, pitcher:0, reachedOnError:false, pitcherChangeNum:'', subChange:false, seq:0 };
+}
+
+// A player row's at-bats, padded to INNINGS — for a save from a build with fewer
+// innings, and for the sub rows `stateForStorage` empties.
+function refillAtBats(state) {
+  ['visiting','home'].forEach(t => {
+    const team = state.teams && state.teams[t];
+    if (!team || !Array.isArray(team.players)) return;
+    team.players.forEach(player => {
+      if (!Array.isArray(player.atBats)) player.atBats = [];
+      while (player.atBats.length < INNINGS) player.atBats.push(makeEmptyAtBat());
+    });
+  });
+}
+
+// A shallow copy of `state` with the sub rows' at-bats emptied. Used for every
+// write and for change detection, so both sides of a comparison are the same
+// shape. The live `gameState` is never mutated.
+function stateForStorage(state) {
+  if (!state || !state.teams) return state;
+  const out = Object.assign({}, state, { teams: Object.assign({}, state.teams) });
+  ['visiting','home'].forEach(t => {
+    const team = state.teams[t];
+    if (!team || !Array.isArray(team.players)) return;
+    out.teams[t] = Object.assign({}, team, {
+      players: team.players.map((pl, i) => i % ROWS_PER_POS === 0 ? pl : Object.assign({}, pl, { atBats: [] }))
+    });
+  });
+  return out;
+}
+
 function createEmptyState() {
-  const makeAtBat = () => ({ bases:[false,false,false,false], advReason:['','','',''], outOnBase:null, play:'', out:0, outsRecorded:0, pitches:[], hitLoc:null, rbi:0, pitcher:0, reachedOnError:false, pitcherChangeNum:'', subChange:false });
-  const makeInning = () => ({ outs:0, bases:[null,null,null], currentPitcher:0, lob:0 });
+  const makeAtBat = makeEmptyAtBat;
+  const makeInning = () => ({ outs:0, bases:[null,null,null], currentPitcher:0, lob:0, outsLog:[], lastPA:null });
   return {
     info: { date:'', startTime:'', timeOfGame:'', visitingTeam:'', homeTeam:'', weather:'', attendance:'' },
     umpires: { hp:'', '1b':'', '2b':'', '3b':'' },
     notes: '',
     currentGameId: null,
+    lastSaved: null,
     timerStart: null,
     timerElapsed: 0,
     timerRunning: false,
-    log: [],
     linescore: {
       visiting: { innings: Array(INNINGS).fill(''), r:'', h:'', e:'' },
       home: { innings: Array(INNINGS).fill(''), r:'', h:'', e:'' }
     },
     visibleInnings: 9,
-    standings: Array(STANDINGS_ROWS).fill(null).map(() => ({ team:'', rec:'', gb:'' })),
     innings: {
       visiting: Array(INNINGS).fill(null).map(() => makeInning()),
       home: Array(INNINGS).fill(null).map(() => makeInning())
@@ -66,20 +188,24 @@ function createEmptyState() {
       home: defaultColumnMap()
     },
     nextLeadoff: {},
-    overflowAtBats: [],
-    defChanges: []
+    defChanges: [],
+    playSeq: 0
   };
 }
 
-function getOverflowForPlayer(team, pIdx) {
-  if (!gameState.overflowAtBats) return [];
-  return gameState.overflowAtBats.filter(o => o.team === team && o.pIdx === pIdx).map(o => o.atBat);
-}
+/* ------------------------------------------- who is standing on the base ---
+   `inn.bases[b]` holds `{ p, col }`: the runner and the *plate appearance he is
+   running from*. It used to hold a bare player index, which is ambiguous the
+   moment a batter comes up twice in one inning — both trips are the same player,
+   but only one of them is on base, and only that one's cell may be marked up.
+   The old code recovered the column by searching for it (`getRunnerCol`), got the
+   wrong trip, and wrote a run onto a cell that had already scored (#9, #19, #30).
+   The base entry carries the answer, so nothing searches. */
+function runnerRef(pIdx, col) { return { p: pIdx, col }; }
 
-function getOverflowForInning(team, colIdx) {
-  if (!gameState.overflowAtBats) return [];
-  return gameState.overflowAtBats.filter(o => o.team === team && o.colIdx === colIdx);
-}
+// Same runner? Identity is the player: he can only be running from one plate
+// appearance at a time, so a caller holding a stale column still means this man.
+function sameRunner(a, b) { return !!a && !!b && a.p === b.p; }
 
 /* Column-to-inning mapping helpers */
 function getRealInning(team, colIdx) {
@@ -90,6 +216,16 @@ function getRealInning(team, colIdx) {
 function getColumnsForInning(team, realInning) {
   if (!gameState.columnMap) return [realInning];
   return gameState.columnMap[team].reduce((cols, ri, ci) => { if (ri === realInning) cols.push(ci); return cols; }, []);
+}
+
+// Every at-bat label on one side, re-derived. Batting around renumbers the
+// columns, so a label built at grid time now names the wrong inning — the same
+// staleness `updateColumnHeaders` fixes for the headers a sighted scorer reads.
+function refreshCellAria(team) {
+  const players = gameState.teams[team].players;
+  for (let p = 0; p < players.length; p += ROWS_PER_POS) {
+    for (let c = 0; c < INNINGS; c++) updateCellAria(team, p, c);
+  }
 }
 
 function updateColumnHeaders(team) {
@@ -157,7 +293,7 @@ function buildScoringGrid(team, containerId) {
     html += `<td class="stat-cell" id="st-rbi-${team}-${sp}"></td>`;
     html += `<td class="stat-cell" id="st-bb-${team}-${sp}"></td>`;
     for (let inn = 0; inn < INNINGS; inn++) {
-      html += `<td class="at-bat-cell" rowspan="2" data-team="${team}" data-p="${sp}" data-inn="${inn}">`;
+      html += `<td class="at-bat-cell" id="cell-${team}-${sp}-${inn}" rowspan="2" aria-label="${describeCellForScreenReader(team, sp, inn)}" data-team="${team}" data-p="${sp}" data-inn="${inn}">`;
       html += `<div class="pitcher-change-mark" id="pcm-${team}-${sp}-${inn}"></div>`;
       html += `<div class="sub-change-mark" id="scm-${team}-${sp}-${inn}"></div>`;
       html += `<div class="pitch-track" id="pt-${team}-${sp}-${inn}"></div>`;
@@ -193,7 +329,7 @@ function buildPitcherTable(team, containerId) {
   const labels = ['IP','PC','H','R','ER','K','BB'];
   let html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">';
   html += '<h3 style="margin:0">Pitchers</h3>';
-  html += '<button type="button" onclick="recomputePitcherAssignments()" title="Re-attribute recorded at-bats to the correct pitcher based on pitching changes" style="font-size:10px;font-weight:700;padding:2px 7px;border:1px solid var(--navy,#1a2744);border-radius:3px;background:#fff;color:var(--navy,#1a2744);cursor:pointer;font-family:var(--heading,inherit);letter-spacing:0.3px">↻ Fix Stats</button>';
+  html += '<button type="button" data-act="recomputePitcherAssignments" title="Re-attribute recorded at-bats to the correct pitcher based on pitching changes" style="font-size:10px;font-weight:700;padding:2px 7px;border:1px solid var(--navy,#1a2744);border-radius:3px;background:#fff;color:var(--navy,#1a2744);cursor:pointer;font-family:var(--heading,inherit);letter-spacing:0.3px">↻ Fix Stats</button>';
   html += '</div>';
   html += '<table class="pitcher-grid"><thead><tr>';
   html += '<th class="pitcher-num-col">#</th>';
@@ -229,11 +365,11 @@ function buildLinescore() {
     const existing = row.querySelector('.team-col');
     let html = '';
     for (let i = 0; i < INNINGS; i++) {
-      html += `<td data-inn-col="${i}"><input type="text" data-ls="${t}" data-inn="${i}" maxlength="3" oninput="updateLinescoreTotals('${t}')"></td>`;
+      html += `<td data-inn-col="${i}"><input type="text" data-ls="${t}" data-inn="${i}" maxlength="3" data-act="updateLinescoreTotals" data-arg="${t}" data-act-on="input"></td>`;
     }
     html += `<td class="total"><input type="text" data-ls="${t}" data-stat="r" readonly tabindex="-1"></td>`;
     html += `<td class="total"><input type="text" data-ls="${t}" data-stat="h" readonly tabindex="-1"></td>`;
-    html += `<td class="total"><input type="text" data-ls="${t}" data-stat="e" maxlength="2" oninput="autoSave()"></td>`;
+    html += `<td class="total"><input type="text" data-ls="${t}" data-stat="e" maxlength="2" data-act="autoSave" data-act-on="input"></td>`;
     html += `<td class="total ls-lob"><input type="text" data-ls="${t}" data-stat="lob" readonly tabindex="-1"></td>`;
     row.innerHTML = `<td class="team-col">${t === 'visiting' ? '<span id="ls-v-label">Visiting</span>' : '<span id="ls-h-label">Home</span>'}</td>` + html;
   });
@@ -243,14 +379,23 @@ function buildLinescore() {
 
 /* Interaction */
 function selectCell(td) {
-  if (selectedCell) selectedCell.classList.remove('selected');
+  if (selectedCell) {
+    selectedCell.classList.remove('selected');
+    selectedCell.removeAttribute('aria-current');
+  }
   selectedCell = td;
   td.classList.add('selected');
+  // `aria-current`, not `aria-selected`: these are ordinary table cells, and
+  // promoting the card to role="grid" to make aria-selected legal would cost a
+  // screen reader the table navigation it already has.
+  td.setAttribute('aria-current', 'true');
+  announce('Selected ' + describeCellForScreenReader(td.dataset.team, parseInt(td.dataset.p), parseInt(td.dataset.inn)));
   updateSituation();
 }
 
 function renderDiamond(team, pIdx, innIdx) {
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
+  updateCellAria(team, pIdx, innIdx);
   const id = `d-${team}-${pIdx}-${innIdx}`;
   const svg = document.getElementById(id);
   if (!svg) return;
@@ -277,6 +422,7 @@ function renderDiamond(team, pIdx, innIdx) {
 
 function renderOut(team, pIdx, innIdx) {
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
+  updateCellAria(team, pIdx, innIdx);
   const el = document.querySelector(`.out-num[data-team="${team}"][data-p="${pIdx}"][data-inn="${innIdx}"]`);
   if (!el) return;
   const p = ab.play || '';
@@ -297,7 +443,53 @@ function renderOut(team, pIdx, innIdx) {
   el.classList.toggle('active', ab.out > 0 || (ab.dpOuts && ab.dpOuts.length >= 2));
 }
 
+/* ------------------------------------------------------------ a11y ---
+   An at-bat cell is a diamond, a play code and an out number — all of it
+   graphical. These give a screen reader the same thing in words, and keep it in
+   step: `renderPlayText` runs on every change to a cell, so the label is
+   rewritten with the play. The selected cell is also announced through a live
+   region, since moving the selection changes nothing a reader would otherwise
+   notice. */
+const A11Y_BASES = ['1st', '2nd', '3rd'];
+
+function describeCellForScreenReader(team, pIdx, col) {
+  const side = team === 'visiting' ? 'Visiting' : 'Home';
+  const spot = Math.floor(pIdx / ROWS_PER_POS) + 1;
+  const innNum = getRealInning(team, col) + 1;
+  const where = `${side}, batting order ${spot}, inning ${innNum}`;
+  const ab = gameState.teams[team] && gameState.teams[team].players[pIdx] &&
+    gameState.teams[team].players[pIdx].atBats[col];
+  if (!ab || !ab.play) return where + ', empty';
+  const bits = [ab.play];
+  if (ab.rbi) bits.push(ab.rbi + ' RBI');
+  if (ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null) {
+    bits.push(ab.reachedOnError ? 'scored, unearned' : 'scored');
+  } else if (ab.outOnBase != null) {
+    bits.push('out at ' + (ab.outOnBase === 3 ? 'home' : A11Y_BASES[ab.outOnBase]));
+  } else if (ab.out) {
+    bits.push('out ' + ab.out);
+  } else {
+    let last = -1;
+    for (let i = 0; i < 3; i++) if (ab.bases[i]) last = i;
+    if (last >= 0) bits.push('on ' + A11Y_BASES[last]);
+  }
+  return where + ': ' + bits.join(', ');
+}
+
+function updateCellAria(team, pIdx, col) {
+  const cell = document.getElementById(`cell-${team}-${pIdx}-${col}`);
+  if (cell) cell.setAttribute('aria-label', describeCellForScreenReader(team, pIdx, col));
+}
+
+// Say out loud whatever just changed, for a reader that has no other way to
+// notice it. Anything else on the page is unaffected: the region is off-screen.
+function announce(message) {
+  const el = document.getElementById('a11y-live');
+  if (el) el.textContent = message;
+}
+
 function renderPlayText(team, pIdx, innIdx) {
+  updateCellAria(team, pIdx, innIdx);
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   const el = document.getElementById(`txt-${team}-${pIdx}-${innIdx}`);
   if (!el) return;
@@ -360,6 +552,201 @@ function getEffectivePitcher(team, innIdx) {
   return 0;
 }
 
+/* ------------------------------------------------------- recording outs ---
+   One chokepoint for every out in the game. Before this there were fifteen
+   `inn.outs++` sites with inconsistent 3-out guards, and pitcher IP had to be
+   re-inferred afterwards from `outsRecorded`/`outOnBase` on the batter's at-bat
+   — which missed every out that wasn't the batter's own (#10).
+
+   `inn.outsLog` is now the record: one entry per out, in order, carrying the
+   pitcher who was on the mound. IP counts entries; nothing infers.
+
+   `pIdx`/`col` are the at-bat cell the out is *shown* on — the runner's own cell
+   for a base out. `srcP`/`srcCol` are the cell whose play *caused* it, so
+   clearing a double play takes both of its outs with it (#21).
+
+   Returns the out number (1-3), or 0 when refused because the inning is over. */
+function recordOut(team, innIdx, opts) {
+  const inn = getInnState(team, innIdx);
+  if (inn.outs >= 3) return 0;
+  if (!Array.isArray(inn.outsLog)) inn.outsLog = [];
+  inn.outs++;
+  const pIdx = opts.pIdx === undefined ? null : opts.pIdx;
+  const col = opts.col === undefined ? innIdx : opts.col;
+  inn.outsLog.push({
+    n: inn.outs,
+    kind: opts.kind || 'batter',
+    pIdx, col,
+    srcP: opts.srcP === undefined ? pIdx : opts.srcP,
+    srcCol: opts.srcCol === undefined ? col : opts.srcCol,
+    pitcher: getEffectivePitcher(team, innIdx)
+  });
+  return inn.outs;
+}
+
+// The batter's own out, stamped on his at-bat the way the old inline
+// `inn.outs++; ab.out = inn.outs; ab.outsRecorded = 1` did.
+function recordBatterOut(team, innIdx, pIdx, ab) {
+  const n = recordOut(team, innIdx, { kind: 'batter', pIdx, col: innIdx });
+  if (!n) return 0;
+  ab.out = n;
+  ab.outsRecorded = 1;
+  return n;
+}
+
+// Every out of a real inning, in order. Batting around splits one inning across
+// several columns; each column logs the outs made while it was the active one,
+// so the inning's log is those columns' logs concatenated (column order is
+// chronological).
+function inningOutsLog(team, realInn) {
+  const all = [];
+  for (const col of getColumnsForInning(team, realInn)) {
+    const inn = gameState.innings && gameState.innings[team] && gameState.innings[team][col];
+    if (inn && Array.isArray(inn.outsLog)) all.push(...inn.outsLog);
+  }
+  return all;
+}
+
+// Every out one plate appearance produced — the batter's and any runner it
+// doubled off.
+function outsFromPlay(inn, pIdx, col) {
+  if (!Array.isArray(inn.outsLog)) return [];
+  return inn.outsLog.filter(o => o.srcP === pIdx && o.srcCol === col);
+}
+
+// Undo the outs a play produced. `fallback` is how many to subtract when the log
+// is missing (a game saved before Phase 3 that mergeStateDefaults couldn't
+// backfill). Returns how many were removed.
+function removeOutsFromPlay(team, innIdx, pIdx, col, fallback) {
+  const inn = getInnState(team, innIdx);
+  if (!Array.isArray(inn.outsLog) || !inn.outsLog.length) {
+    const n = fallback || 0;
+    inn.outs = Math.max(0, inn.outs - n);
+    return n;
+  }
+  const keep = inn.outsLog.filter(o => !(o.srcP === pIdx && o.srcCol === col));
+  const removed = inn.outsLog.length - keep.length;
+  inn.outsLog = keep;
+  inn.outs = Math.max(0, inn.outs - removed);
+  return removed;
+}
+
+// After an out is removed the survivors' numbers have a gap in them, so the card
+// showed "1" and "3" for a two-out inning. Renumber the log and the out badges
+// it points at, across every column of the real inning.
+function renumberOuts(team, innIdx) {
+  const players = gameState.teams[team].players;
+  let n = 0;
+  for (const col of getColumnsForInning(team, getRealInning(team, innIdx))) {
+    const inn = gameState.innings[team][col];
+    if (!inn || !Array.isArray(inn.outsLog)) continue;
+    for (const o of inn.outsLog) {
+      o.n = ++n;
+      if (o.pIdx == null) continue;
+      const rab = players[o.pIdx] && players[o.pIdx].atBats[o.col];
+      if (rab && rab.out > 0 && rab.out !== o.n && !(rab.dpOuts && rab.dpOuts.length >= 2)) {
+        rab.out = o.n;
+        renderOut(team, o.pIdx, o.col);
+      }
+    }
+  }
+}
+
+/* ------------------------------------------------- recomputing an inning ---
+   An inning's derived state — the out count, who is standing on which base, the
+   runs on the linescore, LOB — is a function of the at-bat records and the out
+   log. It used to be *patched*: every mutator adjusted the parts it believed it
+   had changed, and each one forgot something different. Clearing an older play
+   left its runner outs standing (#21). Changing a play type adjusted the batter's
+   own bases and nothing else (#22). LOB had two writers that disagreed (#16).
+   `fillLinescoreZeros` wrote the right zero into the wrong inning (#23).
+
+   So mutators now fix the at-bat records they own and call this. Nothing else
+   writes `inn.outs`, `inn.bases` or `inn.lob` for a finished edit — grep
+   `inn.outs =` / `inn.bases\[` / `.lob =` and the hits are here, plus the three
+   runner helpers and `removeOutsFromPlay`, which this reads back.
+
+   Batting around spreads one real inning across several columns. They all describe
+   the same inning, so they all get the same outs and bases: `overflowToNextColumn`
+   has always copied them forward at the moment it inserts a column, and this keeps
+   the copies in step however the edit arrived — the divergence Phase 3 left open. */
+function recomputeInning(team, realInn) {
+  if (realInn == null || realInn < 0 || realInn >= INNINGS) return;
+  const cols = getColumnsForInning(team, realInn);
+  if (!cols.length) return;
+  const players = gameState.teams[team].players;
+
+  // Outs: the log is the record. Renumber first — an out removed from the middle
+  // leaves a gap, and the card read "1" and "3" for a two-out inning.
+  renumberOuts(team, cols[0]);
+  const outs = Math.min(3, inningOutsLog(team, realInn).length);
+
+  // Bases: a runner is on base when his cell says he reached, hasn't scored and
+  // wasn't put out on the bases. The base he's on is the last one marked, and the
+  // cell it came off is the plate appearance he's running from — which is exactly
+  // what the base entry records, so this is also where those entries are minted.
+  const bases = [null, null, null];
+  for (const col of cols) {
+    for (let p = 0; p < players.length; p++) {
+      const ab = players[p].atBats[col];
+      if (!ab || !ab.play || !ab.bases[0] || ab.bases[3] || ab.outOnBase != null) continue;
+      let b = 0;
+      for (let i = 2; i >= 0; i--) if (ab.bases[i]) { b = i; break; }
+      if (bases[b] !== null && bases[b].p !== p) {
+        // Two live plate appearances claiming one base. Recomputing can't make
+        // that true, so keep the first and say so loudly — the policy
+        // `setRunnerOn` uses for a colliding placement. Reachable from an
+        // imported or hand-edited game, not from playing one.
+        console.warn(`recomputeInning: ${team} inning ${realInn + 1} — runner ${bases[b].p} and runner ${p} both on ${BASE_NAMES[b]}`);
+        continue;
+      }
+      bases[b] = runnerRef(p, col);
+    }
+  }
+
+  // One definition of LOB (#16): the runners left standing when the half-inning
+  // ends. Nothing is left on base until it does, so an inning in progress is 0.
+  const lob = outs >= 3 ? bases.filter(r => r !== null).length : 0;
+
+  for (const col of cols) {
+    const inn = getInnState(team, col);
+    inn.outs = outs;
+    // In place — callers hold `inn.bases` across a recompute.
+    for (let b = 0; b < 3; b++) inn.bases[b] = bases[b];
+    inn.lob = lob;
+  }
+
+  // Runs on the line, by real inning, then the R/H/LOB totals.
+  updateInningRuns(team, cols[cols.length - 1]);
+}
+
+// Has anybody batted in this inning? Distinguishes "0 runs" from "not played" —
+// an inning with no records has nothing to derive, and its linescore cell may have
+// been filled in by hand.
+function inningHasRecords(team, realInn) {
+  const players = gameState.teams[team].players;
+  for (const col of getColumnsForInning(team, realInn)) {
+    for (const player of players) {
+      const ab = player.atBats[col];
+      if (ab && (ab.play || (ab.pitches && ab.pitches.length))) return true;
+    }
+  }
+  return false;
+}
+
+// A team's LOB is the per-inning figures summed. Once per *real* inning: a
+// batted-around inning has the same LOB on each of its columns.
+function teamLOB(team) {
+  let total = 0;
+  for (let ri = 0; ri < INNINGS; ri++) {
+    const cols = getColumnsForInning(team, ri);
+    if (!cols.length) continue;
+    const inn = gameState.innings && gameState.innings[team] && gameState.innings[team][cols[0]];
+    if (inn && inn.lob) total += inn.lob;
+  }
+  return total;
+}
+
 function getActivePlayer(team, pIdx, innIdx) {
   const sp = Math.floor(pIdx / ROWS_PER_POS) * ROWS_PER_POS;
   const subp = sp + 1;
@@ -384,90 +771,195 @@ function setAdvReason(ab, segIdx, reason) {
   if (!ab.advReason[segIdx]) ab.advReason[segIdx] = reason;
 }
 
-// When the batting order wraps (overflow column), a runner may have batted in
-// an earlier visual column for the same real inning. Return that original column
-// so advancement renders on the correct cell.
-function getRunnerCol(team, pIdx, innIdx) {
-  const realInn = getRealInning(team, innIdx);
-  const colMap = gameState.columnMap[team];
-  const player = gameState.teams[team].players[pIdx];
-  if (!player) return innIdx;
-  for (let c = 0; c < INNINGS; c++) {
-    if (colMap[c] === realInn && player.atBats[c] && player.atBats[c].play) return c;
-  }
-  return innIdx;
+// Mark a base a runner reached on his own cell: the segment, why, and — when a
+// plate appearance sent him there — which one. `src` is that batter's cell, the
+// same {pIdx, col} pair `recordOut` carries as srcP/srcCol, and it's what lets
+// clearing a play take back exactly the advancement it caused (#21). A base taken
+// on a steal, a wild pitch or a manual move has no src: it isn't any play's to
+// give back. `advSrc` is created only when something stamps it, so an at-bat that
+// never advanced anybody costs nothing to store.
+function markAdvance(ab, segIdx, reason, src) {
+  ab.bases[segIdx] = true;
+  setAdvReason(ab, segIdx, reason);
+  if (!src) return;
+  if (!Array.isArray(ab.advSrc)) ab.advSrc = [null, null, null, null];
+  if (!ab.advSrc[segIdx]) ab.advSrc[segIdx] = { p: src.pIdx, col: src.col };
 }
 
-function advanceRunners(team, innIdx, advanceBy, reason) {
-  const inn = getInnState(team, innIdx);
+// Take back the advancement one plate appearance caused, across every column of
+// its inning. The runner's own cell still carries the bases he had reached before
+// it, so unmarking this play's segments drops him back to the last base still
+// marked — which is where he was standing when it happened, and where
+// `recomputeInning` will then find him.
+//
+// Only segments stamped with this play come off; a base he stole is his to keep.
+// A game saved before the stamp existed has none, so it keeps the old behaviour
+// rather than guessing which play moved whom.
+//
+// A later play may have put somebody on the base a runner would go back to — clear
+// the single that drove a man in and the batter who followed him is standing on
+// 1st. There is no honest answer to that: the later play only happened because
+// this one did. So the runner keeps what he was given, loudly, rather than making
+// two men share a base — the same policy `setRunnerOn` uses for a collision.
+function revertAdvancesFrom(team, realInn, srcP, srcCol) {
   const players = gameState.teams[team].players;
+  const cols = getColumnsForInning(team, realInn);
+
+  // Everyone holding a base stamped to this play, with the marks the revert would
+  // leave him and the base that would put him back on.
+  const candidates = [];
+  for (const col of cols) {
+    for (let p = 0; p < players.length; p++) {
+      if (p === srcP && col === srcCol) continue;   // the batter's own cell
+      const ab = players[p].atBats[col];
+      if (!ab || !Array.isArray(ab.advSrc)) continue;
+      const segs = [];
+      for (let seg = 0; seg < 4; seg++) {
+        const s = ab.advSrc[seg];
+        if (s && s.p === srcP && s.col === srcCol) segs.push(seg);
+      }
+      if (!segs.length) continue;
+      const after = ab.bases.slice();
+      segs.forEach(seg => { after[seg] = false; });
+      candidates.push({ p, col, ab, segs, after });
+    }
+  }
+  if (!candidates.length) return;
+
+  // The bases held by runners this revert doesn't touch. The cleared cell isn't one
+  // of them — its batter is coming off the card with his play.
+  const untouched = new Set(candidates.map(c => c.p + ':' + c.col));
+  untouched.add(srcP + ':' + srcCol);
+  const occupied = [null, null, null];
+  for (const col of cols) {
+    for (let p = 0; p < players.length; p++) {
+      if (untouched.has(p + ':' + col)) continue;
+      const ab = players[p].atBats[col];
+      if (!ab || !ab.play || !ab.bases[0] || ab.bases[3] || ab.outOnBase != null) continue;
+      for (let i = 2; i >= 0; i--) if (ab.bases[i]) { occupied[i] = p; break; }
+    }
+  }
+
+  for (const c of candidates) {
+    // A runner still credited with a run after the revert isn't coming back to a
+    // base at all, so nothing can be in his way.
+    if (!c.after[3] && c.after[0]) {
+      let dest = 0;
+      for (let i = 2; i >= 0; i--) if (c.after[i]) { dest = i; break; }
+      if (occupied[dest] !== null) {
+        console.warn(`revertAdvancesFrom: ${team} inning ${realInn + 1} — runner ${c.p} keeps the base runner ${srcP}'s play gave him; runner ${occupied[dest]} is on ${BASE_NAMES[dest]}`);
+        continue;
+      }
+      occupied[dest] = c.p;
+    }
+    for (const seg of c.segs) {
+      c.ab.bases[seg] = false;
+      if (c.ab.advReason) c.ab.advReason[seg] = '';
+      c.ab.advSrc[seg] = null;
+    }
+    renderDiamond(team, c.p, c.col);
+    renderPlayText(team, c.p, c.col);
+  }
+}
+
+// Take a plate appearance's effects back off the inning: the outs it made (its
+// batter's own and any runner it doubled off) and the bases it handed out. Both
+// halves of #21. `fallbackOuts` is how many outs to subtract when there is no log
+// to consult (a game saved before Phase 3 that couldn't be backfilled).
+//
+// The batter's own at-bat record is the caller's to clear — clearing a cell,
+// keeping its pitches and changing its play type each keep a different amount of
+// it — but the effects on everybody *else* are identical, and used to be
+// reimplemented (or forgotten) separately in each.
+function takeBackPlay(team, col, pIdx, fallbackOuts) {
+  const inn = getInnState(team, col);
+  const players = gameState.teams[team].players;
+  // Read the runner outs before the log entries go: after this the only record
+  // that they happened is the `out` / `outOnBase` marks on the runners' own cells.
+  const runnerOuts = outsFromPlay(inn, pIdx, col).filter(o => o.pIdx !== pIdx || o.col !== col);
+  removeOutsFromPlay(team, col, pIdx, col, fallbackOuts);
+  for (const o of runnerOuts) {
+    if (o.pIdx == null) continue;
+    const rab = players[o.pIdx].atBats[o.col];
+    rab.out = 0; rab.outOnBase = null;
+    renderDiamond(team, o.pIdx, o.col);
+    renderOut(team, o.pIdx, o.col);
+  }
+  // The bases it handed out go back too. A base a runner stole, or took on a wild
+  // pitch, isn't this play's to take away.
+  revertAdvancesFrom(team, getRealInning(team, col), pIdx, col);
+}
+
+// The at-bat cell a runner on base is running from — his own record, where his
+// advancement is written. Reads the base entry; nothing searches for it.
+function runnerAtBat(team, runner) {
+  const player = runner && gameState.teams[team].players[runner.p];
+  return player ? player.atBats[runner.col] : null;
+}
+
+// Everyone on base moves up `advanceBy` (1 for a wild pitch, balk or passed
+// ball; 4 for a home run). Lead runner first, so the base he vacates is already
+// free for the man behind him. `src` is the plate appearance responsible, when
+// there is one — a home run has one, a wild pitch doesn't.
+function advanceRunners(team, innIdx, advanceBy, reason, src) {
+  const inn = getInnState(team, innIdx);
   const rsn = reason || '';
-  if (inn.bases[2] !== null) {
-    const r = inn.bases[2];
-    const rc = getRunnerCol(team, r, innIdx);
-    const rab = players[r].atBats[rc];
-    rab.bases[3] = true;
-    setAdvReason(rab, 3, rsn);
-    renderDiamond(team, r, rc);
-    inn.bases[2] = null;
-  }
-  if (inn.bases[1] !== null) {
-    const r = inn.bases[1];
-    const rc = getRunnerCol(team, r, innIdx);
-    const rab = players[r].atBats[rc];
-    if (advanceBy >= 2) {
-      rab.bases[2] = true; rab.bases[3] = true;
-      setAdvReason(rab, 2, rsn); setAdvReason(rab, 3, rsn);
-      inn.bases[1] = null;
-    } else {
-      rab.bases[2] = true;
-      setAdvReason(rab, 2, rsn);
-      inn.bases[2] = r; inn.bases[1] = null;
-    }
-    renderDiamond(team, r, rc);
-  }
-  if (inn.bases[0] !== null) {
-    const r = inn.bases[0];
-    const rc = getRunnerCol(team, r, innIdx);
-    const rab = players[r].atBats[rc];
-    if (advanceBy >= 2) {
-      rab.bases[1] = true; rab.bases[2] = true; rab.bases[3] = true;
-      setAdvReason(rab, 1, rsn); setAdvReason(rab, 2, rsn); setAdvReason(rab, 3, rsn);
-      inn.bases[0] = null;
-    } else {
-      rab.bases[1] = true;
-      setAdvReason(rab, 1, rsn);
-      inn.bases[1] = r; inn.bases[0] = null;
-    }
-    renderDiamond(team, r, rc);
+  const by = Math.max(1, advanceBy || 1);
+  for (let from = 2; from >= 0; from--) {
+    const rn = inn.bases[from];
+    if (rn === null) continue;
+    const dest = Math.min(from + by, 3);
+    const rab = runnerAtBat(team, rn);
+    if (!rab) continue;
+    if (!moveRunnerTo(inn, from, dest, rn)) continue;
+    for (let step = from + 1; step <= dest; step++) markAdvance(rab, step, rsn, src);
+    renderDiamond(team, rn.p, rn.col);
   }
 }
 
-function advanceForcedRunners(team, innIdx, reason) {
+function advanceForcedRunners(team, innIdx, reason, src) {
   const inn = getInnState(team, innIdx);
-  const players = gameState.teams[team].players;
   const rsn = reason || 'BB';
-  const on1 = inn.bases[0] !== null, on2 = inn.bases[1] !== null, on3 = inn.bases[2] !== null;
-  if (on1 && on2 && on3) {
-    const r3 = inn.bases[2]; const rc3 = getRunnerCol(team, r3, innIdx); const ab3 = players[r3].atBats[rc3]; ab3.bases[3] = true; setAdvReason(ab3, 3, rsn); renderDiamond(team, r3, rc3);
-    const r2 = inn.bases[1]; inn.bases[2] = r2; const rc2 = getRunnerCol(team, r2, innIdx); const ab2 = players[r2].atBats[rc2]; ab2.bases[2] = true; setAdvReason(ab2, 2, rsn); renderDiamond(team, r2, rc2);
-    const r1 = inn.bases[0]; inn.bases[1] = r1; const rc1 = getRunnerCol(team, r1, innIdx); const ab1 = players[r1].atBats[rc1]; ab1.bases[1] = true; setAdvReason(ab1, 1, rsn); renderDiamond(team, r1, rc1);
-    inn.bases[0] = null;
-  } else if (on1 && on2) {
-    const r2 = inn.bases[1]; inn.bases[2] = r2; const rc2 = getRunnerCol(team, r2, innIdx); const ab2 = players[r2].atBats[rc2]; ab2.bases[2] = true; setAdvReason(ab2, 2, rsn); renderDiamond(team, r2, rc2);
-    const r1 = inn.bases[0]; inn.bases[1] = r1; const rc1 = getRunnerCol(team, r1, innIdx); const ab1 = players[r1].atBats[rc1]; ab1.bases[1] = true; setAdvReason(ab1, 1, rsn); renderDiamond(team, r1, rc1);
-    inn.bases[0] = null;
-  } else if (on1) {
-    const r1 = inn.bases[0]; inn.bases[1] = r1; const rc1 = getRunnerCol(team, r1, innIdx); const ab1 = players[r1].atBats[rc1]; ab1.bases[1] = true; setAdvReason(ab1, 1, rsn); renderDiamond(team, r1, rc1);
-    inn.bases[0] = null;
+  // A runner is only forced while every base behind him is occupied, so count out
+  // from 1st and stop at the first empty base.
+  let forcedThrough = -1;
+  for (let b = 0; b < 3; b++) {
+    if (inn.bases[b] === null) break;
+    forcedThrough = b;
+  }
+  for (let from = forcedThrough; from >= 0; from--) {
+    const rn = inn.bases[from];
+    if (rn === null) continue;
+    const rab = runnerAtBat(team, rn);
+    if (!rab) continue;
+    if (!moveRunnerTo(inn, from, from + 1, rn)) continue;
+    markAdvance(rab, from + 1, rsn, src);
+    renderDiamond(team, rn.p, rn.col);
   }
 }
+
+// Scorers type "GO 6-3" / "FO 8"; everything downstream matches canonical codes
+// ("6-3", "F8"). New entries are normalized at the input boundary by
+// normalizePlayCode, so a prefixed code only reaches state from a game saved
+// before that existed — isOutPlay still has to recognise those.
+const PREFIXED_OUT_RE = /^(GO|FO|LO|PO)\s+\S/i;
+const OUT_PREFIX_CANON = { GO: '', FO: 'F', LO: 'L', PO: 'P' };
 
 function isOutPlay(play) {
   return ['K','ꓘ','GO','SAC','DP','FC','SF','SH','IF','TP'].includes(play) ||
     /^F\d/.test(play) || /^P\d/.test(play) || /^\d+-\d/.test(play) || /^L\d/.test(play) ||
     /^\d+U?$/i.test(play) || /^U\d+$/i.test(play) ||
-    /^DP /.test(play) || /^FC /.test(play) || /^TP /.test(play);
+    /^DP /.test(play) || /^FC /.test(play) || /^TP /.test(play) ||
+    PREFIXED_OUT_RE.test(play);
+}
+
+// "GO 6-3" → "6-3", "FO 8" → "F8", "LO 7" → "L7", "PO 3" → "P3". Anything else
+// (including "DP 6-4-3" and the quick-button codes) passes through untouched.
+function normalizePlayCode(code) {
+  const raw = String(code == null ? '' : code).trim();
+  const m = /^(GO|FO|LO|PO)\s+(.+)$/i.exec(raw);
+  if (!m) return raw;
+  return OUT_PREFIX_CANON[m[1].toUpperCase()] + m[2].trim();
 }
 
 function isHitPlay(play) {
@@ -483,34 +975,351 @@ function hasRunnersOnBase(team, innIdx) {
   return inn.bases[0] !== null || inn.bases[1] !== null || inn.bases[2] !== null;
 }
 
-function countRunnersScored(team, innIdx, prevRunners) {
+/* ------------------------------------------------------------------------
+   Entry guards (audit findings #1, #4, #7, #27)
+   ------------------------------------------------------------------------ */
+
+// The cell a popup is deciding for. Popups resolve their target when they OPEN,
+// not when the scorer presses a button — tapping another cell in between used to
+// apply the play to the wrong batter (#1).
+function currentTarget() {
+  if (!selectedCell) return null;
+  return {
+    team: selectedCell.dataset.team,
+    pIdx: parseInt(selectedCell.dataset.p),
+    innIdx: parseInt(selectedCell.dataset.inn)
+  };
+}
+
+// #4: two runners can't share a base. True when `runner` (a `{p, col}` ref) may
+// occupy `base` — either it's empty or he's already standing on it. Base 3 is
+// home; any number score.
+function baseFreeFor(inn, base, runner) {
+  return base > 2 || inn.bases[base] === null || sameRunner(inn.bases[base], runner);
+}
+
+/* ------------------------------------------------------------------------
+   Runner placement chokepoint (audit finding #4, Phase 4)
+
+   Every write to `inn.bases` goes through these three functions. The slot used
+   to be assigned directly at fifteen sites, each with its own idea of whether
+   to check the base first, so the last writer won and the runner who was
+   standing there vanished off the bases — still marked up on his at-bat, but
+   unable to ever score.
+
+   They all take and store a `{p, col}` runner ref, never a bare player index.
+   ------------------------------------------------------------------------ */
+
+const BASE_NAMES = ['1st', '2nd', '3rd', 'Home'];
+
+function reportRunnerCollision(base, held, runner) {
+  if (typeof console !== 'undefined' && console.warn) {
+    console.warn('runner placement refused: ' + (runner && runner.p) + ' → ' + BASE_NAMES[base] +
+                 ', runner ' + (held && held.p) + ' is already there');
+  }
+  showPlayReject('Two runners can\'t share ' + BASE_NAMES[base] + '.');
+}
+
+function clearRunner(inn, base) {
+  if (base < 0 || base > 2) return;
+  inn.bases[base] = null;
+}
+
+// Takes a player off every base he is listed on, whichever plate appearance he
+// got there from. The five places that cleared a play used to inline this loop.
+function removeRunnerFromBases(inn, pIdx) {
+  for (let b = 0; b < 3; b++) if (inn.bases[b] && inn.bases[b].p === pIdx) clearRunner(inn, b);
+}
+
+// Puts `runner` on `base`. Base 3 is home — nothing to store, and any number of
+// runners can cross the plate, so that's a no-op success. Refuses to evict a
+// different runner, and says so: a silent refusal is how a scorecard ends up
+// quietly disagreeing with the game.
+function setRunnerOn(inn, base, runner) {
+  if (base > 2) return true;
+  if (base < 0 || runner == null) return false;
+  const held = inn.bases[base];
+  if (held !== null && !sameRunner(held, runner)) {
+    reportRunnerCollision(base, held, runner);
+    return false;
+  }
+  inn.bases[base] = runner;
+  return true;
+}
+
+// Atomic move: the runner keeps the base he is on unless the destination is
+// really available. Callers mark up the at-bat only when this returns true, so a
+// refused move leaves no half-written advancement behind.
+function moveRunnerTo(inn, fromBase, dest, runner) {
+  if (dest > 2) { clearRunner(inn, fromBase); return true; }
+  if (!baseFreeFor(inn, dest, runner)) {
+    reportRunnerCollision(dest, inn.bases[dest], runner);
+    return false;
+  }
+  clearRunner(inn, fromBase);
+  inn.bases[dest] = runner;
+  return true;
+}
+
+// A runner can't run through the man in front of him. True when every base between
+// `fromBase` and `dest` (and `dest` itself, when it isn't home) is clear for him.
+// Used by the steal and pickoff-error paths, where one runner moves on his own and
+// there is no popup to validate the set as a whole.
+function runnerPathClear(inn, fromBase, dest, runner) {
+  for (let b = fromBase + 1; b <= Math.min(dest, 2); b++) {
+    if (!baseFreeFor(inn, b, runner)) return false;
+  }
+  return true;
+}
+
+// The runners' order has to survive the play: two men can't finish on one base,
+// and a trailing runner can't finish ahead of a lead runner who is still on one —
+// he would have to pass him. `parties` is [{ key, from, dest }]; `from` is the
+// base each started on (-1 for the batter) and `dest` is 0-3, or undefined for
+// anyone thrown out or not yet decided. Returns the set of keys in conflict.
+function runnerOrderConflicts(parties) {
+  const on = parties.filter(p => p.dest !== undefined && p.dest !== null && p.dest >= 0 && p.dest <= 3);
+  const bad = new Set();
+  for (let i = 0; i < on.length; i++) {
+    for (let j = i + 1; j < on.length; j++) {
+      const a = on[i], b = on[j];
+      if (a.from === b.from) continue;
+      // Both scoring is fine — home isn't a base anyone has to stand on.
+      if (a.dest === 3 && b.dest === 3) continue;
+      const keepsOrder = a.from < b.from ? a.dest < b.dest : a.dest > b.dest;
+      if (!keepsOrder) { bad.add(a.key); bad.add(b.key); }
+    }
+  }
+  return bad;
+}
+
+// Grey out an offered destination the current set of choices has made illegal, so
+// the scorer sees the constraint instead of running into a refusal on Confirm.
+// Reversible: the option comes back as soon as the conflicting choice changes.
+function setOptionBlocked(btn, blocked) {
+  btn.dataset.blocked = blocked ? '1' : '';
+  btn.disabled = !!blocked;
+  btn.style.opacity = blocked ? '0.35' : '1';
+  btn.style.cursor = blocked ? 'not-allowed' : 'pointer';
+  if (blocked) {
+    btn.style.borderColor = '#ccc';
+    btn.style.background = '#f0f0f0';
+    btn.style.color = '#999';
+  }
+}
+
+function isOptionBlocked(btn) {
+  return btn.dataset.blocked === '1';
+}
+
+// Message for a refused set of destinations — sharing a base and passing a
+// runner are different mistakes and the scorer fixes them differently.
+function runnerOrderMessage(parties) {
+  const on = parties.filter(p => p.dest !== undefined && p.dest !== null && p.dest >= 0 && p.dest <= 2);
+  const dests = on.map(p => p.dest);
+  const shared = dests.some((d, i) => dests.indexOf(d) !== i);
+  return shared
+    ? 'Two runners can\'t share a base — pick another destination.'
+    : 'A runner can\'t pass the runner ahead of him.';
+}
+
+let playRejectTimer = null;
+
+// Brief, non-blocking notice for a refused entry. A rejected play has to say so:
+// silently dropping it is how a scorer ends up trusting a wrong card.
+function showPlayReject(msg) {
+  if (typeof document === 'undefined') return;
+  let el = document.getElementById('play-reject');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'play-reject';
+    el.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);background:var(--accent,#c62828);color:#fff;padding:10px 18px;border-radius:6px;z-index:400;font-family:var(--heading);font-size:13px;font-weight:700;letter-spacing:0.5px;text-align:center;max-width:80vw;box-shadow:0 4px 20px rgba(0,0,0,0.35);';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.display = 'block';
+  if (playRejectTimer) clearTimeout(playRejectTimer);
+  playRejectTimer = setTimeout(() => { playRejectTimer = null; el.style.display = 'none'; }, 2200);
+}
+
+// Popups that own the current entry get a backdrop, so a tap meant for the popup
+// can't land on the grid and move the selection underneath it (#1, #29).
+const BACKDROP_GUARDED = ['k-popup', 'pos-popup'];
+
+function showPopupBackdrop() {
+  if (typeof document === 'undefined') return;
+  let bd = document.getElementById('popup-backdrop');
+  if (!bd) {
+    bd = document.createElement('div');
+    bd.id = 'popup-backdrop';
+    bd.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:180;background:rgba(26,39,68,0.15);';
+    bd.onclick = function(e) {
+      if (e && e.stopPropagation) e.stopPropagation();
+      // Swallow the tap. If whatever it was guarding is already gone, get out of
+      // the way rather than leaving the app unclickable.
+      const stillOpen = BACKDROP_GUARDED.some(id => {
+        const p = document.getElementById(id);
+        return p && p.style.display && p.style.display !== 'none';
+      });
+      if (!stillOpen) hidePopupBackdrop();
+    };
+    document.body.appendChild(bd);
+  }
+  bd.style.display = 'block';
+}
+
+function hidePopupBackdrop() {
+  if (typeof document === 'undefined') return;
+  const bd = document.getElementById('popup-backdrop');
+  if (bd) bd.style.display = 'none';
+}
+
+// Popups whose Confirm writes to an at-bat and an inning captured when they
+// opened. Undo restores an older snapshot, and the confirm then applies its
+// advancements on top of that — the runners land in a state that never
+// happened (#29). So undo and redo refuse to run until the entry is resolved:
+// answer the popup, or close it, first.
+//
+// `spray-popup` is deliberately not on the list. It opens by itself after every
+// hit, so blocking undo behind it would block undo on the commonest path there
+// is — and all it writes is `hitLoc`. Undo dismisses it instead: the play it was
+// asking about is the one being taken back.
+const PENDING_ENTRY_POPUPS = [
+  'runner-popup', 'outcome-popup', 'base-picker', 'pos-popup', 'k-popup',
+  'edit-play-popup', 'move-runner-popup', 'er-review-popup', 'recompute-popup'
+];
+
+function pendingEntryPopupOpen() {
+  if (typeof document === 'undefined') return false;
+  return PENDING_ENTRY_POPUPS.some(id => {
+    const p = document.getElementById(id);
+    return p && p.style.display && p.style.display !== 'none';
+  });
+}
+
+function dismissSprayPopup() {
+  if (typeof document === 'undefined') return;
+  const p = document.getElementById('spray-popup');
+  if (p) p.style.display = 'none';
+}
+
+/* ------------------------------------------------ undo: the whole inning ---
+   A snapshot used to hold one column: `atBats[innIdx]` for every player, plus
+   that column's inning record. A batted-around inning lives in two or more
+   columns and a play in the later one moves runners standing on bases they
+   reached in the earlier one, so undo restored half of what the play had changed
+   (#19). These capture and restore every column of the play's *real* inning.
+
+   Snapshots are memory-only (they are never persisted), so the shape is free to
+   change. What they still can't undo is the column insertion itself: a play that
+   bats the order around adds a column and shifts `columnMap`, and that happens
+   after the snapshot was taken. `cols` is therefore the inning as it stood when
+   the play was entered. */
+function captureInning(team, innIdx) {
   const players = gameState.teams[team].players;
+  const cols = getColumnsForInning(team, getRealInning(team, innIdx));
+  const abs = {};
+  const inns = {};
+  for (const col of cols) {
+    for (let p = 0; p < players.length; p++) {
+      abs[p + ':' + col] = JSON.parse(JSON.stringify(players[p].atBats[col]));
+    }
+    inns[col] = JSON.parse(JSON.stringify(getInnState(team, col)));
+  }
+  return { cols, abs, inns };
+}
+
+// Overwrite `target` with a snapshot copy: fields the snapshot doesn't have are
+// dropped, not left over from the newer state.
+function assignOver(target, src) {
+  const copy = JSON.parse(JSON.stringify(src));
+  Object.keys(target).forEach(k => { if (!(k in copy)) delete target[k]; });
+  Object.assign(target, copy);
+}
+
+function restoreInning(team, prev) {
+  if (!prev || !prev.cols) return;
+  const players = gameState.teams[team].players;
+  for (const col of prev.cols) {
+    for (let p = 0; p < players.length; p++) {
+      const src = prev.abs[p + ':' + col];
+      if (src) assignOver(players[p].atBats[col], src);
+    }
+    if (prev.inns[col]) assignOver(getInnState(team, col), prev.inns[col]);
+  }
+}
+
+function renderInning(team, prev) {
+  if (!prev || !prev.cols) return;
+  const players = gameState.teams[team].players;
+  for (const col of prev.cols) {
+    for (let p = 0; p < players.length; p++) {
+      renderDiamond(team, p, col);
+      renderOut(team, p, col);
+      renderPlayText(team, p, col);
+      renderPitches(team, p, col);
+      renderPitchCount(team, p, col);
+      renderPitcherChange(team, p, col);
+    }
+  }
+}
+
+// How many runners this play drove in: who is credited with a run now who wasn't
+// before it. Counted across every column of the inning, so a runner who reached
+// on an earlier trip through the order still earns the RBI.
+function countRunnersScored(team, prev) {
+  const players = gameState.teams[team].players;
+  const didScore = ab => !!(ab && ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null);
   let scored = 0;
-  for (let i = 0; i < players.length; i++) {
-    const ab = players[i].atBats[innIdx];
-    const curScored = ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null;
-    const prevScored = prevRunners[i] && prevRunners[i].bases[0] && prevRunners[i].bases[1] && prevRunners[i].bases[2] && prevRunners[i].bases[3] && prevRunners[i].outOnBase == null;
-    if (curScored && !prevScored) scored++;
+  for (const col of prev.cols) {
+    for (let p = 0; p < players.length; p++) {
+      if (didScore(players[p].atBats[col]) && !didScore(prev.abs[p + ':' + col])) scored++;
+    }
   }
   return scored;
 }
 
-function applyPlay(play) {
-  if (!selectedCell) return;
-  const team = selectedCell.dataset.team;
-  const pIdx = parseInt(selectedCell.dataset.p);
-  const innIdx = parseInt(selectedCell.dataset.inn);
+// Can `play` legally be entered into this half-inning as it stands? Returns the
+// reason it can't, or null. Both cases would otherwise be recorded short: the
+// outs that run past three are refused by `recordOut`, so the inning ends up
+// under-reported rather than wrong-in-an-obvious-way (#7, #27).
+//
+// Called before the at-bat is touched on a new entry, and after the old play has
+// been taken back on an edit — an edited cell's own outs are not in its way.
+function playEntryReject(team, innIdx, play) {
+  const inn = getInnState(team, innIdx);
+  if (play === 'DP' || /^DP /.test(play)) {
+    // With 2 outs the inning ends on the first out, so a double play isn't legal.
+    if (inn.outs >= 2) return 'Only one out left — record the single out, not a DP.';
+  }
+  if (play === 'TP' || /^TP /.test(play)) {
+    const onBase = inn.bases.filter(b => b !== null).length;
+    if (onBase < 2) return 'A triple play needs two runners on base.';
+    if (inn.outs >= 1) return 'Not enough outs left for a triple play.';
+  }
+  return null;
+}
+
+// `target` is the cell this play belongs to. Popups pass the cell they captured
+// when they opened; everything else falls back to the current selection (#1).
+function applyPlay(play, target) {
+  const t = target || currentTarget();
+  if (!t) return;
+  const team = t.team;
+  const pIdx = t.pIdx;
+  const innIdx = t.innIdx;
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   const inn = getInnState(team, innIdx);
   if (inn.outs >= 3 || ab.play) return;
 
+  // Reject before the at-bat is touched — no play, no result pitch.
+  const reject = playEntryReject(team, innIdx, play);
+  if (reject) { showPlayReject(reject); return; }
+
   // Save undo snapshot
   const prevTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-  const prevAb = JSON.parse(JSON.stringify(ab));
-  const prevInn = JSON.parse(JSON.stringify(inn));
-  const prevRunners = {};
-  gameState.teams[team].players.forEach((pl, i) => { prevRunners[i] = JSON.parse(JSON.stringify(pl.atBats[innIdx])); });
-  const snapshot = { team, pIdx, innIdx, prevAb, prevInn, prevRunners, prevTab };
+  const prev = captureInning(team, innIdx);
+  const snapshot = { team, pIdx, innIdx, prev, prevTab };
 
   ab.play = play;
   // Every at-bat ends on a pitch — add the final pitch that produced the result
@@ -530,6 +1339,26 @@ function applyPlay(play) {
   ab.pitcher = getEffectivePitcher(team, innIdx);
   if (ab.rbi === undefined) ab.rbi = 0;
 
+  applyPlayEffects(team, pIdx, innIdx, play, prev, function() {
+    finishPlay(team, pIdx, innIdx, snapshot);
+  });
+}
+
+/* -------------------------------------------- what a play does to the card ---
+   Where the batter ends up, which outs it makes, where it sends the runners —
+   for a play whose code is already written on the cell. `prev` is the inning as
+   it stood before the play, for the RBI count; `done` runs once everything has
+   resolved, including any popup, so the caller decides what "finished" means.
+
+   Split out of `applyPlay` because `editPlayType` has to do exactly this and used
+   to do a fraction of it: it adjusted the batter's own bases and outs and never
+   asked where the runners went (#22). Rewriting a single as a double left them
+   standing where the single had put them. */
+function applyPlayEffects(team, pIdx, innIdx, play, prev, done) {
+  const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
+  const inn = getInnState(team, innIdx);
+  const src = { pIdx, col: innIdx };
+
   // Plays that have their own outcome popup (DP/FC/TP) — handled below
   const hasOwnPopup = play === 'DP' || /^DP /.test(play) || play === 'FC' || /^FC /.test(play) || play === 'TP' || /^TP /.test(play);
   // HR always scores everyone automatically — no popup needed
@@ -545,22 +1374,30 @@ function applyPlay(play) {
 
     // Walks: auto-advance forced runners, no popup
     if (isWalk) {
-      advanceForcedRunners(team, innIdx, play);
-      ab.bases[0] = true; inn.bases[0] = pIdx;
-      ab.rbi = countRunnersScored(team, innIdx, prevRunners);
-      finishPlay(team, pIdx, innIdx, snapshot);
+      advanceForcedRunners(team, innIdx, play, src);
+      ab.bases[0] = true; setRunnerOn(inn, 0, runnerRef(pIdx, innIdx));
+      ab.rbi = countRunnersScored(team, prev);
+      done();
       return;
     }
 
-    // K+WP: batter reaches 1st, show runner popup for wild pitch advancement
+    // K+WP: batter reaches 1st, show runner popup for wild pitch advancement.
+    // He is placed after the popup resolves, like every other batter who reaches:
+    // placing him first overwrote a runner standing on 1st, and that runner was
+    // then gone from the popup's own list of runners to advance (#4).
     if (isKWP) {
-      ab.bases[0] = true; inn.bases[0] = pIdx;
       const batterLbl = getBatterLabel(team, pIdx, innIdx);
       showRunnerPopup(team, innIdx, 1, function(choices) {
-        applyChosenAdvancements(team, innIdx, choices, batterLbl);
-        ab.rbi = countRunnersScored(team, innIdx, prevRunners);
-        finishPlay(team, pIdx, innIdx, snapshot);
-      });
+        applyChosenAdvancements(team, innIdx, choices, batterLbl, src);
+        const bDest = choices.batterDest !== undefined ? choices.batterDest : 0;
+        for (let s = 0; s <= bDest; s++) ab.bases[s] = true;
+        setRunnerOn(inn, bDest, runnerRef(pIdx, innIdx));
+        // Rule 9.04(b): a run that scores on a wild pitch is nobody's RBI — and on
+        // a K+WP the batter struck out, so every run on the play came in on the
+        // pitch, not off the bat (#12).
+        ab.rbi = 0;
+        done();
+      }, { batterTakesBase: true, batterPIdx: pIdx });
       return;
     }
 
@@ -568,55 +1405,52 @@ function applyPlay(play) {
     const defaultAdv = play === '3B' ? 3 : play === '2B' ? 2 : (isHitOrError || isSac) ? 1 : 0;
     const batterLbl = getBatterLabel(team, pIdx, innIdx);
     showRunnerPopup(team, innIdx, defaultAdv, function(choices) {
-      applyChosenAdvancements(team, innIdx, choices, batterLbl);
+      applyChosenAdvancements(team, innIdx, choices, batterLbl, src);
       // Place batter based on play type
       if (isHitOrError) {
         if (choices.batterDest !== undefined && choices.batterDest > 0) {
           for (let s = 0; s <= choices.batterDest; s++) ab.bases[s] = true;
-          if (choices.batterDest < 3) inn.bases[choices.batterDest] = pIdx;
+          setRunnerOn(inn, choices.batterDest, runnerRef(pIdx, innIdx));
+          // `placeBatter` is the only other setter, and this branch skips it — so a
+          // batter who took an extra base on the error used to count as having
+          // reached cleanly, and his run as earned (#11).
+          if (isErrorPlay(play)) ab.reachedOnError = true;
         } else {
-          placeBatter(ab, inn, play, pIdx);
+          placeBatter(ab, inn, play, pIdx, innIdx);
         }
-      } else if (isSac) {
-        inn.outs++; ab.out = inn.outs; ab.outsRecorded = 1;
-      } else if (play === 'IF') {
-        inn.outs++; ab.out = inn.outs; ab.outsRecorded = 1;
-      } else if (isOutPlay(play)) {
-        inn.outs++; ab.out = inn.outs; ab.outsRecorded = 1;
+      } else if (isSac || play === 'IF' || isOutPlay(play)) {
+        recordBatterOut(team, innIdx, pIdx, ab);
       }
       // RBI
       if (!isErrorPlay(play)) {
-        ab.rbi = countRunnersScored(team, innIdx, prevRunners);
+        ab.rbi = countRunnersScored(team, prev);
       }
-      finishPlay(team, pIdx, innIdx, snapshot);
-    });
+      done();
+    }, { batterTakesBase: isHitOrError, batterPIdx: pIdx });
     return;
   }
 
   // No runners or plays with own popup — handle directly
   const isHitOrError = ['1B','2B','3B'].includes(play) || isErrorPlay(play);
   if (isHitOrError) {
-    placeBatter(ab, inn, play, pIdx);
+    placeBatter(ab, inn, play, pIdx, innIdx);
   } else if (isHR) {
-    const runnersOn = [inn.bases[0], inn.bases[1], inn.bases[2]].filter(b => b !== null).length;
+    const runnersOn = inn.bases.filter(b => b !== null).length;
     const lbl = getBatterLabel(team, pIdx, innIdx);
-    advanceRunners(team, innIdx, 4, lbl);
+    advanceRunners(team, innIdx, 4, lbl, src);
     ab.bases = [true, true, true, true];
     ab.rbi = runnersOn + 1;
   } else if (play === 'BB' || play === 'HBP' || play === 'IBB' || play === 'CI') {
-    ab.bases[0] = true; inn.bases[0] = pIdx;
-  } else if (play === 'SF') {
-    inn.outs++; ab.out = inn.outs; ab.outsRecorded = 1;
-  } else if (play === 'SH' || play === 'SAC') {
-    inn.outs++; ab.out = inn.outs; ab.outsRecorded = 1;
+    ab.bases[0] = true; setRunnerOn(inn, 0, runnerRef(pIdx, innIdx));
+  } else if (play === 'SF' || play === 'SH' || play === 'SAC') {
+    recordBatterOut(team, innIdx, pIdx, ab);
   } else if (play === 'TP' || /^TP /.test(play)) {
-    // Triple play requires at least 2 runners on base
-    const rCount = [inn.bases[0], inn.bases[1], inn.bases[2]].filter(b => b !== null).length;
-    if (rCount < 2) { ab.play = ''; return; }
+    // Runner count already checked by playEntryReject, before any pitch was
+    // pushed (#27).
     showRunnerOutcomePopup(team, innIdx, play, true, function(outcomes) {
       applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes);
-      ab.rbi = countRunnersScored(team, innIdx, prevRunners);
-      finishPlay(team, pIdx, innIdx, snapshot);
+      ab.rbi = countRunnersScored(team, prev);
+      done();
     });
     return;
   } else if (play === 'DP' || /^DP /.test(play) || play === 'FC' || /^FC /.test(play)) {
@@ -624,65 +1458,80 @@ function applyPlay(play) {
     if (hasRunnersOnBase(team, innIdx)) {
       showRunnerOutcomePopup(team, innIdx, play, isDP, function(outcomes) {
         applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes);
-        ab.rbi = countRunnersScored(team, innIdx, prevRunners);
-        finishPlay(team, pIdx, innIdx, snapshot);
+        // Rule 9.04(b)(1): no RBI when the batter grounds into a double play, even
+        // if a run crosses the plate. A fielder's choice is not covered by the rule
+        // — the run there is his (#12).
+        ab.rbi = isDP ? 0 : countRunnersScored(team, prev);
+        done();
       });
       return;
     }
-    if (isDP) { inn.outs = Math.min(inn.outs + 2, 3); ab.out = inn.outs - 1 || 1; ab.outsRecorded = 2; }
-    else { inn.outs++; ab.out = inn.outs; ab.outsRecorded = 1; }
+    if (isDP) {
+      // A double play with nobody on base is not a real play, but the entry is
+      // reachable, so record it honestly: the batter plus one out that has no
+      // runner to hang it on.
+      const n1 = recordBatterOut(team, innIdx, pIdx, ab);
+      const n2 = recordOut(team, innIdx, { kind: 'runner', pIdx: null, col: innIdx, srcP: pIdx, srcCol: innIdx });
+      ab.outsRecorded = (n1 ? 1 : 0) + (n2 ? 1 : 0);
+      if (n1 && n2) ab.dpOuts = [n1, n2];
+    } else {
+      recordBatterOut(team, innIdx, pIdx, ab);
+    }
   } else if (play === 'K+WP') {
-    ab.bases[0] = true; inn.bases[0] = pIdx; ab.outsRecorded = 0;
-  } else if (play === 'IF') {
-    // Infield fly: automatic out
-    inn.outs++; ab.out = inn.outs; ab.outsRecorded = 1;
-  } else if (isOutPlay(play)) {
-    inn.outs++; ab.out = inn.outs; ab.outsRecorded = 1;
+    ab.bases[0] = true; setRunnerOn(inn, 0, runnerRef(pIdx, innIdx)); ab.outsRecorded = 0;
+  } else if (play === 'IF' || isOutPlay(play)) {
+    // Infield fly is an automatic out
+    recordBatterOut(team, innIdx, pIdx, ab);
   }
-  finishPlay(team, pIdx, innIdx, snapshot);
+  done();
 }
 
-function placeBatter(ab, inn, play, pIdx) {
-  if (play === '1B' || play === 'E' || isErrorPlay(play)) { ab.bases[0] = true; inn.bases[0] = pIdx; if (isErrorPlay(play)) ab.reachedOnError = true; }
-  else if (play === '2B') { ab.bases[0] = true; ab.bases[1] = true; inn.bases[1] = pIdx; }
-  else if (play === '3B') { ab.bases[0] = true; ab.bases[1] = true; ab.bases[2] = true; inn.bases[2] = pIdx; }
+function placeBatter(ab, inn, play, pIdx, col) {
+  // `setRunnerOn` is the #4 backstop: the runner popup refuses a colliding
+  // destination up front, so a refusal here means the state came from an import or
+  // a hand edit. Mark the batter's at-bat either way, but don't erase the runner
+  // already standing on that base.
+  const runner = runnerRef(pIdx, col);
+  if (play === '1B' || play === 'E' || isErrorPlay(play)) { ab.bases[0] = true; setRunnerOn(inn, 0, runner); if (isErrorPlay(play)) ab.reachedOnError = true; }
+  else if (play === '2B') { ab.bases[0] = true; ab.bases[1] = true; setRunnerOn(inn, 1, runner); }
+  else if (play === '3B') { ab.bases[0] = true; ab.bases[1] = true; ab.bases[2] = true; setRunnerOn(inn, 2, runner); }
 }
 
-function applyChosenAdvancements(team, innIdx, choices, reason) {
+// `src` is the plate appearance these advancements came out of, so a runner
+// thrown out on the play is logged against it and comes off again with it.
+function applyChosenAdvancements(team, innIdx, choices, reason, src) {
   const inn = getInnState(team, innIdx);
-  const players = gameState.teams[team].players;
   const rsn = reason || '';
   [2, 1, 0].forEach(fromBase => {
     if (inn.bases[fromBase] === null) return;
     const dest = choices[fromBase];
     if (dest === undefined) return;
     if (dest === fromBase) return;
-    const r = inn.bases[fromBase];
-    const rc = getRunnerCol(team, r, innIdx);
-    const rab = players[r].atBats[rc];
+    const rn = inn.bases[fromBase];
+    const rab = runnerAtBat(team, rn);
+    if (!rab) return;
     if (dest < 0) {
       const outAt = Math.abs(dest);
-      for (let step = fromBase + 1; step < outAt; step++) {
-        rab.bases[step] = true;
-        setAdvReason(rab, step, rsn);
-      }
+      for (let step = fromBase + 1; step < outAt; step++) markAdvance(rab, step, rsn, src);
       setAdvReason(rab, outAt, rsn);
-      if (inn.outs < 3) {
-        inn.outs++;
-        rab.out = inn.outs;
+      const n = recordOut(team, innIdx, {
+        kind: 'runner', pIdx: rn.p, col: rn.col,
+        srcP: src ? src.pIdx : rn.p, srcCol: src ? src.col : rn.col
+      });
+      if (n) {
+        rab.out = n;
         rab.outOnBase = outAt;
       }
-      inn.bases[fromBase] = null;
-      renderDiamond(team, r, rc);
-      renderOut(team, r, rc);
+      clearRunner(inn, fromBase);
+      renderDiamond(team, rn.p, rn.col);
+      renderOut(team, rn.p, rn.col);
     } else {
-      for (let step = fromBase + 1; step <= dest; step++) {
-        rab.bases[step] = true;
-        setAdvReason(rab, step, rsn);
-      }
-      inn.bases[fromBase] = null;
-      if (dest < 3) inn.bases[dest] = r;
-      renderDiamond(team, r, rc);
+      // #4 backstop: the popup validates the whole set of destinations before we
+      // get here, so a refusal means imported or hand-edited state. The runner
+      // keeps the base he is on rather than erasing whoever is on `dest`.
+      if (!moveRunnerTo(inn, fromBase, dest, rn)) return;
+      for (let step = fromBase + 1; step <= dest; step++) markAdvance(rab, step, rsn, src);
+      renderDiamond(team, rn.p, rn.col);
     }
   });
 }
@@ -765,9 +1614,9 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
   const runners = [];
   for (let b = 2; b >= 0; b--) {
     if (inn.bases[b] === null) continue;
-    const r = inn.bases[b];
-    const name = getActivePlayerName(team, r, innIdx);
-    runners.push({ base: b, pIdx: r, name, fromLabel: baseNames[b] });
+    const rn = inn.bases[b];
+    const name = getActivePlayerName(team, rn.p, rn.col);
+    runners.push({ base: b, pIdx: rn.p, name, fromLabel: baseNames[b] });
   }
 
   let popup = document.getElementById('outcome-popup');
@@ -786,7 +1635,7 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
 
   runners.forEach(r => {
     html += `<div class="oc-row" data-base="${r.base}" style="margin-bottom:8px;padding:6px;background:var(--cream);border-radius:4px">`;
-    html += `<div style="font-size:11px;font-weight:600;margin-bottom:4px">${r.name} <span style="color:var(--text-light)">(on ${r.fromLabel})</span></div>`;
+    html += `<div style="font-size:11px;font-weight:600;margin-bottom:4px">${escapeHtml(r.name)} <span style="color:var(--text-light)">(on ${r.fromLabel})</span></div>`;
     html += `<div style="display:flex;gap:4px;flex-wrap:wrap">`;
     // Hold option — keep the runner on their current base (e.g. runner on 3rd during a DP)
     html += `<button class="oc-btn" data-base="${r.base}" data-action="safe" data-dest="${r.base}" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid #ccc;border-radius:3px;background:#fff;color:#555;cursor:pointer;font-family:var(--mono)">Hold ${r.fromLabel}</button>`;
@@ -819,10 +1668,45 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
   popup.innerHTML = html;
   popup.style.display = 'block';
 
+  // Every runner still on a base after the play, plus the batter if he ends up on
+  // one, as `runnerOrderConflicts` wants them. A runner who is out drops out of the
+  // ordering entirely — the base he was heading for is free for the man behind him.
+  function ocParties() {
+    const list = runners.map(r => ({
+      key: r.base,
+      from: r.base,
+      dest: outcomes[r.base] && outcomes[r.base].action === 'safe' ? outcomes[r.base].dest : undefined
+    }));
+    list.push({
+      key: 'batter',
+      from: -1,
+      dest: outcomes.batter && outcomes.batter.action === 'safe'
+        ? (outcomes.batter.dest !== undefined ? outcomes.batter.dest : 0)
+        : undefined
+    });
+    return list;
+  }
+
+  function refreshOutcomeAvailability() {
+    popup.querySelectorAll('.oc-btn').forEach(btn => {
+      if (btn.dataset.action !== 'safe') return;   // an out never collides
+      const key = btn.dataset.base === 'batter' ? 'batter' : parseInt(btn.dataset.base);
+      const dest = btn.dataset.dest ? parseInt(btn.dataset.dest) : 0;
+      const hypothetical = ocParties().map(p => (p.key === key ? { key: p.key, from: p.from, dest } : p));
+      setOptionBlocked(btn, runnerOrderConflicts(hypothetical).has(key));
+    });
+  }
+
+  function flashOcRow(key) {
+    const row = popup.querySelector('.oc-row[data-base="' + key + '"]');
+    if (row) { row.style.outline = '2px solid var(--accent)'; setTimeout(() => row.style.outline = '', 800); }
+  }
+
   // Button handlers
   const maxOuts = /^TP/.test(play) ? 3 : /^DP/.test(play) ? 2 : 3;
   popup.querySelectorAll('.oc-btn').forEach(btn => {
     btn.onclick = function() {
+      if (isOptionBlocked(this)) return;
       const base = this.dataset.base;
       const action = this.dataset.action;
       const dest = this.dataset.dest ? parseInt(this.dataset.dest) : null;
@@ -868,17 +1752,29 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
         b.style.background = isActive ? (isOut ? '#fce4ec' : '#e8f5e9') : '#fff';
         b.style.color = isActive ? (isOut ? 'var(--accent)' : '#2e7d32') : '#555';
       });
+      refreshOutcomeAvailability();   // last: it repaints whatever it blocks
     };
   });
 
+  refreshOutcomeAvailability();
+
   document.getElementById('oc-confirm').onclick = function() {
+    // The offered options are already constrained, but the defaults were never
+    // clicked and the out-count auto-revert above can change a row on its own, so
+    // check the whole set before it reaches state (#4).
+    const parties = ocParties();
+    const bad = runnerOrderConflicts(parties);
+    if (bad.size) {
+      bad.forEach(flashOcRow);
+      showPlayReject(runnerOrderMessage(parties));
+      return;
+    }
     popup.style.display = 'none';
     callback(outcomes);
   };
 }
 
 function applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes) {
-  const players = gameState.teams[team].players;
   const playLabel = play.replace(/^(DP|FC|TP)\s*/, '') || play;
 
   // Process runners from 3rd → 1st, tracking which were thrown out on THIS play
@@ -886,54 +1782,54 @@ function applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes) {
   [2, 1, 0].forEach(fromBase => {
     if (!outcomes[fromBase]) return;
     const oc = outcomes[fromBase];
-    const r = inn.bases[fromBase];
-    if (r === null) return;
-    const rc = getRunnerCol(team, r, innIdx);
-    const rab = players[r].atBats[rc];
+    const rn = inn.bases[fromBase];
+    if (rn === null) return;
+    const rab = runnerAtBat(team, rn);
+    if (!rab) return;
 
-    if (oc.action === 'out' && inn.outs < 3) {
-      inn.outs++;
-      rab.out = inn.outs;
+    if (oc.action === 'out') {
+      const n = recordOut(team, innIdx, { kind: 'runner', pIdx: rn.p, col: rn.col, srcP: pIdx, srcCol: innIdx });
+      if (!n) return;
+      rab.out = n;
       rab.outOnBase = oc.dest;
       setAdvReason(rab, oc.dest, play.substring(0, 2).trim());
-      renderDiamond(team, r, rc);
-      renderOut(team, r, rc);
-      inn.bases[fromBase] = null;
-      runnersOutThisPlay.push(r);
+      renderDiamond(team, rn.p, rn.col);
+      renderOut(team, rn.p, rn.col);
+      clearRunner(inn, fromBase);
+      runnersOutThisPlay.push(rn);
     } else if (oc.action === 'safe') {
+      // #4 backstop — see applyChosenAdvancements.
+      if (!moveRunnerTo(inn, fromBase, oc.dest, rn)) return;
       for (let step = fromBase + 1; step <= oc.dest; step++) {
-        rab.bases[step] = true;
-        setAdvReason(rab, step, playLabel);
+        markAdvance(rab, step, playLabel, { pIdx, col: innIdx });
       }
-      inn.bases[fromBase] = null;
-      if (oc.dest < 3) inn.bases[oc.dest] = r;
-      renderDiamond(team, r, rc);
+      renderDiamond(team, rn.p, rn.col);
     }
   });
 
   // Collect out numbers only from runners thrown out on THIS play
   let totalOuts = 0;
   const dpOutNums = [];
-  for (const r of runnersOutThisPlay) {
-    const rab = players[r].atBats[getRunnerCol(team, r, innIdx)];
-    if (rab.out > 0) {
+  for (const rn of runnersOutThisPlay) {
+    const rab = runnerAtBat(team, rn);
+    if (rab && rab.out > 0) {
       dpOutNums.push(rab.out);
       totalOuts++;
     }
   }
 
   // Batter outcome
-  if (outcomes.batter.action === 'out' && inn.outs < 3) {
-    inn.outs++;
-    ab.out = inn.outs;
-    dpOutNums.push(ab.out);
-    totalOuts++;
-  } else if (outcomes.batter.action === 'out') {
-    // Already at 3 outs
+  if (outcomes.batter.action === 'out') {
+    const n = recordOut(team, innIdx, { kind: 'batter', pIdx, col: innIdx });
+    if (n) {
+      ab.out = n;
+      dpOutNums.push(n);
+      totalOuts++;
+    }
   } else {
     const batterDest = outcomes.batter.dest !== undefined ? outcomes.batter.dest : 0;
     for (let s = 0; s <= batterDest; s++) ab.bases[s] = true;
-    if (batterDest < 3) inn.bases[batterDest] = pIdx;
+    setRunnerOn(inn, batterDest, runnerRef(pIdx, innIdx));
   }
   ab.outsRecorded = totalOuts;
   if (dpOutNums.length >= 2) {
@@ -946,77 +1842,116 @@ function applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes) {
   renderPlayText(team, pIdx, innIdx);
 }
 
+// The one place a delayed transition is scheduled. Every scheduler used to write
+// `pendingTransitionTimer` itself — and the bulk caught-stealing path didn't write
+// it at all — so undo's clearTimeout had nothing to cancel, and a second timer
+// could be armed on top of a live one (#20). Cancel-before-set, one handle.
+function scheduleTransition(fn, delay) {
+  if (pendingTransitionTimer) clearTimeout(pendingTransitionTimer);
+  pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; fn(); }, delay);
+}
+
+// Does the half-inning that just ended (or the run that just scored) end the
+// game? Returns true when the summary has been scheduled, so the caller knows not
+// to also schedule the next half-inning.
+//
+// Lives out here because the 3rd out isn't always a batter: a caught stealing or
+// a pickoff ends the inning too, and those paths never reached finishPlay, so a
+// game ending on one just rolled on into the bottom of the 9th (#5).
+function checkGameOver(team, innIdx) {
+  const inn = getInnState(team, innIdx);
+  const realInn = getRealInning(team, innIdx);
+  const vR = parseInt(document.querySelector('input[data-ls="visiting"][data-stat="r"]')?.value) || 0;
+  const hR = parseInt(document.querySelector('input[data-ls="home"][data-stat="r"]')?.value) || 0;
+  // The bottom half ends the instant the home team goes ahead — a walk-off doesn't
+  // wait for a 3rd out, and it doesn't care whether the run came in on a hit or on
+  // a wild pitch. Otherwise the half has to be complete and the game not tied.
+  const isGameOver = realInn >= 8 && (team === 'home'
+    ? (hR > vR || (inn.outs >= 3 && vR !== hR))
+    : (inn.outs >= 3 && hR > vR));
+  if (!isGameOver || gameOverShown) return false;
+  gameOverShown = true;
+  scheduleTransition(showGameSummary, 1000);
+  return true;
+}
+
+// Everything that has to happen once the inning state changes, whatever changed
+// it. `finishPlay` did all of this inline and the four runner-event paths (SB, CS,
+// pickoff, and the bulk WP/PB/BK/SB/CS handler) each re-implemented a different
+// subset — which is how a caught stealing could end the game with no summary (#5),
+// how a stolen base could put a run on a finished inning's line (#3), how the 3rd
+// out made on the bases got a transition timer undo couldn't reach (#20), and why
+// an error on a steal never refreshed the pitcher's ER-review badge (#13).
+//
+// opts.advanceBatter — only a completed plate appearance moves the selection on.
+// A steal or a wild pitch leaves the same batter standing at the plate.
+function afterStateChange(team, innIdx, opts) {
+  // Outs, bases, runs and LOB all come back out of the records here, so a play
+  // that patched them inconsistently is corrected before anything reads them.
+  recomputeInning(team, getRealInning(team, innIdx));
+  const inn = getInnState(team, innIdx);
+  const endsHalfInning = inn.outs >= 3;
+  updatePlayerStats(team);
+  updatePitcherStats(team);   // also recomputes the provisional-ER badges
+  if (endsHalfInning) {
+    if (!checkGameOver(team, innIdx)) {
+      scheduleTransition(() => switchToNextHalf(team, innIdx), 600);
+    }
+  } else {
+    if (opts && opts.advanceBatter) selectNextBatter(team, innIdx);
+    checkGameOver(team, innIdx);   // walk-off: the run ends it, not the out
+  }
+  updateSituation();
+  autoSave();
+}
+
 function finishPlay(team, pIdx, innIdx, snapshot) {
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   const inn = getInnState(team, innIdx);
+  // The last completed plate appearance of this half-inning: markNextInningLeadoff
+  // works off this instead of hunting for an at-bat stamped `out === 3`, which
+  // isn't there when the inning ends on a double play, a caught stealing or a
+  // pickoff.
+  inn.lastPA = { pIdx, col: innIdx };
+  // Chronological order of plays, for pitcher decisions (Phase 8b). Only stamped
+  // once, so re-editing a play doesn't move it later in the game.
+  if (!ab.seq) {
+    gameState.playSeq = (gameState.playSeq || 0) + 1;
+    ab.seq = gameState.playSeq;
+  }
   renderDiamond(team, pIdx, innIdx);
   renderOut(team, pIdx, innIdx);
   renderPlayText(team, pIdx, innIdx);
   renderRBI(team, pIdx, innIdx);
   renderPitchCount(team, pIdx, innIdx);
-  updateInningRuns(team, innIdx);
-  updatePlayerStats(team);
-  updatePitcherStats(team);
   redoHistory.length = 0;
   playHistory.push(snapshot);
-
-  // Play-by-play log
-  addPlayLogEntry(team, pIdx, innIdx);
 
   // Show spray chart for hits
   if (isHitPlay(ab.play) || isErrorPlay(ab.play)) {
     showSprayChart(team, pIdx, innIdx);
   }
 
-  // LOB tracking at end of half-inning
-  if (inn.outs >= 3) {
-    let lob = 0;
-    if (inn.bases[0] !== null) lob++;
-    if (inn.bases[1] !== null) lob++;
-    if (inn.bases[2] !== null) lob++;
-    inn.lob = lob;
-    updateLinescoreTotals(team);
-    // Check for game over
-    const realInn = getRealInning(team, innIdx);
-    const vR = parseInt(document.querySelector('input[data-ls="visiting"][data-stat="r"]')?.value) || 0;
-    const hR = parseInt(document.querySelector('input[data-ls="home"][data-stat="r"]')?.value) || 0;
-    const isGameOver = (team === 'home' && realInn >= 8 && inn.outs >= 3 && vR !== hR) ||
-                       (team === 'visiting' && realInn >= 8 && inn.outs >= 3 && hR > vR);
-    if (isGameOver && !gameOverShown) {
-      gameOverShown = true;
-      pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; showGameSummary(); }, 1000);
-    } else {
-      pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; switchToNextHalf(team, innIdx); }, 600);
-    }
-  } else {
-    selectNextBatter(team, innIdx);
-    // Walk-off check: home team takes lead mid-inning in bottom 9+
-    if (team === 'home') {
-      const realInn = getRealInning(team, innIdx);
-      const vR = parseInt(document.querySelector('input[data-ls="visiting"][data-stat="r"]')?.value) || 0;
-      const hR = parseInt(document.querySelector('input[data-ls="home"][data-stat="r"]')?.value) || 0;
-      if (realInn >= 8 && hR > vR && !gameOverShown) {
-        gameOverShown = true;
-        pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; showGameSummary(); }, 1000);
-      }
-    }
-  }
-  updateSituation();
-  autoSave();
+  afterStateChange(team, innIdx, { advanceBatter: true });
 }
 
 /* Runner advancement popup */
-function showRunnerPopup(team, innIdx, defaultAdv, callback) {
+// opts.batterTakesBase — whether the batter ends this play standing on a base
+// (a hit or error, not a sacrifice or an out). Needed to catch the batter landing
+// on a base a runner is holding (#4).
+// opts.batterPIdx — the batter this popup belongs to, so the row is labelled from
+// the captured target rather than whatever cell happens to be selected (#1).
+function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
   const inn = getInnState(team, innIdx);
   const baseNames = ['1st','2nd','3rd','Home'];
   const runners = [];
 
   for (let b = 2; b >= 0; b--) {
     if (inn.bases[b] === null) continue;
-    const r = inn.bases[b];
-    const name = getActivePlayerName(team, r, innIdx);
+    const rn = inn.bases[b];
+    const name = getActivePlayerName(team, rn.p, rn.col);
     const minDest = b; // always allow hold
-    runners.push({ base: b, pIdx: r, name, fromLabel: baseNames[b], minDest, defaultDest: undefined });
+    runners.push({ base: b, pIdx: rn.p, name, fromLabel: baseNames[b], minDest, defaultDest: undefined });
   }
 
   // Never skip — always ask
@@ -1039,7 +1974,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback) {
   runners.forEach(r => {
     choices[r.base] = undefined;
     html += `<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">`;
-    html += `<span style="font-size:11px;font-weight:600;min-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.name}</span>`;
+    html += `<span style="font-size:11px;font-weight:600;min-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(r.name)}</span>`;
     html += `<span style="font-size:10px;color:#999;min-width:24px">${r.fromLabel}→</span>`;
     html += `<div style="display:flex;gap:3px;flex-wrap:wrap">`;
     for (let d = r.minDest; d <= 3; d++) {
@@ -1056,9 +1991,11 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback) {
   const batterDefaultBase = defaultAdv > 0 && defaultAdv <= 3 ? defaultAdv - 1 : -1;
   if (batterDefaultBase >= 0 && batterDefaultBase < 3) {
     choices.batterDest = undefined;
-    const batterName = selectedCell ? getActivePlayerName(selectedCell.dataset.team, parseInt(selectedCell.dataset.p), parseInt(selectedCell.dataset.inn)) : 'Batter';
+    const batterName = (opts && opts.batterPIdx !== undefined)
+      ? getActivePlayerName(team, opts.batterPIdx, innIdx)
+      : (selectedCell ? getActivePlayerName(selectedCell.dataset.team, parseInt(selectedCell.dataset.p), parseInt(selectedCell.dataset.inn)) : 'Batter');
     html += `<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid #ddd;padding-top:8px">`;
-    html += `<span style="font-size:11px;font-weight:600;min-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${batterName}</span>`;
+    html += `<span style="font-size:11px;font-weight:600;min-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(batterName)}</span>`;
     html += `<span style="font-size:10px;color:#999;min-width:24px">Batter→</span>`;
     html += `<div style="display:flex;gap:3px;flex-wrap:wrap">`;
     for (let d = batterDefaultBase; d <= 2; d++) {
@@ -1071,9 +2008,42 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback) {
   popup.innerHTML = html;
   popup.style.display = 'block';
 
+  // Where everyone ends up, as `runnerOrderConflicts` wants it. A runner thrown out
+  // (negative dest) leaves the ordering: the base he was heading for is free for the
+  // man behind him. The batter counts as starting from behind 1st.
+  const inPopup = new Set(runners.map(r => r.pIdx));
+  function rpParties(assume) {
+    const list = runners.map(r => ({
+      key: r.base,
+      from: r.base,
+      dest: choices[r.base] !== undefined && choices[r.base] >= 0 ? choices[r.base] : undefined
+    }));
+    // A runner this play already placed and who isn't up for a decision here holds
+    // his base — nobody in the popup may be sent to it.
+    for (let b = 0; b < 3; b++) {
+      if (inn.bases[b] !== null && !inPopup.has(inn.bases[b].p)) list.push({ key: 'held' + b, from: b, dest: b });
+    }
+    if (opts && opts.batterTakesBase) {
+      const bDest = choices.batterDest !== undefined ? choices.batterDest : batterDefaultBase;
+      list.push({ key: 'batter', from: -1, dest: bDest >= 0 ? bDest : undefined });
+    }
+    if (!assume) return list;
+    return list.map(p => (p.key === assume.key ? { key: p.key, from: p.from, dest: assume.dest } : p));
+  }
+
+  function refreshRunnerAvailability() {
+    popup.querySelectorAll('.rp-btn').forEach(btn => {
+      const dest = parseInt(btn.dataset.dest);
+      if (dest < 0) return;   // "Out at" never collides with anyone
+      const key = btn.dataset.base === 'batter' ? 'batter' : parseInt(btn.dataset.base);
+      setOptionBlocked(btn, runnerOrderConflicts(rpParties({ key, dest })).has(key));
+    });
+  }
+
   // Button click handlers
   popup.querySelectorAll('.rp-btn').forEach(btn => {
     btn.onclick = function() {
+      if (isOptionBlocked(this)) return;
       const baseKey = this.dataset.base;
       const dest = parseInt(this.dataset.dest);
       if (baseKey === 'batter') {
@@ -1089,8 +2059,16 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback) {
         b.style.background = isActive ? (isOut ? '#fce4ec' : '#e3f2fd') : '#fff';
         b.style.color = isActive ? (isOut ? 'var(--accent)' : '#1565c0') : (isOut ? 'var(--accent)' : '#555');
       });
+      refreshRunnerAvailability();   // last: it repaints whatever it blocks
     };
   });
+
+  refreshRunnerAvailability();
+
+  function flashRow(baseKey) {
+    const row = popup.querySelector(`.rp-btn[data-base="${baseKey}"]`)?.closest('div')?.parentElement;
+    if (row) { row.style.outline = '2px solid var(--accent)'; setTimeout(() => row.style.outline = '', 800); }
+  }
 
   document.getElementById('rp-confirm').onclick = function() {
     // Check all runners have a selection
@@ -1098,13 +2076,25 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback) {
     if (!allSelected) {
       // Flash unselected rows
       runners.forEach(r => {
-        if (choices[r.base] === undefined) {
-          const row = popup.querySelector(`.rp-btn[data-base="${r.base}"]`)?.closest('div')?.parentElement;
-          if (row) { row.style.outline = '2px solid var(--accent)'; setTimeout(() => row.style.outline = '', 800); }
-        }
+        if (choices[r.base] === undefined) flashRow(r.base);
       });
       return;
     }
+
+    // #4: refuse a set of destinations that would put two men on one base, or send
+    // a trailing runner past a lead runner still standing on one. The old code took
+    // the last write and the overwritten runner vanished off the bases — still
+    // marked up on his at-bat, but unable to score. The colliding options are
+    // greyed out as choices are made; this catches the rest, including the batter
+    // row left on its default.
+    const parties = rpParties();
+    const bad = runnerOrderConflicts(parties);
+    if (bad.size) {
+      bad.forEach(k => flashRow(k));
+      showPlayReject(runnerOrderMessage(parties));
+      return;
+    }
+
     popup.style.display = 'none';
     callback(choices);
   };
@@ -1122,10 +2112,6 @@ function updateInningRuns(team, innIdx) {
       const ab = player.atBats[col];
       if (ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null) runs++;
     }
-    for (const oa of getOverflowForInning(team, col)) {
-      const ab = oa.atBat;
-      if (ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null) runs++;
-    }
   }
   const inp = document.querySelector(`input[data-ls="${team}"][data-inn="${realInning}"]`);
   if (inp) { inp.value = runs || ''; gameState.linescore[team].innings[realInning] = runs ? String(runs) : ''; }
@@ -1139,9 +2125,6 @@ function updateLinescoreHits(team) {
     for (const ab of player.atBats) {
       if (isHitPlay(ab.play)) totalHits++;
     }
-  }
-  for (const oa of (gameState.overflowAtBats || []).filter(o => o.team === team)) {
-    if (isHitPlay(oa.atBat.play)) totalHits++;
   }
   const hInp = document.querySelector(`input[data-ls="${team}"][data-stat="h"]`);
   if (hInp) hInp.value = totalHits || '';
@@ -1191,6 +2174,7 @@ function overflowToNextColumn(team, innIdx) {
 
   // Update column headers
   updateColumnHeaders(team);
+  refreshCellAria(team);
 
   // Select the next batter in the new column (wrap around from where we left off)
   const sameTeam = selectedCell && selectedCell.dataset.team === team;
@@ -1231,35 +2215,49 @@ function switchToNextHalf(team, innIdx) {
   }
 }
 
+// The next inning leads off with the batter after the last completed plate
+// appearance. That rule is right however the half-inning ended — on a strikeout,
+// on the back end of a double play, on a caught stealing or on a pickoff. The old
+// version searched for an at-bat stamped `out === 3` and found nothing in the
+// last three of those, so the order silently restarted at the top (#7).
 function markNextInningLeadoff(team, innIdx) {
   const players = gameState.teams[team].players;
-
-  // Find the batter who made the 3rd out — search current column AND overflow columns
   const realInning = getRealInning(team, innIdx);
   const cols = getColumnsForInning(team, realInning);
-  let thirdOutPos = -1;
-  let thirdOutCol = innIdx;
-  for (const col of cols) {
-    for (let pos = 0; pos < POSITIONS; pos++) {
-      const p = pos * ROWS_PER_POS;
-      if (players[p].atBats[col].out === 3) { thirdOutPos = pos; thirdOutCol = col; break; }
-    }
-    if (thirdOutPos !== -1) break;
-  }
-  if (thirdOutPos === -1) return;
 
-  const nextPos = (thirdOutPos + 1) % POSITIONS;
+  let lastPos = -1;
+  for (const col of cols) {
+    const pa = getInnState(team, col).lastPA;
+    if (pa) lastPos = Math.floor(pa.pIdx / ROWS_PER_POS);
+  }
+  // Games saved before `lastPA` existed can't have it backfilled reliably, so
+  // fall back to the old 3rd-out search for them rather than losing the order.
+  if (lastPos === -1) {
+    for (const col of cols) {
+      for (let pos = 0; pos < POSITIONS; pos++) {
+        if (players[pos * ROWS_PER_POS].atBats[col].out === 3) { lastPos = pos; break; }
+      }
+      if (lastPos !== -1) break;
+    }
+  }
+  if (lastPos === -1) return;
+
+  const nextPos = (lastPos + 1) % POSITIONS;
   const nextP = nextPos * ROWS_PER_POS;
   const nextCol = getNextFreeColumn(team);
 
   if (!gameState.nextLeadoff) gameState.nextLeadoff = {};
   if (!gameState.nextLeadoff[team]) gameState.nextLeadoff[team] = {};
-  // Don't overwrite if already set (e.g. by CS/PO ending the inning)
-  if (gameState.nextLeadoff[team][nextCol] !== undefined) return;
   gameState.nextLeadoff[team][nextCol] = nextP;
 }
 
 function selectNextBatterForInning(team, colIdx) {
+  // #6: extra-inning columns are display:none until +EI is pressed. After a tied
+  // 9th the app selected a cell nobody could see, so reveal the column first.
+  if (colIdx >= (gameState.visibleInnings || 9)) {
+    gameState.visibleInnings = Math.min(colIdx + 1, INNINGS);
+    updateInningVisibility();
+  }
   const leadoffP = gameState.nextLeadoff?.[team]?.[colIdx];
   if (leadoffP !== undefined) {
     const cell = document.querySelector(`.at-bat-cell[data-team="${team}"][data-p="${leadoffP}"][data-inn="${colIdx}"]`);
@@ -1288,6 +2286,10 @@ function addPitch(type) {
   const innIdx = parseInt(selectedCell.dataset.inn);
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   if (ab.play) return;
+  // #26: the half-inning is over — there is nobody at the plate to charge a pitch
+  // to. Without this, 4 balls here counted toward the pitch count and then
+  // applyPlay silently dropped the walk on its own outs guard.
+  if (getInnState(team, innIdx).outs >= 3) return;
   if (!ab.pitches) ab.pitches = [];
   const before = getPitchCount(ab.pitches);
   if (before.balls >= 4 || before.strikes >= 3) return;
@@ -1313,29 +2315,19 @@ function removePitch() {
   if (wasAutoPlay) {
     // Find the snapshot from when the auto-play was applied (entry before this removePitch's pushUndo)
     const autoSnapIdx = playHistory.length - 2;
-    if (autoSnapIdx >= 0 && playHistory[autoSnapIdx].prevRunners && playHistory[autoSnapIdx].prevInn) {
+    if (autoSnapIdx >= 0 && playHistory[autoSnapIdx].prev) {
       const snap = playHistory[autoSnapIdx];
-      const players = gameState.teams[team].players;
-      Object.keys(snap.prevRunners).forEach(p => {
-        const pi = parseInt(p);
-        const restored = JSON.parse(JSON.stringify(snap.prevRunners[pi]));
-        const target = players[pi].atBats[innIdx];
-        Object.keys(target).forEach(k => { if (!(k in restored)) delete target[k]; });
-        Object.assign(target, restored);
-        renderDiamond(team, pi, innIdx);
-        renderOut(team, pi, innIdx);
-        renderPlayText(team, pi, innIdx);
-      });
-      const inn = getInnState(team, innIdx);
-      Object.assign(inn, JSON.parse(JSON.stringify(snap.prevInn)));
+      restoreInning(team, snap.prev);
+      renderInning(team, snap.prev);
       playHistory.splice(autoSnapIdx, 1);
     } else {
+      removeOutsFromPlay(team, innIdx, pIdx, innIdx, ab.out > 0 ? 1 : 0);
       const inn = getInnState(team, innIdx);
-      if (ab.out > 0) inn.outs = Math.max(0, inn.outs - 1);
-      for (let b = 0; b < 3; b++) { if (inn.bases[b] === pIdx) inn.bases[b] = null; }
+      removeRunnerFromBases(inn, pIdx);
       ab.play = '';
       ab.bases = [false, false, false, false];
-      ab.out = 0; ab.outsRecorded = 0;
+      ab.out = 0; ab.outsRecorded = 0; ab.seq = 0;
+      renumberOuts(team, innIdx);
       renderDiamond(team, pIdx, innIdx);
       renderOut(team, pIdx, innIdx);
       renderPlayText(team, pIdx, innIdx);
@@ -1377,11 +2369,16 @@ function checkAutoTrigger(team, pIdx, innIdx) {
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   if (ab.play) return;
   const count = getPitchCount(ab.pitches || []);
-  if (count.balls >= 4) applyPlay('BB');
-  else if (count.strikes >= 3) showStrikeoutPopup();
+  // Pass the batter explicitly: this is the man who just reached 4 balls / 3
+  // strikes, whatever the scorer taps next (#1).
+  const target = { team, pIdx, innIdx };
+  if (count.balls >= 4) applyPlay('BB', target);
+  else if (count.strikes >= 3) showStrikeoutPopup(target);
 }
 
-function showStrikeoutPopup() {
+function showStrikeoutPopup(target) {
+  const t = target || currentTarget();
+  if (!t) return;
   let popup = document.getElementById('k-popup');
   if (!popup) {
     popup = document.createElement('div');
@@ -1393,9 +2390,16 @@ function showStrikeoutPopup() {
       + '<button id="k-looking" style="padding:10px 24px;font-size:16px;font-weight:700;font-family:var(--heading);background:var(--navy);color:var(--gold);border:none;border-radius:6px;cursor:pointer;letter-spacing:1px">ꓘ<br><span style=font-size:10px>LOOKING</span></button>'
       + '</div>';
     document.body.appendChild(popup);
-    document.getElementById('k-swinging').onclick = function() { popup.style.display = 'none'; applyPlay('K'); };
-    document.getElementById('k-looking').onclick = function() { popup.style.display = 'none'; applyPlay('ꓘ'); };
   }
+  // Rebound on every open so the handlers apply to the batter captured above,
+  // not to whatever cell is selected when the button is finally pressed (#1).
+  document.getElementById('k-swinging').onclick = function() {
+    popup.style.display = 'none'; hidePopupBackdrop(); applyPlay('K', t);
+  };
+  document.getElementById('k-looking').onclick = function() {
+    popup.style.display = 'none'; hidePopupBackdrop(); applyPlay('ꓘ', t);
+  };
+  showPopupBackdrop();
   popup.style.display = 'block';
 }
 
@@ -1449,19 +2453,6 @@ function updateSituation() {
   fillLinescoreZeros();
 
   // (count, batter, LOB now handled in the panel loop above)
-
-  // LOB
-  const lobEl = document.getElementById('sit-lob');
-  if (lobEl) {
-    let totalLOB = 0;
-    ['visiting', 'home'].forEach(t => {
-      for (let i = 0; i < INNINGS; i++) {
-        const innState = gameState.innings[t] && gameState.innings[t][i];
-        if (innState && innState.lob) totalLOB += innState.lob;
-      }
-    });
-    lobEl.textContent = totalLOB > 0 ? `LOB: ${totalLOB}` : '';
-  }
 }
 
 function updateLiveStatsFromState() {
@@ -1519,13 +2510,18 @@ function promptSBBase() {
   const innIdx = parseInt(selectedCell.dataset.inn);
   const inn = getInnState(team, innIdx);
   const options = [];
+  // Only offer a steal the runner can actually complete (#4): nobody may be standing
+  // on the base he's taking or on one he'd have to run through. With runners on 1st
+  // and 2nd the lead runner steals 3rd first — the trailing man has nowhere to go
+  // until he does, so a double steal is entered as two events.
+  const canGo = (from, dest) => runnerPathClear(inn, from, dest, inn.bases[from]);
   if (inn.bases[1] !== null) {
-    options.push({from: 1, label: 'SB3 (2nd→3rd)'});
-    options.push({from: 1, label: 'SB3+E (2nd→Home)', extra: 'error'});
+    if (canGo(1, 2)) options.push({from: 1, label: 'SB3 (2nd→3rd)'});
+    if (canGo(1, 3)) options.push({from: 1, label: 'SB3+E (2nd→Home)', extra: 'error'});
   }
   if (inn.bases[0] !== null) {
-    options.push({from: 0, label: 'SB2 (1st→2nd)'});
-    options.push({from: 0, label: 'SB2+E (1st→3rd)', extra: 'error'});
+    if (canGo(0, 1)) options.push({from: 0, label: 'SB2 (1st→2nd)'});
+    if (canGo(0, 2)) options.push({from: 0, label: 'SB2+E (1st→3rd)', extra: 'error'});
   }
   if (inn.bases[2] !== null) {
     options.push({from: 2, label: 'SBH (3rd→Home)'});
@@ -1537,25 +2533,33 @@ function promptSBBase() {
 
 function applySBAtBase(team, innIdx, fromBase, withError) {
   const inn = getInnState(team, innIdx);
-  const players = gameState.teams[team].players;
+  // #3: the half-inning is over — a stranded runner can't steal, least of all
+  // steal home and put a run on the board.
+  if (inn.outs >= 3) return;
   if (inn.bases[fromBase] === null) return;
+  const rn = inn.bases[fromBase];
+  const dest = withError ? Math.min(fromBase + 2, 3) : fromBase + 1;
+  // The picker doesn't offer a blocked steal, so this is the guard for a hotkey
+  // firing on state the picker never saw. Refuse before the undo snapshot.
+  if (!runnerPathClear(inn, fromBase, dest, rn)) {
+    const blocked = fromBase + 1 <= 2 && !baseFreeFor(inn, fromBase + 1, rn) ? fromBase + 1 : Math.min(dest, 2);
+    reportRunnerCollision(blocked, inn.bases[blocked], rn);
+    return;
+  }
   const pIdx = selectedCell ? parseInt(selectedCell.dataset.p) : 0;
   pushUndo(team, pIdx, innIdx);
-  const r = inn.bases[fromBase];
-  const rc = getRunnerCol(team, r, innIdx);
-  const rab = players[r].atBats[rc];
-  const dest = withError ? Math.min(fromBase + 2, 3) : fromBase + 1;
+  const rab = runnerAtBat(team, rn);
+  if (!rab) return;
+  if (!moveRunnerTo(inn, fromBase, dest, rn)) return;
   for (let step = fromBase + 1; step <= dest; step++) {
     rab.bases[step] = true;
     setAdvReason(rab, step, step === fromBase + 1 ? 'SB' : 'E');
   }
-  inn.bases[fromBase] = null;
-  if (dest < 3) inn.bases[dest] = r;
-  renderDiamond(team, r, rc);
-  updateInningRuns(team, innIdx);
-  updatePlayerStats(team);
-  updateSituation();
-  autoSave();
+  // Rule 9.16: the extra base came on a throwing error, so a run this runner goes
+  // on to score is unearned — and the inning is one a human should review (#13).
+  if (withError && dest > fromBase + 1) rab.reachedOnError = true;
+  renderDiamond(team, rn.p, rn.col);
+  afterStateChange(team, innIdx);
 }
 
 function promptCSBase() {
@@ -1574,32 +2578,29 @@ function promptCSBase() {
 
 function applyCSAtBase(team, innIdx, fromBase) {
   const inn = getInnState(team, innIdx);
-  const players = gameState.teams[team].players;
+  // #2: no 4th out — the guard applyRunnerEvent has always had.
+  if (inn.outs >= 3) return;
   if (inn.bases[fromBase] === null) return;
   const pIdx = selectedCell ? parseInt(selectedCell.dataset.p) : 0;
   pushUndo(team, pIdx, innIdx);
-  const r = inn.bases[fromBase];
-  const rc = getRunnerCol(team, r, innIdx);
-  const rab = players[r].atBats[rc];
-  inn.outs++;
-  rab.out = inn.outs;
+  const rn = inn.bases[fromBase];
+  const rab = runnerAtBat(team, rn);
+  if (!rab) return;
+  // The out is logged against the runner's own cell, with the pitcher who threw
+  // it. `rab.pitcher` is left alone on purpose: it records the pitcher the runner
+  // *batted* against, which is who owes the hit and the run — overwriting it here
+  // moved both to whoever happened to be on the mound for the steal attempt.
+  const n = recordOut(team, innIdx, { kind: 'runner', pIdx: rn.p, col: rn.col });
+  if (!n) return;
+  rab.out = n;
   rab.outOnBase = fromBase + 1;
-  rab.pitcher = getEffectivePitcher(team, innIdx);
   setAdvReason(rab, fromBase + 1, 'CS');
-  renderDiamond(team, r, rc);
-  renderOut(team, r, rc);
-  inn.bases[fromBase] = null;
-  if (inn.outs >= 3) {
-    // CS made 3rd out — current batter leads off next inning
-    const nextCol = getNextFreeColumn(team);
-    if (!gameState.nextLeadoff) gameState.nextLeadoff = {};
-    if (!gameState.nextLeadoff[team]) gameState.nextLeadoff[team] = {};
-    gameState.nextLeadoff[team][nextCol] = pIdx;
-    pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; switchToNextHalf(team, innIdx); }, 600);
-  }
-  updatePlayerStats(team);
-  updateSituation();
-  autoSave();
+  renderDiamond(team, rn.p, rn.col);
+  renderOut(team, rn.p, rn.col);
+  clearRunner(inn, fromBase);
+  // A CS can make the 3rd out; afterStateChange ends the half-inning (or the
+  // game) from there, and markNextInningLeadoff works the order out from lastPA.
+  afterStateChange(team, innIdx);
 }
 
 function promptPickoff() {
@@ -1613,7 +2614,10 @@ function promptPickoff() {
   for (let b = 0; b < 3; b++) {
     if (inn.bases[b] !== null) {
       options.push({from: b, label: 'PO ' + baseNames[b] + ' — Out'});
-      options.push({from: b, label: 'PO ' + baseNames[b] + ' — Error (→' + destNames[b] + ')', extra: 'error'});
+      // The error variant moves him up a base; don't offer it into an occupied one (#4).
+      if (b + 1 > 2 || inn.bases[b + 1] === null) {
+        options.push({from: b, label: 'PO ' + baseNames[b] + ' — Error (→' + destNames[b] + ')', extra: 'error'});
+      }
     }
   }
   if (options.length === 0) return;
@@ -1622,41 +2626,41 @@ function promptPickoff() {
 
 function applyPickoff(team, innIdx, atBase, withError) {
   const inn = getInnState(team, innIdx);
-  const players = gameState.teams[team].players;
+  // #2: no 4th out, and no advancing a stranded runner on the error variant.
+  if (inn.outs >= 3) return;
   if (inn.bases[atBase] === null) return;
+  const rn = inn.bases[atBase];
+  // Same as applySBAtBase: the picker won't offer a blocked advance, so this catches
+  // the paths that bypass it. Refuse before the undo snapshot.
+  if (withError && !baseFreeFor(inn, atBase + 1, rn)) {
+    reportRunnerCollision(atBase + 1, inn.bases[atBase + 1], rn);
+    return;
+  }
   const pIdx = selectedCell ? parseInt(selectedCell.dataset.p) : 0;
   pushUndo(team, pIdx, innIdx);
-  const r = inn.bases[atBase];
-  const rc = getRunnerCol(team, r, innIdx);
-  const rab = players[r].atBats[rc];
+  const rab = runnerAtBat(team, rn);
+  if (!rab) return;
   if (withError) {
     const dest = atBase + 1;
+    if (!moveRunnerTo(inn, atBase, dest, rn)) return;
     rab.bases[dest] = true;
     setAdvReason(rab, dest, 'E');
-    inn.bases[atBase] = null;
-    if (dest < 3) inn.bases[dest] = r;
-    renderDiamond(team, r, rc);
-    updateInningRuns(team, innIdx);
+    // Same as the SB+E path: he advanced on the error, so the run is unearned (#13).
+    rab.reachedOnError = true;
+    renderDiamond(team, rn.p, rn.col);
   } else {
-    inn.outs++;
-    rab.out = inn.outs;
+    // See applyCSAtBase: the out's pitcher lives in the log, `rab.pitcher` keeps
+    // pointing at the pitcher the runner reached base against.
+    const n = recordOut(team, innIdx, { kind: 'runner', pIdx: rn.p, col: rn.col });
+    if (!n) return;
+    rab.out = n;
     rab.outOnBase = atBase;
-    rab.pitcher = getEffectivePitcher(team, innIdx);
     setAdvReason(rab, atBase, 'PO');
-    renderDiamond(team, r, rc);
-    renderOut(team, r, rc);
-    inn.bases[atBase] = null;
-    if (inn.outs >= 3) {
-      const nextCol = getNextFreeColumn(team);
-      if (!gameState.nextLeadoff) gameState.nextLeadoff = {};
-      if (!gameState.nextLeadoff[team]) gameState.nextLeadoff[team] = {};
-      gameState.nextLeadoff[team][nextCol] = pIdx;
-      pendingTransitionTimer = setTimeout(() => { pendingTransitionTimer = null; switchToNextHalf(team, innIdx); }, 600);
-    }
+    renderDiamond(team, rn.p, rn.col);
+    renderOut(team, rn.p, rn.col);
+    clearRunner(inn, atBase);
   }
-  updatePlayerStats(team);
-  updateSituation();
-  autoSave();
+  afterStateChange(team, innIdx);
 }
 
 function showBasePickerPopup(title, options, callback) {
@@ -1696,57 +2700,62 @@ function applyRunnerEvent(type) {
   pushUndo(team, pIdx, innIdx);
 
   if (type === 'WP' || type === 'PB') {
-    // PB: runs scored are unearned. Mark runners on 3rd before advancing.
-    if (type === 'PB' && inn.bases[2] !== null) {
-      const r = inn.bases[2];
-      const rc = getRunnerCol(team, r, innIdx);
-      gameState.teams[team].players[r].atBats[rc].reachedOnError = true;
-    }
+    // Rule 9.16: a run that scores as a result of a passed ball is unearned (a wild
+    // pitch is the pitcher's own doing, so the WP side is right to do nothing).
+    // This used to flag only the runner on 3rd, so a man moved up from 1st or 2nd
+    // by the same passed ball scored as an earned run later (#14). Flag whoever the
+    // ball actually moved — a runner it couldn't advance keeps his own reckoning.
+    const before = type === 'PB' ? inn.bases.slice() : null;
     advanceRunners(team, innIdx, 1, type);
-    updateInningRuns(team, innIdx);
+    if (before) {
+      for (let b = 0; b < 3; b++) {
+        const rn = before[b];
+        if (!rn || sameRunner(inn.bases[b], rn)) continue;
+        const rab = runnerAtBat(team, rn);
+        if (rab) rab.reachedOnError = true;
+      }
+    }
   } else if (type === 'SB') {
-    const players = gameState.teams[team].players;
+    // Lead runner first, so 2nd is free for the man behind him. A blocked steal is
+    // refused, not converted into an extra base: this used to send the runner from
+    // 2nd all the way home when 3rd was occupied, inventing a run (#4).
     if (inn.bases[1] !== null) {
-      const r = inn.bases[1]; const rc = getRunnerCol(team, r, innIdx); const rab = players[r].atBats[rc];
-      rab.bases[2] = true; setAdvReason(rab, 2, 'SB');
-      if (inn.bases[2] === null) { inn.bases[2] = r; inn.bases[1] = null; }
-      else { rab.bases[3] = true; setAdvReason(rab, 3, 'SB'); inn.bases[1] = null; }
-      renderDiamond(team, r, rc);
+      const rn = inn.bases[1]; const rab = runnerAtBat(team, rn);
+      if (rab && moveRunnerTo(inn, 1, 2, rn)) {
+        rab.bases[2] = true; setAdvReason(rab, 2, 'SB');
+        renderDiamond(team, rn.p, rn.col);
+      }
     }
     if (inn.bases[0] !== null && inn.bases[1] === null) {
-      const r = inn.bases[0]; const rc = getRunnerCol(team, r, innIdx); const rab = players[r].atBats[rc];
-      rab.bases[1] = true; setAdvReason(rab, 1, 'SB');
-      inn.bases[1] = r; inn.bases[0] = null;
-      renderDiamond(team, r, rc);
+      const rn = inn.bases[0]; const rab = runnerAtBat(team, rn);
+      if (rab && moveRunnerTo(inn, 0, 1, rn)) {
+        rab.bases[1] = true; setAdvReason(rab, 1, 'SB');
+        renderDiamond(team, rn.p, rn.col);
+      }
     }
-    updateInningRuns(team, innIdx);
   } else if (type === 'CS') {
-    const players = gameState.teams[team].players;
     let removed = false;
     for (let b = 2; b >= 0; b--) {
       if (inn.bases[b] !== null && !removed) {
-        const r = inn.bases[b];
-        const rc = getRunnerCol(team, r, innIdx);
-        const rab = players[r].atBats[rc];
-        inn.outs++;
-        rab.out = inn.outs;
+        const rn = inn.bases[b];
+        const rab = runnerAtBat(team, rn);
+        if (!rab) continue;
+        const n = recordOut(team, innIdx, { kind: 'runner', pIdx: rn.p, col: rn.col });
+        if (!n) break;
+        rab.out = n;
         rab.outOnBase = b + 1;
         setAdvReason(rab, b + 1, 'CS');
-        renderDiamond(team, r, rc);
-        renderOut(team, r, rc);
-        inn.bases[b] = null;
+        renderDiamond(team, rn.p, rn.col);
+        renderOut(team, rn.p, rn.col);
+        clearRunner(inn, b);
         removed = true;
       }
     }
-    if (inn.outs >= 3) { setTimeout(() => switchToNextHalf(team, innIdx), 600); }
   } else if (type === 'BK') {
     // Balk: all runners advance 1 base, like WP
     advanceRunners(team, innIdx, 1, 'BK');
-    updateInningRuns(team, innIdx);
   }
-  updatePlayerStats(team);
-  updateSituation();
-  autoSave();
+  afterStateChange(team, innIdx);
 }
 
 /* Undo / Redo */
@@ -1757,24 +2766,15 @@ let pendingTransitionTimer = null;
 
 function pushUndo(team, pIdx, innIdx) {
   redoHistory.length = 0;
-  const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
-  const inn = getInnState(team, innIdx);
-  const prevTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-  const prevRunners = {};
-  gameState.teams[team].players.forEach((pl, i) => { prevRunners[i] = JSON.parse(JSON.stringify(pl.atBats[innIdx])); });
-  // Full batter row across all innings — captures multi-column mutations (e.g. sub lines) that span past innIdx.
-  const prevPlayerAbs = JSON.parse(JSON.stringify(gameState.teams[team].players[pIdx].atBats));
-  playHistory.push({ team, pIdx, innIdx, prevAb: JSON.parse(JSON.stringify(ab)), prevInn: JSON.parse(JSON.stringify(inn)), prevRunners, prevPlayerAbs, prevTab });
+  playHistory.push(snapshotForRedo(team, pIdx, innIdx));
 }
 
 function snapshotForRedo(team, pIdx, innIdx) {
-  const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
-  const inn = getInnState(team, innIdx);
   const prevTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-  const prevRunners = {};
-  gameState.teams[team].players.forEach((pl, i) => { prevRunners[i] = JSON.parse(JSON.stringify(pl.atBats[innIdx])); });
+  // Full batter row across all innings — captures multi-column mutations (e.g. sub
+  // lines) that span past the inning captureInning covers.
   const prevPlayerAbs = JSON.parse(JSON.stringify(gameState.teams[team].players[pIdx].atBats));
-  return { team, pIdx, innIdx, prevAb: JSON.parse(JSON.stringify(ab)), prevInn: JSON.parse(JSON.stringify(inn)), prevRunners, prevPlayerAbs, prevTab };
+  return { team, pIdx, innIdx, prev: captureInning(team, innIdx), prevPlayerAbs, prevTab };
 }
 
 // Restore a player's entire at-bat row (all innings) and re-render every cell.
@@ -1783,10 +2783,7 @@ function restorePlayerRow(team, pIdx, prevAbs) {
   const abs = gameState.teams[team].players[pIdx].atBats;
   const n = Math.min(abs.length, prevAbs.length);
   for (let c = 0; c < n; c++) {
-    const target = abs[c];
-    const src = JSON.parse(JSON.stringify(prevAbs[c]));
-    Object.keys(target).forEach(k => { if (!(k in src)) delete target[k]; });
-    Object.assign(target, src);
+    assignOver(abs[c], prevAbs[c]);
     renderDiamond(team, pIdx, c);
     renderOut(team, pIdx, c);
     renderPlayText(team, pIdx, c);
@@ -1797,31 +2794,15 @@ function restorePlayerRow(team, pIdx, prevAbs) {
 }
 
 function restoreSnapshot(snap) {
-  const { team, pIdx, innIdx, prevAb, prevInn, prevRunners } = snap;
-  if (prevRunners) {
-    Object.keys(prevRunners).forEach(p => {
-      const pi = parseInt(p);
-      const target = gameState.teams[team].players[pi].atBats[innIdx];
-      const src = JSON.parse(JSON.stringify(prevRunners[pi]));
-      Object.keys(target).forEach(k => { if (!(k in src)) delete target[k]; });
-      Object.assign(target, src);
-    });
-  }
+  const { team, pIdx, innIdx } = snap;
+  restoreInning(team, snap.prev);
   // Restore the batter's full row so multi-column mutations (sub lines) revert.
   if (snap.prevPlayerAbs) restorePlayerRow(team, pIdx, snap.prevPlayerAbs);
-  const inn = getInnState(team, innIdx);
-  const prevInnCopy = JSON.parse(JSON.stringify(prevInn));
-  Object.keys(inn).forEach(k => { if (!(k in prevInnCopy)) delete inn[k]; });
-  Object.assign(inn, prevInnCopy);
-  for (let p = 0; p < gameState.teams[team].players.length; p++) {
-    renderDiamond(team, p, innIdx);
-    renderOut(team, p, innIdx);
-    renderPlayText(team, p, innIdx);
-    renderPitches(team, p, innIdx);
-    renderPitchCount(team, p, innIdx);
-    renderPitcherChange(team, p, innIdx);
-  }
-  updateInningRuns(team, innIdx);
+  renderInning(team, snap.prev);
+  // The snapshot has already reinstated the outs and bases, so this mostly
+  // confirms them — and puts right anything the play changed in a column the
+  // snapshot didn't cover (one the batting order wrapped into after it was taken).
+  recomputeInning(team, getRealInning(team, innIdx));
   updateSprayMini();
   const cell = document.querySelector(`.at-bat-cell[data-team="${team}"][data-p="${pIdx}"][data-inn="${innIdx}"]`);
   if (cell) selectCell(cell);
@@ -1829,11 +2810,12 @@ function restoreSnapshot(snap) {
   updatePlayerStats(team);
   updatePitcherStats(team);
   updateSituation();
-  rebuildPlayLog();
   autoSave();
 }
 
 function undoLastPlay() {
+  if (pendingEntryPopupOpen()) { showPlayReject('Finish or close the open entry first.'); return; }
+  dismissSprayPopup();
   if (pendingTransitionTimer) { clearTimeout(pendingTransitionTimer); pendingTransitionTimer = null; }
   gameOverShown = false;
   if (!playHistory.length) return;
@@ -1845,6 +2827,8 @@ function undoLastPlay() {
 }
 
 function redoLastPlay() {
+  if (pendingEntryPopupOpen()) { showPlayReject('Finish or close the open entry first.'); return; }
+  dismissSprayPopup();
   if (!redoHistory.length) return;
   const next = redoHistory[redoHistory.length - 1];
   const undo = snapshotForRedo(next.team, next.pIdx, next.innIdx);
@@ -1895,52 +2879,77 @@ function editPlayType() {
   });
   document.getElementById('ep-cancel').onclick = function() { popup.style.display = 'none'; };
   document.getElementById('ep-confirm').onclick = function() {
-    const custom = document.getElementById('ep-custom').value.trim();
+    // Normalize a typed "GO 6-3" the same way the position popup does (#15).
+    const custom = normalizePlayCode(document.getElementById('ep-custom').value.trim());
     const newPlay = custom || chosen;
     if (!newPlay || newPlay === ab.play) { popup.style.display = 'none'; return; }
+    const realInn = getRealInning(team, innIdx);
+    const inn = getInnState(team, innIdx);
+    const nowOut = isOutPlay(newPlay) || newPlay === 'K' || newPlay === 'ꓘ';
+    // #8: turning an on-base play into an out used to push the inning to 4 outs.
+    // Checked here rather than after the take-back below because it costs nothing
+    // to work out in advance, and the popup stays open on a refusal: the outs this
+    // cell's own play made are about to come off, so they aren't in its way.
+    const myOuts = outsFromPlay(inn, pIdx, innIdx).length || (ab.out ? (ab.outsRecorded || 1) : 0);
+    if (nowOut && Math.max(0, inn.outs - myOuts) >= 3) {
+      showPlayReject('The inning already has 3 outs — clear a play first.');
+      return;
+    }
     popup.style.display = 'none';
     pushUndo(team, pIdx, innIdx);
-    const oldPlay = ab.play;
-    const wasOut = isOutPlay(oldPlay) || oldPlay === 'K' || oldPlay === 'ꓘ';
-    const nowOut = isOutPlay(newPlay) || newPlay === 'K' || newPlay === 'ꓘ';
-    const wasHit = isHitPlay(oldPlay);
-    const nowHit = isHitPlay(newPlay);
-    const wasWalk = ['BB','IBB','HBP','CI'].includes(oldPlay);
-    const nowWalk = ['BB','IBB','HBP','CI'].includes(newPlay);
-    const inn = getInnState(team, innIdx);
-    // Adjust outs when changing between out and non-out
-    if (wasOut && !nowOut) {
-      const outsToRemove = ab.outsRecorded || 1;
-      inn.outs = Math.max(0, inn.outs - outsToRemove);
-      ab.out = 0; ab.outsRecorded = 0; ab.dpOuts = null;
-    } else if (!wasOut && nowOut) {
-      inn.outs++; ab.out = inn.outs; ab.outsRecorded = 1;
-      // Remove batter from bases
-      for (let b = 0; b < 3; b++) { if (inn.bases[b] === pIdx) inn.bases[b] = null; }
-      ab.bases = [false, false, false, false];
+    const prev = captureInning(team, innIdx);
+
+    /* Take the old play off the card, all of it. This used to adjust the batter's
+       own bases and out and stop, so the runners it had moved stayed where it put
+       them and the runners it doubled off stayed out (#22). Everything the play
+       caused comes off, and then the new play is entered into the state that
+       leaves — the same state a scorer would have been looking at. */
+    takeBackPlay(team, innIdx, pIdx, myOuts);
+    removeRunnerFromBases(inn, pIdx);
+    ab.play = '';
+    ab.bases = [false, false, false, false];
+    ab.advReason = ['','','','']; ab.advSrc = null;
+    ab.out = 0; ab.outsRecorded = 0; ab.dpOuts = null; ab.outOnBase = null;
+    ab.rbi = 0; ab.reachedOnError = false;
+    recomputeInning(team, realInn);
+
+    // Now that the cell is empty, is the new play a legal entry here? These need
+    // the taken-back state to judge (a DP is legal with 2 outs if one of them was
+    // this cell's), so a refusal has to put back what the take-back removed —
+    // which is what the snapshot pushed above is for.
+    const rollback = function(msg) {
+      restoreSnapshot(playHistory.pop());
+      showPlayReject(msg);
+    };
+    const reject = playEntryReject(team, innIdx, newPlay);
+    if (reject) { rollback(reject); return; }
+    // #4: the new play has to have a base to put the batter on. Refuse the change
+    // rather than evicting the runner standing there.
+    if (!nowOut && (isHitPlay(newPlay) || ['BB','IBB','HBP','CI'].includes(newPlay)) && newPlay !== 'HR') {
+      const HIT_DEST = { '1B': 0, 'E': 0, '2B': 1, '3B': 2 };
+      const bDest = HIT_DEST[newPlay] !== undefined ? HIT_DEST[newPlay] : 0;
+      if (!baseFreeFor(inn, bDest, runnerRef(pIdx, innIdx))) {
+        rollback('Another runner is on ' + BASE_NAMES[bDest] + ' — move him first.');
+        return;
+      }
     }
-    // Adjust bases when changing between hit types
-    if (nowOut) {
-      for (let b = 0; b < 3; b++) { if (inn.bases[b] === pIdx) inn.bases[b] = null; }
-      ab.bases = [false, false, false, false]; ab.outOnBase = null;
-    } else if (nowHit || nowWalk) {
-      // Clear old base position
-      for (let b = 0; b < 3; b++) { if (inn.bases[b] === pIdx) inn.bases[b] = null; }
-      ab.bases = [false, false, false, false];
-      if (newPlay === '1B' || newPlay === 'E' || nowWalk) { ab.bases[0] = true; inn.bases[0] = pIdx; }
-      else if (newPlay === '2B') { ab.bases[0] = true; ab.bases[1] = true; inn.bases[1] = pIdx; }
-      else if (newPlay === '3B') { ab.bases[0] = true; ab.bases[1] = true; ab.bases[2] = true; inn.bases[2] = pIdx; }
-      else if (newPlay === 'HR') { ab.bases = [true, true, true, true]; }
-    }
+
     ab.play = newPlay;
-    renderPlayText(team, pIdx, innIdx);
-    renderOut(team, pIdx, innIdx);
-    renderDiamond(team, pIdx, innIdx);
-    updatePlayerStats(team);
-    updatePitcherStats(team);
-    updateInningRuns(team, innIdx);
-    updateSituation();
-    autoSave();
+    // The same dispatch a fresh entry runs, so the runners get re-asked (a single
+    // rewritten as a double sends them further) and a home run brings them round.
+    // The pitches and the pitcher faced are left as they were: this is a change of
+    // what the play was, not a re-pitching of the at-bat.
+    applyPlayEffects(team, pIdx, innIdx, newPlay, prev, function() {
+      renderPlayText(team, pIdx, innIdx);
+      renderOut(team, pIdx, innIdx);
+      renderDiamond(team, pIdx, innIdx);
+      renderRBI(team, pIdx, innIdx);
+      recomputeInning(team, realInn);
+      updatePlayerStats(team);
+      updatePitcherStats(team);
+      updateSituation();
+      autoSave();
+    });
   };
 }
 
@@ -1971,14 +2980,13 @@ function moveRunner() {
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
   const inn = getInnState(team, innIdx);
-  const players = gameState.teams[team].players;
   const baseNames = ['1st','2nd','3rd','Home'];
   const runners = [];
   for (let b = 0; b < 3; b++) {
     if (inn.bases[b] !== null) {
-      const r = inn.bases[b];
-      const name = getActivePlayerName(team, r, innIdx);
-      runners.push({ base: b, pIdx: r, name });
+      const rn = inn.bases[b];
+      const name = getActivePlayerName(team, rn.p, rn.col);
+      runners.push({ base: b, pIdx: rn.p, name });
     }
   }
   if (runners.length === 0) return;
@@ -1992,42 +3000,49 @@ function moveRunner() {
   let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:10px;font-family:var(--heading)">Move Runner</div>';
   runners.forEach(r => {
     html += '<div style="margin-bottom:8px;padding:6px;background:var(--cream);border-radius:4px">';
-    html += '<div style="font-size:11px;font-weight:600;margin-bottom:4px">' + r.name + ' <span style="color:var(--text-light)">(on ' + baseNames[r.base] + ')</span></div>';
+    html += '<div style="font-size:11px;font-weight:600;margin-bottom:4px">' + escapeHtml(r.name) + ' <span style="color:var(--text-light)">(on ' + baseNames[r.base] + ')</span></div>';
     html += '<div style="display:flex;gap:4px">';
     for (let d = 0; d <= 3; d++) {
       if (d === r.base) continue;
+      // This is the manual override, but it still can't put two men on one base (#4):
+      // an occupied destination isn't offered. Move the other runner first.
+      if (d < 3 && inn.bases[d] !== null) continue;
       html += '<button class="mr-btn" data-from="' + r.base + '" data-to="' + d + '" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid #ccc;border-radius:3px;background:#fff;color:#555;cursor:pointer;font-family:var(--mono)">→ ' + baseNames[d] + '</button>';
     }
     html += '<button class="mr-btn mr-remove" data-from="' + r.base + '" data-to="off" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid var(--accent);border-radius:3px;background:#fff;color:var(--accent);cursor:pointer;font-family:var(--mono)">Remove</button>';
     html += '</div></div>';
   });
-  html += '<button onclick="document.getElementById(\'move-runner-popup\').style.display=\'none\'" style="margin-top:4px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Close</button>';
+  html += '<button data-act="hidePopupById" data-arg="move-runner-popup" style="margin-top:4px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Close</button>';
   popup.innerHTML = html;
   popup.style.display = 'block';
   popup.querySelectorAll('.mr-btn').forEach(btn => {
     btn.onclick = function() {
       const from = parseInt(this.dataset.from);
       const to = this.dataset.to;
+      const rn = inn.bases[from];
+      if (rn === null) return;
+      const toBase = to === 'off' ? null : parseInt(to);
+      if (toBase !== null && !baseFreeFor(inn, toBase, rn)) {
+        reportRunnerCollision(toBase, inn.bases[toBase], rn);
+        return;
+      }
       pushUndo(team, pIdx, innIdx);
-      const r = inn.bases[from];
-      if (r === null) return;
-      const rc = getRunnerCol(team, r, innIdx);
-      const rab = players[r].atBats[rc];
-      inn.bases[from] = null;
+      const rab = runnerAtBat(team, rn);
+      if (!rab) return;
       if (to === 'off') {
+        clearRunner(inn, from);
         for (let b = 0; b < 4; b++) { rab.bases[b] = false; }
         rab.advReason = ['','','',''];
         rab.out = 0; rab.outsRecorded = 0; rab.outOnBase = null;
       } else {
-        const toBase = parseInt(to);
+        if (!moveRunnerTo(inn, from, toBase, rn)) return;
         for (let step = from + 1; step <= toBase; step++) {
           rab.bases[step] = true;
           setAdvReason(rab, step, 'MV');
         }
-        if (toBase < 3) inn.bases[toBase] = r;
       }
-      renderDiamond(team, r, rc);
-      renderOut(team, r, rc);
+      renderDiamond(team, rn.p, rn.col);
+      renderOut(team, rn.p, rn.col);
       updateInningRuns(team, innIdx);
       updatePlayerStats(team);
       updateSituation();
@@ -2051,35 +3066,21 @@ function clearPlayKeepPitches() {
     const last = savedPitches[savedPitches.length - 1];
     if (last === 'H' || last === 'X') savedPitches.pop();
   }
-  // Use the undo snapshot to fully restore runners and inning state
-  const lastUndo = playHistory[playHistory.length - 1];
-  if (lastUndo && lastUndo.prevRunners && lastUndo.prevInn) {
-    const players = gameState.teams[team].players;
-    Object.keys(lastUndo.prevRunners).forEach(p => {
-      const pi = parseInt(p);
-      const restored = JSON.parse(JSON.stringify(lastUndo.prevRunners[pi]));
-      const target = players[pi].atBats[innIdx];
-      Object.keys(target).forEach(k => { if (!(k in restored)) delete target[k]; });
-      Object.assign(target, restored);
-      renderDiamond(team, pi, innIdx);
-      renderOut(team, pi, innIdx);
-      renderPlayText(team, pi, innIdx);
-      renderRBI(team, pi, innIdx);
-      renderPitchCount(team, pi, innIdx);
-    });
-    const inn = getInnState(team, innIdx);
-    Object.assign(inn, JSON.parse(JSON.stringify(lastUndo.prevInn)));
-  } else {
-    const inn = getInnState(team, innIdx);
-    const outsToRemove = ab.outsRecorded || (ab.out ? 1 : 0);
-    inn.outs = Math.max(0, inn.outs - outsToRemove);
-    for (let b = 0; b < 3; b++) { if (inn.bases[b] === pIdx) inn.bases[b] = null; }
-    ab.play = '';
-    ab.bases = [false, false, false, false];
-    ab.out = 0; ab.outsRecorded = 0; ab.rbi = 0; ab.hitLoc = null;
-    ab.dpOuts = null; ab.outOnBase = null;
-    ab.advReason = ['','','','']; ab.reachedOnError = false;
-  }
+  // This used to try to rebuild the inning from "the last undo snapshot" — which,
+  // three lines after its own `pushUndo`, was the snapshot it had just taken. It
+  // restored the state onto itself and the branch below, the one that does the
+  // clearing, was unreachable: "Clear Play (Keep Pitches)" dropped the result pitch
+  // and left the play, the runner and the out exactly where they were.
+  //
+  // No snapshot is needed. Clear the batter's own record, take back the outs and
+  // the advancement the play produced, and let `recomputeInning` derive the rest.
+  takeBackPlay(team, innIdx, pIdx, ab.outsRecorded || (ab.out ? 1 : 0));
+  ab.play = '';
+  ab.bases = [false, false, false, false];
+  ab.out = 0; ab.outsRecorded = 0; ab.rbi = 0; ab.hitLoc = null;
+  ab.dpOuts = null; ab.outOnBase = null;
+  ab.advReason = ['','','','']; ab.reachedOnError = false; ab.seq = 0;
+  ab.advSrc = null;
   // Re-apply saved pitches on the batter's at-bat
   ab.pitches = savedPitches;
   renderDiamond(team, pIdx, innIdx);
@@ -2088,7 +3089,7 @@ function clearPlayKeepPitches() {
   renderPitches(team, pIdx, innIdx);
   renderPitchCount(team, pIdx, innIdx);
   renderPitcherChange(team, pIdx, innIdx);
-  updateInningRuns(team, innIdx);
+  recomputeInning(team, getRealInning(team, innIdx));
   updateSprayMini();
   updatePlayerStats(team);
   updatePitcherStats(team);
@@ -2122,19 +3123,119 @@ function adjustRBI(delta) {
   autoSave();
 }
 
-/* Feature 8: Toggle earned/unearned run */
-function toggleEarnedRun() {
+/* Feature 8: Earned/unearned run review (per-run, per-inning) */
+
+// Collect every scored run for a batting team in a given real inning.
+// Returns entries [{ team, pIdx, colIdx, ab }] in batting-order-ish column order.
+// A batted-around inning spans several columns and they are all covered.
+function collectScoredRuns(battingTeam, realInn) {
+  const players = gameState.teams[battingTeam].players;
+  const cols = getColumnsForInning(battingTeam, realInn);
+  const runs = [];
+  const scored = ab => ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null;
+  for (const col of cols) {
+    for (let pIdx = 0; pIdx < players.length; pIdx++) {
+      const ab = players[pIdx].atBats[col];
+      if (scored(ab)) runs.push({ team: battingTeam, pIdx, colIdx: col, ab });
+    }
+  }
+  return runs;
+}
+
+// An inning's earned-run count is "provisional" when it scored runs AND contains
+// an error signal (error play, a run flagged reached-on-error via error/PB, or
+// catcher's interference). The auto ER count can't apply the "inning would have
+// ended but for the error" rule, so a human should confirm which runs are earned.
+function inningErProvisional(battingTeam, realInn) {
+  if (!collectScoredRuns(battingTeam, realInn).length) return false;
+  const players = gameState.teams[battingTeam].players;
+  const cols = getColumnsForInning(battingTeam, realInn);
+  // An 'E' advancement reason is the third signal: a runner moved up by a throwing
+  // error on a steal or a pickoff leaves no error play on any cell, so without this
+  // the inning read as clean and never asked for review (#13).
+  const hasSignal = ab => ab.reachedOnError || isErrorPlay(ab.play) || ab.play === 'CI' ||
+    (Array.isArray(ab.advReason) && ab.advReason.includes('E'));
+  for (const col of cols) {
+    for (const player of players) {
+      if (hasSignal(player.atBats[col])) return true;
+    }
+  }
+  return false;
+}
+
+function describeReach(ab) {
+  const p = ab.play || '';
+  if (isErrorPlay(p)) return 'reached on error';
+  if (p === '1B') return 'single';
+  if (p === '2B') return 'double';
+  if (p === '3B') return 'triple';
+  if (p === 'HR') return 'home run';
+  if (p === 'BB') return 'walk';
+  if (p === 'IBB') return 'intentional walk';
+  if (p === 'HBP') return 'hit by pitch';
+  if (p === 'FC') return "fielder's choice";
+  if (p === 'CI') return "catcher's interference";
+  if (ab.reachedOnError) return 'reached (unearned)';
+  if (p) return p;
+  return 'reached base';
+}
+
+// Backing list for the review popup so onclick can address the exact at-bat.
+let erReviewList = [];
+
+function reviewEarnedRuns() {
   if (!selectedCell) return;
   const team = selectedCell.dataset.team;
-  const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
-  const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
-  if (!ab.bases || !ab.bases[3]) return;
-  pushUndo(team, pIdx, innIdx);
-  ab.reachedOnError = !ab.reachedOnError;
-  renderDiamond(team, pIdx, innIdx);
-  updatePitcherStats(team);
+  const realInn = getRealInning(team, innIdx);
+  erReviewList = collectScoredRuns(team, realInn);
+
+  let popup = document.getElementById('er-review-popup');
+  if (!popup) {
+    popup = document.createElement('div');
+    popup.id = 'er-review-popup';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card,#fff);border:2px solid var(--navy,#1a2744);border-radius:8px;padding:14px 16px;z-index:400;box-shadow:0 8px 40px rgba(0,0,0,0.35);min-width:280px;max-width:360px;font-family:var(--font)';
+    document.body.appendChild(popup);
+  }
+
+  const teamName = (team === 'visiting' ? gameState.info.visitingTeam : gameState.info.homeTeam) || (team === 'visiting' ? 'Visiting' : 'Home');
+  let html = `<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--navy,#1a2744);margin-bottom:8px">Earned Run Review — ${escapeHtml(teamName)}, Inn ${realInn + 1}</div>`;
+
+  if (!erReviewList.length) {
+    html += '<div style="font-size:12px;color:var(--text-light,#666);margin-bottom:10px">No runs scored in this inning.</div>';
+  } else {
+    if (inningErProvisional(team, realInn)) {
+      html += '<div style="font-size:11px;color:var(--accent,#c41e3a);margin-bottom:10px;line-height:1.4">This inning had an error, passed ball, or interference. Mark any run that would <b>not</b> have scored without it as <b>unearned</b>.</div>';
+    }
+    erReviewList.forEach((r, i) => {
+      const pl = gameState.teams[team].players[r.pIdx];
+      const label = (pl.num ? '#' + pl.num + ' ' : '') + (pl.name || `Batter ${r.pIdx + 1}`);
+      const unearned = !!r.ab.reachedOnError;
+      html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--border-light,#ddd)">';
+      html += `<div style="font-size:12px;line-height:1.3"><div style="font-weight:600">${escapeHtml(label)}</div><div style="font-size:10px;color:var(--text-light,#666)">${escapeHtml(describeReach(r.ab))}</div></div>`;
+      html += '<div style="display:flex;gap:4px;flex:0 0 auto">';
+      html += `<button data-act="markRunEarned" data-argnum="${i}" style="padding:5px 9px;font-size:11px;font-weight:700;border:1.5px solid ${!unearned ? '#1565c0' : '#ccc'};border-radius:4px;background:${!unearned ? '#e3f2fd' : '#fff'};color:${!unearned ? '#1565c0' : '#666'};cursor:pointer">Earned</button>`;
+      html += `<button data-act="markRunUnearned" data-argnum="${i}" style="padding:5px 9px;font-size:11px;font-weight:700;border:1.5px solid ${unearned ? 'var(--accent,#c41e3a)' : '#ccc'};border-radius:4px;background:${unearned ? '#fdecef' : '#fff'};color:${unearned ? 'var(--accent,#c41e3a)' : '#666'};cursor:pointer">Unearned</button>`;
+      html += '</div></div>';
+    });
+  }
+  html += '<button data-act="hidePopupById" data-arg="er-review-popup" style="margin-top:10px;width:100%;padding:6px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Done</button>';
+
+  popup.innerHTML = html;
+  popup.style.display = 'block';
+}
+
+function setRunEarnedByIndex(idx, unearned) {
+  const entry = erReviewList[idx];
+  if (!entry) return;
+  const ab = entry.ab;
+  if (!!ab.reachedOnError === !!unearned) return; // no change
+  pushUndo(entry.team, entry.pIdx, entry.colIdx);
+  ab.reachedOnError = !!unearned;
+  renderDiamond(entry.team, entry.pIdx, entry.colIdx);
+  updatePitcherStats(entry.team);
   autoSave();
+  reviewEarnedRuns(); // rebuild popup to reflect the new state
 }
 
 function clearSelectedCell() {
@@ -2150,45 +3251,24 @@ function clearSelectedCell() {
 
   if (isLatest) {
     const snapshot = playHistory[histIdx];
-    if (snapshot.prevRunners) {
-      Object.keys(snapshot.prevRunners).forEach(p => {
-        const pi = parseInt(p);
-        const restored = JSON.parse(JSON.stringify(snapshot.prevRunners[pi]));
-        const target = gameState.teams[team].players[pi].atBats[innIdx];
-        Object.keys(target).forEach(k => { if (!(k in restored)) delete target[k]; });
-        Object.assign(target, restored);
-        renderDiamond(team, pi, innIdx);
-        renderOut(team, pi, innIdx);
-        renderPlayText(team, pi, innIdx);
-        renderPitches(team, pi, innIdx);
-        renderRBI(team, pi, innIdx);
-        renderPitchCount(team, pi, innIdx);
-      });
-    }
+    restoreInning(team, snapshot.prev);
     if (snapshot.prevPlayerAbs) restorePlayerRow(team, pIdx, snapshot.prevPlayerAbs);
-    if (snapshot.prevInn) {
-      const inn = getInnState(team, innIdx);
-      Object.assign(inn, JSON.parse(JSON.stringify(snapshot.prevInn)));
+    renderInning(team, snapshot.prev);
+    if (snapshot.prev) {
+      for (const col of snapshot.prev.cols) {
+        for (let p = 0; p < gameState.teams[team].players.length; p++) renderRBI(team, p, col);
+      }
     }
     playHistory.splice(histIdx, 1);
   } else {
     if (histIdx !== -1) playHistory.splice(histIdx, 1);
-    const inn = getInnState(team, innIdx);
-    const outsToRemove = ab.outsRecorded || (ab.out ? 1 : 0);
-    inn.outs = Math.max(0, inn.outs - outsToRemove);
-    for (let b = 0; b < 3; b++) { if (inn.bases[b] === pIdx) inn.bases[b] = null; }
-    // Also revert runners who were thrown out as part of this play (DP/FC runner outs)
     const players = gameState.teams[team].players;
-    for (let pi = 0; pi < players.length; pi++) {
-      if (pi === pIdx) continue;
-      const rab = players[pi].atBats[innIdx];
-      if (rab.outOnBase && rab.out > 0 && rab.out > inn.outs) {
-        inn.outs = Math.max(0, inn.outs);
-        rab.out = 0; rab.outOnBase = null;
-        renderDiamond(team, pi, innIdx);
-        renderOut(team, pi, innIdx);
-      }
-    }
+    // #21: the outs this play produced and the bases it handed out both come off.
+    // The old code subtracted `ab.outsRecorded`, left the runner it doubled off
+    // recorded as out (the loop meant to revert those subtracted nothing —
+    // `inn.outs = Math.max(0, inn.outs)`), and left the runners it moved where
+    // the play had put them.
+    takeBackPlay(team, innIdx, pIdx, ab.outsRecorded || (ab.out ? 1 : 0));
     ab.bases = [false, false, false, false];
     ab.play = '';
     ab.out = 0;
@@ -2199,8 +3279,8 @@ function clearSelectedCell() {
     ab.dpOuts = null;
     ab.outOnBase = null;
     ab.advReason = ['','','',''];
+    ab.advSrc = null;
     ab.reachedOnError = false;
-    ab.extraOuts = 0;
     ab.pitcherChangeNum = '';
     // A sub line spans from here to the end of the game; clear the whole contiguous run.
     if (ab.subChange) {
@@ -2210,6 +3290,7 @@ function clearSelectedCell() {
       }
     }
     ab.subChange = false;
+    ab.seq = 0;
     renderDiamond(team, pIdx, innIdx);
     renderOut(team, pIdx, innIdx);
     renderPitches(team, pIdx, innIdx);
@@ -2219,12 +3300,15 @@ function clearSelectedCell() {
   }
 
   renderPitcherChange(team, pIdx, innIdx);
-  updateInningRuns(team, innIdx);
+  // Both branches above touch only the at-bat records (and the out log); the
+  // inning's outs, bases, runs and LOB come back out of them here. The restore
+  // branch reinstates the snapshot's inning records wholesale, so a recompute over
+  // it is a no-op unless the snapshot and the at-bats disagree — records win.
+  recomputeInning(team, getRealInning(team, innIdx));
   updateSprayMini();
   updateSituation();
   updatePlayerStats(team);
   updatePitcherStats(team);
-  rebuildPlayLog();
   autoSave();
 }
 
@@ -2244,16 +3328,25 @@ function highlightLinescore(team, innIdx) {
   }
 }
 
+// A completed half-inning that scored nothing shows a 0, not a blank.
+//
+// #23: this looked the input up by real inning and then wrote state by *column*
+// index, so after batting around the DOM read ["0","",…] and the state
+// ["","0",…]. Usually the next updateLinescoreTotals put it right; a save landing
+// in between persisted a zero against the wrong inning. Walk real innings, so
+// there is one index in play. (The old `realInn >= INNINGS` check ran after the
+// lookup it was meant to guard, and columnMap never holds a value that large.)
 function fillLinescoreZeros() {
   ['visiting', 'home'].forEach(team => {
-    for (let i = 0; i < INNINGS; i++) {
-      const realInn = getRealInning(team, i);
+    for (let realInn = 0; realInn < INNINGS; realInn++) {
+      const cols = getColumnsForInning(team, realInn);
+      if (!cols.length) continue;
       const inp = document.querySelector(`input[data-ls="${team}"][data-inn="${realInn}"]`);
-      if (!inp || realInn >= INNINGS) continue;
-      const inn = getInnState(team, i);
+      if (!inp) continue;
+      const inn = getInnState(team, cols[cols.length - 1]);
       if (inn.outs >= 3 && inp.value === '') {
         inp.value = '0';
-        gameState.linescore[team].innings[i] = '0';
+        gameState.linescore[team].innings[realInn] = '0';
       }
     }
   });
@@ -2272,25 +3365,13 @@ function updateLinescoreTotals(team) {
   if (rInp) rInp.value = r || '';
   gameState.linescore[team].r = r;
   updateLinescoreHits(team);
-  // Total LOB
-  let totalLob = 0;
-  const players = gameState.teams[team].players;
-  for (let col = 0; col < INNINGS; col++) {
-    let innLob = 0;
-    for (const player of players) {
-      const ab = player.atBats[col];
-      if (!ab || !ab.play) continue;
-      if (ab.bases[0] && !ab.bases[3] && ab.outOnBase == null) innLob++;
-    }
-    for (const oa of getOverflowForInning(team, col)) {
-      if (!oa.atBat.play) continue;
-      if (oa.atBat.bases[0] && !oa.atBat.bases[3] && oa.atBat.outOnBase == null) innLob++;
-    }
-    if (gameState.innings && gameState.innings[team] && gameState.innings[team][col]) {
-      gameState.innings[team][col].lob = innLob;
-    }
-    totalLob += innLob;
-  }
+  // #16: this used to be the *second* writer of `inn.lob`, and the two disagreed.
+  // Its own scan counted every at-bat that reached and hadn't scored, in every
+  // column including innings still in progress — so LOB climbed as runners reached
+  // and fell as they scored, and it counted a runner two plays before anyone was
+  // left on anything. `recomputeInning` settles the figure when the half-inning
+  // ends; this only adds them up.
+  const totalLob = teamLOB(team);
   gameState.linescore[team].lob = totalLob;
   const lobInp = document.querySelector(`input[data-ls="${team}"][data-stat="lob"]`);
   if (lobInp) lobInp.value = totalLob || '';
@@ -2318,7 +3399,10 @@ function flushSave() {
   clearTimeout(_saveTimer);
   _saveTimer = null;
   collectState();
-  safeStorage.setItem(CURRENT_GAME_KEY, JSON.stringify(gameState));
+  // The stored game wouldn't parse and we couldn't stash a copy of it anywhere,
+  // so this write would be the thing that actually loses it (#25).
+  if (saveBlockedFor(CURRENT_GAME_KEY)) return;
+  safeStorage.setItem(CURRENT_GAME_KEY, JSON.stringify(stateForStorage(gameState)));
 }
 
 function collectState() {
@@ -2383,30 +3467,128 @@ function saveGame() {
   setTimeout(() => btn.textContent = orig, 1200);
 }
 
+// Backfill any fields a persisted/imported state is missing so no downstream
+// code hits an undefined object. Mutates and returns `parsed`.
+function mergeStateDefaults(parsed) {
+  const defaults = createEmptyState();
+  if (!parsed.innings) parsed.innings = defaults.innings;
+  if (parsed.timerElapsed === undefined) parsed.timerElapsed = 0;
+  if (parsed.timerRunning === undefined) parsed.timerRunning = false;
+  // Deep merge with defaults so no fields are undefined
+  Object.keys(defaults).forEach(k => {
+    if (parsed[k] === undefined) parsed[k] = defaults[k];
+  });
+  if (!parsed.info) parsed.info = defaults.info;
+  if (!parsed.umpires) parsed.umpires = defaults.umpires;
+  if (!parsed.linescore) parsed.linescore = defaults.linescore;
+  if (!parsed.teams) parsed.teams = defaults.teams;
+  if (!parsed.innings) parsed.innings = defaults.innings;
+  if (!parsed.columnMap) parsed.columnMap = defaults.columnMap;
+  // Dropped in Phase 9: an older save still carries an unbounded play log (#31)
+  // and an unused standings table (#33). Shed them rather than writing them back
+  // out on every autoSave.
+  delete parsed.log;
+  delete parsed.standings;
+  refillAtBats(parsed);
+  backfillOutsLog(parsed);
+  migrateBaseRunners(parsed);
+  return parsed;
+}
+
+// Games saved before Phase 7 hold a bare player index in `inn.bases`, not the
+// `{ p, col }` ref every reader now expects. Upgrade in place: the column is the
+// player's first plate appearance in that inning, which is what the old
+// `getRunnerCol` resolved to and is correct for every save that didn't bat around.
+// (`applyState` re-derives the bases of every inning with records anyway, so this
+// is the belt to that braces — it also covers `loadGameFromLibrary`, which skips
+// the merge entirely (#28).)
+function migrateBaseRunners(state) {
+  if (!state.innings || !state.teams) return;
+  for (const team of ['visiting', 'home']) {
+    const innings = state.innings[team];
+    const players = state.teams[team] && state.teams[team].players;
+    if (!innings || !players) continue;
+    const cmap = (state.columnMap && state.columnMap[team]) || null;
+    for (let col = 0; col < innings.length; col++) {
+      const inn = innings[col];
+      if (!inn || !Array.isArray(inn.bases)) continue;
+      const realInn = cmap && cmap[col] !== undefined ? cmap[col] : col;
+      for (let b = 0; b < 3; b++) {
+        const held = inn.bases[b];
+        if (typeof held !== 'number') continue;
+        const pl = players[held];
+        let src = col;
+        if (pl && pl.atBats) {
+          for (let c = 0; c < pl.atBats.length; c++) {
+            const ri = cmap && cmap[c] !== undefined ? cmap[c] : c;
+            if (ri === realInn && pl.atBats[c] && pl.atBats[c].play) { src = c; break; }
+          }
+        }
+        inn.bases[b] = { p: held, col: src };
+      }
+    }
+  }
+}
+
+// Games saved before `outsLog` existed carry only per-at-bat `out` / `outsRecorded`,
+// so rebuild the log from those — otherwise an in-progress game reloaded after
+// this change would show blank IP for every inning already played.
+//
+// Two things can't be recovered: which play a runner out belonged to (so `srcP`
+// points at the runner's own cell, meaning clearing an old double play won't take
+// its runner out with it — which is what the old code did anyway), and `lastPA`
+// (markNextInningLeadoff falls back to its old 3rd-out search when it's missing).
+function backfillOutsLog(state) {
+  if (!state.innings || !state.teams) return;
+  for (const team of ['visiting', 'home']) {
+    const innings = state.innings[team];
+    const players = state.teams[team] && state.teams[team].players;
+    if (!innings || !players) continue;
+    const cmap = state.columnMap && state.columnMap[team];
+    for (let col = 0; col < innings.length; col++) {
+      const inn = innings[col];
+      if (!inn || Array.isArray(inn.outsLog)) continue;
+      if (inn.lastPA === undefined) inn.lastPA = null;
+      const entries = [];
+      players.forEach((pl, pIdx) => {
+        const ab = pl.atBats && pl.atBats[col];
+        if (!ab || !(ab.out > 0)) return;
+        entries.push({
+          n: ab.out,
+          kind: ab.outOnBase != null ? 'runner' : 'batter',
+          pIdx, col, srcP: pIdx, srcCol: col,
+          pitcher: ab.pitcher || 0
+        });
+      });
+      entries.sort((a, b) => a.n - b.n);
+      // An old double play with nobody on base stamped two outs onto one at-bat,
+      // so the entries can come up short. Only pad when this column is the whole
+      // inning — after batting around, `inn.outs` is the running total for the
+      // inning and the earlier columns already logged their share.
+      const realInn = cmap ? (cmap[col] === undefined ? col : cmap[col]) : col;
+      const soleColumn = !cmap || cmap.filter(ri => ri === realInn).length <= 1;
+      if (soleColumn) {
+        while (entries.length < (inn.outs || 0)) {
+          entries.push({ n: 0, kind: 'runner', pIdx: null, col, srcP: null, srcCol: col, pitcher: inn.currentPitcher || 0 });
+        }
+      }
+      entries.forEach((e, i) => { e.n = i + 1; });
+      inn.outsLog = entries;
+    }
+  }
+}
+
 function loadState() {
+  adoptExistingQuarantine(CURRENT_GAME_KEY);
+  adoptExistingQuarantine(LIBRARY_KEY);
   const saved = safeStorage.getItem(CURRENT_GAME_KEY);
   if (saved) {
     try {
-      const parsed = JSON.parse(saved);
-      // Merge with defaults to handle missing new fields
-      const defaults = createEmptyState();
-      if (!parsed.log) parsed.log = [];
-      if (!parsed.innings) parsed.innings = defaults.innings;
-      if (parsed.timerElapsed === undefined) parsed.timerElapsed = 0;
-      if (parsed.timerRunning === undefined) parsed.timerRunning = false;
-      // Deep merge with defaults so no fields are undefined
-      Object.keys(defaults).forEach(k => {
-        if (parsed[k] === undefined) parsed[k] = defaults[k];
-      });
-      if (!parsed.info) parsed.info = defaults.info;
-      if (!parsed.umpires) parsed.umpires = defaults.umpires;
-      if (!parsed.linescore) parsed.linescore = defaults.linescore;
-      if (!parsed.teams) parsed.teams = defaults.teams;
-      if (!parsed.innings) parsed.innings = defaults.innings;
-      if (!parsed.columnMap) parsed.columnMap = defaults.columnMap;
-      gameState = parsed;
-    } catch(e) { 
+      gameState = mergeStateDefaults(JSON.parse(saved));
+    } catch(e) {
+      // #25: keep the text before starting a fresh game on top of it.
       console.error('Failed to load state', e);
+      quarantineUnreadable(CURRENT_GAME_KEY, saved);
       gameState = createEmptyState();
     }
   }
@@ -2422,13 +3604,13 @@ function applyState() {
   if (!gameState.teams) gameState.teams = d.teams;
   if (!gameState.innings) gameState.innings = d.innings;
   if (!gameState.columnMap) gameState.columnMap = d.columnMap;
-  if (!gameState.log) gameState.log = [];
   if (gameState.timerElapsed === undefined) gameState.timerElapsed = 0;
   if (gameState.timerRunning === undefined) gameState.timerRunning = false;
   if (gameState.notes === undefined) gameState.notes = '';
   if (!gameState.defChanges) gameState.defChanges = [];
   if (!gameState.visibleInnings) gameState.visibleInnings = 9;
-  const makeAtBat = () => ({ bases:[false,false,false,false], advReason:['','','',''], outOnBase:null, play:'', out:0, outsRecorded:0, pitches:[], hitLoc:null, rbi:0, pitcher:0, reachedOnError:false, pitcherChangeNum:'', subChange:false });
+  if (gameState.playSeq === undefined) gameState.playSeq = 0;
+  migrateBaseRunners(gameState);   // bare-index base entries from a pre-Phase-7 save
   ['visiting','home'].forEach(t => {
     if (gameState.linescore[t] && gameState.linescore[t].innings.length < INNINGS) {
       const ext = Array(INNINGS - gameState.linescore[t].innings.length).fill('');
@@ -2441,12 +3623,12 @@ function applyState() {
     // Extend player atBat arrays if loaded from older save with fewer innings
     if (gameState.teams && gameState.teams[t]) {
       gameState.teams[t].players.forEach(player => {
-        while (player.atBats.length < INNINGS) player.atBats.push(makeAtBat());
+        while (player.atBats.length < INNINGS) player.atBats.push(makeEmptyAtBat());
       });
     }
     // Extend innings array
     if (gameState.innings && gameState.innings[t]) {
-      const makeInning = () => ({ outs:0, bases:[null,null,null], currentPitcher:0, lob:0 });
+      const makeInning = () => ({ outs:0, bases:[null,null,null], currentPitcher:0, lob:0, outsLog:[], lastPA:null });
       while (gameState.innings[t].length < INNINGS) gameState.innings[t].push(makeInning());
     }
   });
@@ -2475,6 +3657,8 @@ function applyState() {
       gameState.innings[team].forEach(inn => {
         if (inn && inn.currentPitcher === undefined) inn.currentPitcher = 0;
         if (inn && inn.lob === undefined) inn.lob = 0;
+        if (inn && !Array.isArray(inn.outsLog)) inn.outsLog = [];
+        if (inn && inn.lastPA === undefined) inn.lastPA = null;
       });
     }
 
@@ -2515,13 +3699,26 @@ function applyState() {
     });
     const eInp = document.querySelector(`input[data-ls="${team}"][data-stat="e"]`);
     if (eInp) eInp.value = gameState.linescore[team].e || '';
+    // #24: the grid header is built 1…15 and only `overflowToNextColumn` ever
+    // re-derived it, so a game reloaded after batting around showed the columns
+    // renumbered past their real innings — column 2 read "3" when it was still
+    // the 1st. The map is the record; re-derive from it on every load.
+    updateColumnHeaders(team);
+    refreshCellAria(team);
+    // Re-derive every inning somebody batted in, so a game saved by an older build
+    // — or hand-edited, or imported — comes back consistent with its own records.
+    // A save from before LOB had one definition carries the old inflating scan's
+    // figures, and this is what corrects them. Innings nobody batted in are left
+    // exactly as saved: there is nothing to derive, and the cell may be hand-typed.
+    for (let ri = 0; ri < INNINGS; ri++) {
+      if (inningHasRecords(team, ri)) recomputeInning(team, ri);
+    }
     updateLinescoreTotals(team);
     updatePlayerStats(team);
     updatePitcherStats(team);
   });
 
   updateSprayMini();
-  refreshPlayLogDisplay();
   updateExtraInnings();
   updateLiveStatsFromState();
 
@@ -2554,7 +3751,11 @@ function newGame() {
 function printScorecard() { window.print(); }
 
 /* Position play popup input */
-function showPositionPopup(prefix, placeholder) {
+function showPositionPopup(prefix, placeholder, target) {
+  // Capture the cell now — typing the fielders takes long enough for the scorer
+  // to tap somewhere else first (#1).
+  const t = target || currentTarget();
+  if (!t) return;
   let popup = document.getElementById('pos-popup');
   if (!popup) {
     popup = document.createElement('div');
@@ -2570,6 +3771,7 @@ function showPositionPopup(prefix, placeholder) {
   const input = document.getElementById('pos-input');
   input.value = '';
   input.placeholder = placeholder || '7';
+  showPopupBackdrop();
   popup.style.display = 'flex';
   popup.dataset.prefix = prefix;
   setTimeout(() => input.focus(), 10);
@@ -2579,11 +3781,15 @@ function showPositionPopup(prefix, placeholder) {
       e.preventDefault();
       const val = input.value.trim();
       popup.style.display = 'none';
+      hidePopupBackdrop();
       input.blur();
-      if (val) applyPlay(prefix + val);
+      // Normalize here so only canonical codes reach state — a scorer typing
+      // "GO 6-3" gets "6-3", which the rest of the app recognises as an out (#15).
+      if (val) applyPlay(normalizePlayCode(prefix + val), t);
     } else if (e.key === 'Escape') {
       e.preventDefault();
       popup.style.display = 'none';
+      hidePopupBackdrop();
       input.blur();
     }
   };
@@ -2619,11 +3825,45 @@ function renderPitchCount(team, pIdx, innIdx) {
 }
 
 /* Auto Player Stats (Feature 1) */
-function tallyAtBats(atBats, filterFn) {
+
+// Did this plate appearance move anybody? `markAdvance` stamps every base a play
+// gives a runner with the batter's own cell, so the answer is written on the
+// runners' rows, not his.
+function advancedARunner(team, srcP, srcCol) {
+  const players = gameState.teams[team].players;
+  const cols = getColumnsForInning(team, getRealInning(team, srcCol));
+  for (const col of cols) {
+    for (let p = 0; p < players.length; p++) {
+      if (p === srcP && col === srcCol) continue;   // the batter's own cell
+      const ab = players[p].atBats[col];
+      if (!ab || !Array.isArray(ab.advSrc)) continue;
+      for (let seg = 0; seg < 4; seg++) {
+        const s = ab.advSrc[seg];
+        if (s && s.p === srcP && s.col === srcCol) return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Rule 9.02(a)(1): a sacrifice costs no at-bat only if it did its job. A sac fly
+// needs a run to score; a sac bunt needs a runner to advance. A fly ball or a bunt
+// that achieved neither is an ordinary out and the batter is charged for it — the
+// reachable case being an `SF` entered with the bases empty (#17).
+function sacrificeExemptsAB(team, pIdx, col, ab) {
+  if (ab.play === 'SF') return (ab.rbi || 0) > 0;
+  return advancedARunner(team, pIdx, col);
+}
+
+function tallyAtBats(team, pIdx, atBats, filterFn) {
   let ab = 0, h = 0, r = 0, rbi = 0, bb = 0, k = 0, hbp = 0;
-  for (const atBat of atBats) {
+  for (let col = 0; col < atBats.length; col++) {
+    const atBat = atBats[col];
     if (!atBat.play || !filterFn(atBat)) continue;
-    const noAB = ['BB','HBP','IBB','SAC','SF','SH','CI'].includes(atBat.play);
+    const isSac = ['SAC','SF','SH'].includes(atBat.play);
+    const noAB = isSac
+      ? sacrificeExemptsAB(team, pIdx, col, atBat)
+      : ['BB','HBP','IBB','CI'].includes(atBat.play);
     if (!noAB) ab++;
     if (isHitPlay(atBat.play)) h++;
     if (atBat.bases[0] && atBat.bases[1] && atBat.bases[2] && atBat.bases[3] && atBat.outOnBase == null) r++;
@@ -2649,14 +3889,13 @@ function updatePlayerStats(team) {
     const sp = pos * ROWS_PER_POS;
     const subp = sp + 1;
     const player = players[sp];
-    const overflow = getOverflowForPlayer(team, sp);
-    const allABs = player.atBats.concat(overflow);
+    const allABs = player.atBats;
     const hasSub = player.atBats.some(a => a.subChange);
     if (hasSub) {
-      writeStats(team, sp, tallyAtBats(allABs, a => !a.subChange));
-      writeStats(team, subp, tallyAtBats(allABs, a => a.subChange));
+      writeStats(team, sp, tallyAtBats(team, sp, allABs, a => !a.subChange));
+      writeStats(team, subp, tallyAtBats(team, sp, allABs, a => a.subChange));
     } else {
-      writeStats(team, sp, tallyAtBats(allABs, () => true));
+      writeStats(team, sp, tallyAtBats(team, sp, allABs, () => true));
       writeStats(team, subp, { ab:0, h:0, r:0, rbi:0, bb:0 });
     }
   }
@@ -2669,29 +3908,28 @@ function updatePitcherStats(battingTeam) {
   const pitchers = gameState.teams[pitchingTeam].pitchers;
   const stats = {};
   for (let i = 0; i < PITCHER_ROWS; i++) {
-    stats[i] = { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0 };
+    stats[i] = { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0, prov: false };
+  }
+
+  // Innings whose ER total is provisional (contained an error/PB/CI) — a run
+  // scored in one of these flags its pitcher for manual ER review.
+  const provInnings = new Set();
+  for (let ri = 0; ri < INNINGS; ri++) {
+    if (inningErProvisional(battingTeam, ri)) provInnings.add(ri);
   }
 
   // Go through the batting team's players to compute stats for the pitching team's pitchers
   const batters = gameState.teams[battingTeam].players;
   for (const player of batters) {
-    for (const ab of player.atBats) {
+    for (let col = 0; col < player.atBats.length; col++) {
+      const ab = player.atBats[col];
       if (!ab.play) continue;
       const pi = ab.pitcher || 0;
-      if (!stats[pi]) stats[pi] = { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0 };
+      if (!stats[pi]) stats[pi] = { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0, prov: false };
       const s = stats[pi];
       // Pitch count
       s.pc += (ab.pitches || []).length;
-      // Count outs via outsRecorded (credits outs to the current pitcher).
-      // Skip pure runner base-outs (outOnBase set, no outsRecorded) to avoid
-      // double-counting — those outs are captured by the batter's outsRecorded.
-      if (ab.outOnBase != null && !ab.outsRecorded) {
-        // pure runner out — skip
-      } else if (ab.outsRecorded > 0) {
-        s.outs += ab.outsRecorded;
-      } else if (ab.out > 0) {
-        s.outs++;
-      }
+      // Outs are not counted here — see the outsLog pass below.
       // Strikeouts
       if (ab.play === 'K' || ab.play === 'ꓘ' || ab.play === 'K+WP') s.k++;
       // Walks
@@ -2702,33 +3940,21 @@ function updatePitcherStats(battingTeam) {
       if (ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null) {
         s.r++;
         if (!ab.reachedOnError) s.er++;
+        if (provInnings.has(getRealInning(battingTeam, col))) s.prov = true;
       }
     }
   }
 
-  // Include overflow at-bats (batting-around)
-  if (gameState.overflowAtBats) {
-    for (const oa of gameState.overflowAtBats) {
-      if (oa.team !== battingTeam) continue;
-      const ab = oa.atBat;
-      if (!ab.play) continue;
-      const pi = ab.pitcher || 0;
-      if (!stats[pi]) stats[pi] = { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0 };
-      const s = stats[pi];
-      s.pc += (ab.pitches || []).length;
-      if (ab.outOnBase != null && !ab.outsRecorded) {
-      } else if (ab.outsRecorded > 0) {
-        s.outs += ab.outsRecorded;
-      } else if (ab.out > 0) {
-        s.outs++;
-      }
-      if (ab.play === 'K' || ab.play === 'ꓘ' || ab.play === 'K+WP') s.k++;
-      if (ab.play === 'BB' || ab.play === 'IBB') s.bb++;
-      if (isHitPlay(ab.play)) s.h++;
-      if (ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null) {
-        s.r++;
-        if (!ab.reachedOnError) s.er++;
-      }
+  // Outs come straight from each inning's out log, so every out counts once and
+  // against the pitcher who was on the mound when it happened. The old version
+  // re-derived them from `outsRecorded` / `outOnBase` on the batter's at-bat and
+  // missed every out that wasn't the batter's own — a caught stealing, a pickoff
+  // and a runner thrown out advancing on a single all left IP blank (#10).
+  for (let ri = 0; ri < INNINGS; ri++) {
+    for (const o of inningOutsLog(battingTeam, ri)) {
+      const pi = o.pitcher || 0;
+      if (!stats[pi]) stats[pi] = { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0, prov: false };
+      stats[pi].outs++;
     }
   }
 
@@ -2747,6 +3973,15 @@ function updatePitcherStats(battingTeam) {
         pitchers[i][field] = String(fields[field]);
       }
     });
+
+    // ER-review badge: flag the ER cell when this pitcher allowed a run in an
+    // inning that had an error/PB/CI, so the scorer knows to verify it.
+    const erInp = document.querySelector(`input[data-team="${pitchingTeam}"][data-pitcher="${i}"][data-field="er"]`);
+    if (erInp) {
+      const td = erInp.closest('td');
+      if (td) td.classList.toggle('er-review', !!s.prov);
+      erInp.title = s.prov ? 'ER review needed — a run scored in an inning with an error, passed ball, or interference. Select a scored cell in that inning and tap “E/UE” to review.' : '';
+    }
   }
 }
 
@@ -2774,9 +4009,9 @@ function changePitcher() {
     const name = p.name || `Pitcher ${i + 1}`;
     const num = p.num ? '#' + p.num + ' ' : '';
     const isActive = getEffectivePitcher(battingTeam, innIdx) === i;
-    html += `<button onclick="setPitcher(${i})" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-bottom:4px;border:1.5px solid ${isActive ? '#1565c0' : '#ccc'};border-radius:4px;background:${isActive ? '#e3f2fd' : '#fff'};cursor:pointer;font-size:12px;font-weight:${isActive ? '700' : '500'};font-family:var(--font)">${num}${name}</button>`;
+    html += `<button data-act="setPitcher" data-argnum="${i}" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-bottom:4px;border:1.5px solid ${isActive ? '#1565c0' : '#ccc'};border-radius:4px;background:${isActive ? '#e3f2fd' : '#fff'};cursor:pointer;font-size:12px;font-weight:${isActive ? '700' : '500'};font-family:var(--font)">${escapeHtml(num)}${escapeHtml(name)}</button>`;
   });
-  html += '<button onclick="document.getElementById(\'pitcher-popup\').style.display=\'none\'" style="margin-top:6px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button>';
+  html += '<button data-act="hidePopupById" data-arg="pitcher-popup" style="margin-top:6px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button>';
   popup.innerHTML = html;
   popup.style.display = 'block';
 }
@@ -2821,14 +4056,14 @@ function changeFieldPos() {
   const realInn = getRealInning(team, innIdx) + 1;
   const innLabel = halfLabel + realInn;
   let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:10px;font-family:var(--heading)">Position Change <span style="font-size:11px;color:var(--red);font-weight:600;margin-left:6px">' + innLabel + '</span></div>';
-  html += '<div style="font-size:11px;margin-bottom:8px;color:var(--text-light)">' + name + ' — current: <b>' + (current || 'none') + '</b></div>';
+  html += '<div style="font-size:11px;margin-bottom:8px;color:var(--text-light)">' + escapeHtml(name) + ' — current: <b>' + escapeHtml(current || 'none') + '</b></div>';
   html += '<div style="display:flex;gap:4px;flex-wrap:wrap">';
   positions.forEach(pos => {
     const isCurrent = pos === current;
-    html += `<button onclick="applyFieldPos('${team}',${starterP},'${pos}','${innLabel}')" style="padding:5px 10px;font-size:11px;font-weight:${isCurrent?'700':'600'};border:1.5px solid ${isCurrent?'var(--navy)':'#ccc'};border-radius:4px;background:${isCurrent?'var(--cream)':'#fff'};color:${isCurrent?'var(--navy)':'#555'};cursor:pointer;font-family:var(--mono)">${pos}</button>`;
+    html += `<button data-act="applyFieldPosFromEl" data-arg="this" data-team="${team}" data-p="${starterP}" data-pos="${pos}" data-inn="${escapeHtml(innLabel)}" style="padding:5px 10px;font-size:11px;font-weight:${isCurrent?'700':'600'};border:1.5px solid ${isCurrent?'var(--navy)':'#ccc'};border-radius:4px;background:${isCurrent?'var(--cream)':'#fff'};color:${isCurrent?'var(--navy)':'#555'};cursor:pointer;font-family:var(--mono)">${pos}</button>`;
   });
   html += '</div>';
-  html += '<button onclick="document.getElementById(\'pos-change-popup\').style.display=\'none\'" style="margin-top:10px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button>';
+  html += '<button data-act="hidePopupById" data-arg="pos-change-popup" style="margin-top:10px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button>';
   popup.innerHTML = html;
   popup.style.display = 'block';
 }
@@ -2929,21 +4164,6 @@ function computePitcherPlan() {
           plan.push({ ab, from: ab.pitcher || 0, to: running });
         }
       }
-      // Batting-around overflow at-bats occur after the regular pass in this
-      // column, so they take the pitcher in effect at the end of the column.
-      if (gameState.overflowAtBats) {
-        for (const oa of gameState.overflowAtBats) {
-          if (oa.team !== battingTeam || oa.colIdx !== col) continue;
-          const ab = oa.atBat;
-          if (ab.pitcherChangeNum) {
-            const idx = resolvePitcherIndex(pitchers, ab.pitcherChangeNum);
-            if (idx != null) running = idx;
-          }
-          if (ab.play && (ab.pitcher || 0) !== running) {
-            plan.push({ ab, from: ab.pitcher || 0, to: running });
-          }
-        }
-      }
     }
   });
   return plan;
@@ -2961,7 +4181,7 @@ function recomputePitcherAssignments() {
   let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--navy,#1a2744);margin-bottom:8px">Recompute Pitcher Stats</div>';
   if (!plan.length) {
     html += '<div style="font-size:12px;color:var(--text-light,#666);margin-bottom:10px">All at-bats are already attributed to the correct pitcher. Nothing to change.</div>';
-    html += '<button onclick="document.getElementById(\'recompute-popup\').style.display=\'none\'" style="width:100%;padding:6px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Close</button>';
+    html += '<button data-act="hidePopupById" data-arg="recompute-popup" style="width:100%;padding:6px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Close</button>';
   } else {
     html += '<div style="font-size:12px;color:var(--text-light,#666);margin-bottom:10px">Re-attributes <b>' + plan.length + '</b> at-bat' + (plan.length === 1 ? '' : 's') + ' to the correct pitcher based on the pitching changes recorded on the card. This updates IP, PC, H, R, ER, K and BB. It cannot be auto-undone.</div>';
     html += '<div style="display:flex;gap:6px"><button id="rc-apply" style="flex:1;padding:7px;font-size:12px;font-weight:700;background:var(--navy,#1a2744);color:var(--gold,#c8a44b);border:none;border-radius:4px;cursor:pointer;text-transform:uppercase">Apply</button>';
@@ -2976,66 +4196,12 @@ function recomputePitcherAssignments() {
     plan.forEach(p => { p.ab.pitcher = p.to; });
     updatePitcherStats('visiting');
     updatePitcherStats('home');
-    rebuildPlayLog();
     autoSave();
     popup.style.display = 'none';
   };
 }
 
 /* Play-by-Play Log (Feature 7) */
-function generatePlayDescription(team, pIdx, innIdx) {
-  const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
-  const name = getActivePlayerName(team, pIdx, innIdx).replace(/^#\d+\s*/, '');
-  const half = team === 'visiting' ? 'T' : 'B';
-  const innNum = getRealInning(team, innIdx) + 1;
-  const prefix = `${half}${innNum}`;
-  const play = ab.play;
-
-  let desc = '';
-  if (play === '1B') desc = `${name} singled`;
-  else if (play === '2B') desc = `${name} doubled`;
-  else if (play === '3B') desc = `${name} tripled`;
-  else if (play === 'HR') desc = `${name} homered`;
-  else if (play === 'BB') desc = `${name} walked`;
-  else if (play === 'IBB') desc = `${name} was intentionally walked`;
-  else if (play === 'HBP') desc = `${name} was hit by pitch`;
-  else if (play === 'K') desc = `${name} struck out swinging`;
-  else if (play === 'ꓘ') desc = `${name} struck out looking`;
-  else if (play === 'K+WP') desc = `${name} struck out but reached on wild pitch`;
-  else if (play === 'SF') desc = `${name} hit a sacrifice fly`;
-  else if (play === 'SH') desc = `${name} laid down a sacrifice bunt`;
-  else if (play === 'SAC') desc = `${name} sacrificed`;
-  else if (play === 'DP' || /^DP /.test(play)) desc = `${name} hit into a double play (${play})`;
-  else if (play === 'FC') desc = `${name} reached on fielder's choice`;
-  else if (isErrorPlay(play)) desc = `${name} reached on an error (${play})`;
-  else if (/^F\d/.test(play)) desc = `${name} flied out to ${play.substring(1)}`;
-  else if (/^P\d/.test(play)) desc = `${name} popped out to ${play.substring(1)}`;
-  else if (/^L\d/.test(play)) desc = `${name} lined out to ${play.substring(1)}`;
-  else if (/^\d+-\d/.test(play)) desc = `${name} grounded out ${play}`;
-  else desc = `${name}: ${play}`;
-
-  // RBI info
-  if (ab.rbi > 0) desc += ` (${ab.rbi} RBI)`;
-
-  return `${prefix}: ${desc}`;
-}
-
-function addPlayLogEntry(team, pIdx, innIdx) {
-  const desc = generatePlayDescription(team, pIdx, innIdx);
-  if (!gameState.log) gameState.log = [];
-  gameState.log.push(desc);
-  refreshPlayLogDisplay();
-}
-
-function refreshPlayLogDisplay() {
-  const el = document.getElementById('play-log');
-  if (!el || !gameState.log) return;
-  el.innerHTML = (gameState.log || []).map(entry => `<div>${entry}</div>`).join('');
-  el.scrollTop = el.scrollHeight;
-  const section = el.closest('.play-log-section');
-  if (section) section.classList.toggle('empty', !gameState.log.length);
-}
-
 function toggleQBDrawer() {
   const drawers = document.querySelectorAll('.qb-drawer');
   const btns = document.querySelectorAll('.qb-more-btn');
@@ -3065,39 +4231,6 @@ function addExtraInning() {
 }
 
 function updateExtraInnings() { updateInningVisibility(); }
-
-function rebuildPlayLog() {
-  if (!gameState.log) gameState.log = [];
-  gameState.log = [];
-  for (let innIdx = 0; innIdx < INNINGS; innIdx++) {
-    for (const team of ['visiting', 'home']) {
-      const players = gameState.teams[team].players;
-      const plays = [];
-      for (let p = 0; p < players.length; p += 2) {
-        const ab = players[p].atBats[innIdx];
-        if (ab.play) {
-          plays.push({ p, out: ab.out || 999 });
-        }
-      }
-      plays.sort((a, b) => a.out - b.out);
-      for (const pl of plays) {
-        gameState.log.push(generatePlayDescription(team, pl.p, innIdx));
-      }
-    }
-  }
-  refreshPlayLogDisplay();
-}
-
-/* LOB Calculation (Feature 6) */
-function calculateLOB(team, innIdx) {
-  const inn = getInnState(team, innIdx);
-  if (inn.outs < 3) return 0;
-  let lob = 0;
-  if (inn.bases[0] !== null) lob++;
-  if (inn.bases[1] !== null) lob++;
-  if (inn.bases[2] !== null) lob++;
-  return lob;
-}
 
 /* Game Timer (Feature 13) */
 let timerInterval = null;
@@ -3155,19 +4288,45 @@ const LIBRARY_KEY = 'baseball-scorecard-library';
 const CURRENT_GAME_KEY = 'baseball-scorecard';
 
 function getGameLibrary() {
+  const raw = safeStorage.getItem(LIBRARY_KEY);
+  if (raw === null || raw === '') return [];
+  let parsed;
   try {
-    return JSON.parse(safeStorage.getItem(LIBRARY_KEY) || '[]');
-  } catch(e) { return []; }
+    parsed = JSON.parse(raw);
+  } catch(e) { parsed = undefined; }
+  // A library that won't parse used to read as "no saved games yet", and the
+  // next save wrote one entry over however many were in there (#25).
+  if (!Array.isArray(parsed)) {
+    quarantineUnreadable(LIBRARY_KEY, raw);
+    return [];
+  }
+  return parsed;
 }
 
 function saveGameLibrary(library) {
+  if (saveBlockedFor(LIBRARY_KEY)) {
+    alert('The saved-game library on this device is unreadable and could not be backed up. Download it from the banner at the top of the page, then discard it, before saving another game.');
+    return false;
+  }
   safeStorage.setItem(LIBRARY_KEY, JSON.stringify(library));
+  return true;
 }
 
 function openGameLibrary() {
   const modal = document.getElementById('game-library-modal');
   modal.classList.add('active');
   renderGameLibrary();
+  updateLibraryButtons();
+}
+
+// Show the "Update Saved Game" button only when the game in progress
+// corresponds to an existing library entry.
+function updateLibraryButtons() {
+  const btn = document.getElementById('lib-update-btn');
+  if (!btn) return;
+  const inLibrary = gameState.currentGameId &&
+    getGameLibrary().some(g => g.id === gameState.currentGameId);
+  btn.style.display = inLibrary ? '' : 'none';
 }
 
 function closeGameLibrary() {
@@ -3178,22 +4337,25 @@ function renderGameLibrary() {
   const library = getGameLibrary();
   const listEl = document.getElementById('game-library-list');
   if (library.length === 0) {
-    listEl.innerHTML = '<p style="font-size:12px;color:var(--text-light);padding:10px">No saved games yet. Click "Save Current as New" to save this game.</p>';
+    listEl.innerHTML = '<p style="font-size:12px;color:var(--text-light);padding:10px">No saved games yet. Click "Save as New Game" to save this game.</p>';
     return;
   }
   let html = '<ul class="game-list">';
   library.forEach((game, idx) => {
-    const date = game.date || 'No date';
-    const teams = game.teams || 'Unknown teams';
-    const score = game.score || '';
+    const date = escapeHtml(game.date || 'No date');
+    const teams = escapeHtml(game.teams || 'Unknown teams');
+    const score = escapeHtml(game.score || '');
+    const saved = game.lastSaved ? 'Saved ' + escapeHtml(game.lastSaved) : '';
+    const isCurrent = game.id && game.id === gameState.currentGameId;
     html += `<li>
       <div>
-        <div class="game-info-text">${teams}</div>
+        <div class="game-info-text">${teams}${isCurrent ? ' <span style="color:var(--navy);font-weight:600">● current</span>' : ''}</div>
         <div class="game-date">${date} ${score ? '| ' + score : ''}</div>
+        ${saved ? `<div class="game-date">${saved}</div>` : ''}
       </div>
       <div>
-        <button class="load-btn" onclick="loadGameFromLibrary(${idx})">Load</button>
-        <button class="del-btn" onclick="deleteGameFromLibrary(${idx})">Delete</button>
+        <button class="load-btn" data-act="loadGameFromLibrary" data-argnum="${idx}">Load</button>
+        <button class="del-btn" data-act="deleteGameFromLibrary" data-argnum="${idx}">Delete</button>
       </div>
     </li>`;
   });
@@ -3201,41 +4363,88 @@ function renderGameLibrary() {
   listEl.innerHTML = html;
 }
 
-function saveAsNewGame() {
-  collectState();
-  const library = getGameLibrary();
+// Build a library entry (metadata + deep-copied state) from the current game.
+// Stamps `lastSaved` onto the live state first so it travels into the snapshot.
+function buildLibraryEntry(id) {
   const vis = gameState.info.visitingTeam || 'Visiting';
   const hom = gameState.info.homeTeam || 'Home';
   const vR = document.querySelector('input[data-ls="visiting"][data-stat="r"]');
   const hR = document.querySelector('input[data-ls="home"][data-stat="r"]');
   const score = `${vR ? vR.value || 0 : 0} - ${hR ? hR.value || 0 : 0}`;
-  const id = Date.now().toString(36);
-
-  library.push({
+  gameState.lastSaved = new Date().toLocaleString();
+  return {
     id: id,
     date: gameState.info.date || new Date().toLocaleDateString(),
     teams: `${vis} vs ${hom}`,
     score: score,
-    state: JSON.parse(JSON.stringify(gameState))
-  });
+    lastSaved: gameState.lastSaved,
+    state: JSON.parse(JSON.stringify(stateForStorage(gameState)))
+  };
+}
 
+function saveAsNewGame() {
+  collectState();
+  const library = getGameLibrary();
+  const id = Date.now().toString(36);
+  gameState.currentGameId = id;   // set before snapshot so it's captured
+  library.push(buildLibraryEntry(id));
   saveGameLibrary(library);
-  gameState.currentGameId = id;
   flushSave();
   renderGameLibrary();
+  updateLibraryButtons();
+}
+
+// Replace the existing library entry for the current game in place. Falls back
+// to saving a new game if the current id no longer matches any entry.
+function updateSavedGame() {
+  collectState();
+  const library = getGameLibrary();
+  const idx = library.findIndex(g => g.id === gameState.currentGameId);
+  if (idx === -1) { saveAsNewGame(); return; }
+  library[idx] = buildLibraryEntry(gameState.currentGameId);
+  saveGameLibrary(library);
+  flushSave();
+  renderGameLibrary();
+  updateLibraryButtons();
+}
+
+// Serialize state for change-detection, ignoring the save timestamp.
+function stateSignature(state) {
+  // Through stateForStorage so a live state and a stored one — which has its sub
+  // rows emptied — compare as the same game rather than always differing.
+  const clone = JSON.parse(JSON.stringify(stateForStorage(state)));
+  delete clone.lastSaved;
+  return JSON.stringify(clone);
+}
+
+// True if the in-progress game differs from its saved library snapshot.
+function currentGameHasUnsavedChanges() {
+  if (!gameState.currentGameId) return false;
+  const entry = getGameLibrary().find(g => g.id === gameState.currentGameId);
+  if (!entry || !entry.state) return false;
+  return stateSignature(gameState) !== stateSignature(entry.state);
 }
 
 function loadGameFromLibrary(idx) {
   const library = getGameLibrary();
   if (!library[idx] || !library[idx].state || !library[idx].state.teams) return;
+  collectState();  // capture live DOM edits before comparing
+  if (currentGameHasUnsavedChanges() &&
+      !confirm('The current game has unsaved changes that will be lost. Load the selected game anyway?')) {
+    return;
+  }
   flushSave();  // persist the outgoing game before switching
-  gameState = library[idx].state;
+  // #28: run the same backfill `importGameJSON` does. A library entry saved by
+  // an older build is missing whatever has been added to the state since, and
+  // assigning it raw left those fields undefined downstream.
+  gameState = mergeStateDefaults(library[idx].state);
   playHistory = [];
   redoHistory = [];
   gameOverShown = false;
   applyState();
   closeGameLibrary();
   flushSave();
+  updateLibraryButtons();
 }
 
 function deleteGameFromLibrary(idx) {
@@ -3244,6 +4453,343 @@ function deleteGameFromLibrary(idx) {
   library.splice(idx, 1);
   saveGameLibrary(library);
   renderGameLibrary();
+}
+
+/* Export / Import — offline JSON backup of the in-progress game. No
+   dependencies: a Blob download out, a file input in. Doubles as the recovery
+   path when localStorage can't persist (see reportStorageFailure). */
+function downloadTextFile(filename, text) {
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Delay revoke so the download has time to start (Safari/iOS).
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function exportGameJSON() {
+  collectState();
+  const slug = s => (s || '').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase();
+  const vis = slug(gameState.info.visitingTeam) || 'visiting';
+  const hom = slug(gameState.info.homeTeam) || 'home';
+  downloadTextFile(`scorecard-${vis}-vs-${hom}.json`, JSON.stringify(stateForStorage(gameState), null, 2));
+}
+
+function importGameJSON(input) {
+  const file = input.files && input.files[0];
+  input.value = '';  // allow re-importing the same file later
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function() {
+    let parsed;
+    try {
+      parsed = JSON.parse(reader.result);
+    } catch(e) {
+      alert('That file is not valid JSON and could not be imported.');
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object' || !parsed.teams || !parsed.info) {
+      alert('That file does not look like a saved scorecard game.');
+      return;
+    }
+    collectState();  // capture live DOM edits before comparing
+    if (currentGameHasUnsavedChanges() &&
+        !confirm('The current game has unsaved changes that will be lost. Import the selected file anyway?')) {
+      return;
+    }
+    flushSave();  // persist the outgoing game before switching
+    gameState = mergeStateDefaults(parsed);
+    playHistory = [];
+    redoHistory = [];
+    gameOverShown = false;
+    applyState();
+    flushSave();
+    updateLibraryButtons();
+    closeGameLibrary();
+  };
+  reader.onerror = function() { alert('Could not read that file.'); };
+  reader.readAsText(file);
+}
+
+/* ------------------------------------------- pitcher decisions (Phase 8b) ---
+   Replaces a heuristic that guessed: most IP on the winning side took the win,
+   most ER on the losing side took the loss (and with no ER recorded that was
+   always the losing team's first row), and the save test was
+   `margin <= 3 || IP >= 3`, which is not the save rule. All three were printed
+   in the summary as fact (#18).
+
+   The rules need three things the card now records: when each run scored
+   (`ab.seq`), who put that runner on (`ab.pitcher` — which is exactly the
+   pitcher Rule 9.16 charges with the run), and which pitcher was on the mound
+   for each out (`inn.outsLog`). Nothing here re-infers any of that.
+
+   Where a rule is explicitly the scorer's judgment — 9.17(b)'s starter who did
+   not go five — this offers the candidates rather than picking one. Every
+   decision can also be overridden by hand; overrides persist in
+   `gameState.decisions`. */
+
+function pitcherLabel(team, idx) {
+  const p = gameState.teams[team].pitchers[idx];
+  if (!p) return '';
+  if (!p.name && !p.num) return 'Pitcher ' + (idx + 1);
+  return (p.num ? '#' + p.num + ' ' : '') + (p.name || 'Pitcher ' + (idx + 1));
+}
+
+function cmpPlayOrder(a, b) {
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] - b[i];
+  return 0;
+}
+
+// Every run in the game, in the order it was scored, with the running score
+// after each. A runner's own plate appearance is the ordering key inside a
+// half-inning: runners can't pass each other, so they cross the plate in the
+// order they reached. A game saved before `ab.seq` existed has none, and falls
+// back to column-then-batting-order — flagged as approximate rather than
+// presented as exact.
+function runTimeline() {
+  const runs = [];
+  ['visiting','home'].forEach(battingTeam => {
+    const players = gameState.teams[battingTeam].players;
+    const half = battingTeam === 'visiting' ? 0 : 1;
+    for (let ri = 0; ri < INNINGS; ri++) {
+      for (const col of getColumnsForInning(battingTeam, ri)) {
+        for (let p = 0; p < players.length; p++) {
+          const ab = players[p].atBats[col];
+          if (!ab || !ab.play) continue;
+          if (!(ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3])) continue;
+          if (ab.outOnBase != null) continue;
+          runs.push({
+            battingTeam, realInn: ri, col,
+            order: [ri, half, ab.seq || 0, col, p],
+            hasSeq: !!ab.seq,
+            chargedPitcher: ab.pitcher || 0
+          });
+        }
+      }
+    }
+  });
+  runs.sort((a, b) => cmpPlayOrder(a.order, b.order));
+  let v = 0, h = 0;
+  runs.forEach(r => {
+    if (r.battingTeam === 'visiting') v++; else h++;
+    r.scoreAfter = { visiting: v, home: h };
+  });
+  return runs;
+}
+
+// Outs charged to each pitcher of `pitchingTeam`, straight off the out log.
+function pitcherOutCounts(pitchingTeam) {
+  const battingTeam = pitchingTeam === 'visiting' ? 'home' : 'visiting';
+  const counts = {};
+  for (let ri = 0; ri < INNINGS; ri++) {
+    for (const o of inningOutsLog(battingTeam, ri)) {
+      const i = o.pitcher || 0;
+      counts[i] = (counts[i] || 0) + 1;
+    }
+  }
+  return counts;
+}
+
+// The winning team's pitcher of record when their go-ahead run scored: the last
+// man to have pitched for them, which is whoever was on the mound the last time
+// the losing team batted before that run.
+function pitcherOfRecordAt(winTeam, loseTeam, ri) {
+  const lastRi = winTeam === 'visiting' ? ri - 1 : ri;
+  if (lastRi < 0) return 0;   // nobody has pitched yet — the starter
+  const cols = getColumnsForInning(loseTeam, lastRi);
+  return getEffectivePitcher(loseTeam, cols.length ? cols[cols.length - 1] : lastRi);
+}
+
+// Who finished the game for `pitchingTeam` — the man on the mound for the last
+// out the other side made. -1 if they never retired anybody.
+function finishingPitcher(pitchingTeam) {
+  const battingTeam = pitchingTeam === 'visiting' ? 'home' : 'visiting';
+  for (let ri = INNINGS - 1; ri >= 0; ri--) {
+    const log = inningOutsLog(battingTeam, ri);
+    if (log.length) return log[log.length - 1].pitcher || 0;
+  }
+  return -1;
+}
+
+// How the game stood when a reliever came in: the score before his first batter
+// and how many runners he inherited. The runner count is read off the records of
+// the half-inning he walked into — men who reached earlier in it and neither
+// scored nor were put out — so it is exactly as good as the card is.
+function pitcherEntryState(pitchingTeam, pIdx, timeline) {
+  const battingTeam = pitchingTeam === 'visiting' ? 'home' : 'visiting';
+  const players = gameState.teams[battingTeam].players;
+  const half = battingTeam === 'visiting' ? 0 : 1;
+  let first = null;
+  for (let ri = 0; ri < INNINGS; ri++) {
+    for (const col of getColumnsForInning(battingTeam, ri)) {
+      for (let p = 0; p < players.length; p++) {
+        const ab = players[p].atBats[col];
+        if (!ab || !ab.play || (ab.pitcher || 0) !== pIdx) continue;
+        const key = [ri, half, ab.seq || 0, col, p];
+        if (!first || cmpPlayOrder(key, first.key) < 0) first = { key, ri };
+      }
+    }
+  }
+  if (!first) return null;
+  const before = timeline.filter(r => cmpPlayOrder(r.order, first.key) < 0);
+  const scoreAt = before.length ? before[before.length - 1].scoreAfter : { visiting: 0, home: 0 };
+  let onBase = 0;
+  for (const col of getColumnsForInning(battingTeam, first.ri)) {
+    for (let p = 0; p < players.length; p++) {
+      const ab = players[p].atBats[col];
+      if (!ab || !ab.play) continue;
+      if (cmpPlayOrder([first.ri, half, ab.seq || 0, col, p], first.key) >= 0) continue;
+      if (ab.bases[0] && !ab.bases[3] && ab.outOnBase == null) onBase++;
+    }
+  }
+  return { ri: first.ri, scoreAt, onBase };
+}
+
+// How many innings the game actually went, for 9.17(b)'s "game of 6 or more".
+function inningsPlayed() {
+  let last = -1;
+  for (let ri = 0; ri < INNINGS; ri++) {
+    if (inningHasRecords('visiting', ri) || inningHasRecords('home', ri)) last = ri;
+  }
+  return last + 1;
+}
+
+function teamRunTotal(team) {
+  const el = document.querySelector(`input[data-ls="${team}"][data-stat="r"]`);
+  return parseInt(el && el.value) || 0;
+}
+
+function computePitcherDecisions() {
+  const res = {
+    winTeam: null, loseTeam: null, wp: null, lp: null, sv: null,
+    judgment: null, winCandidates: [], approximate: false
+  };
+  const vR = teamRunTotal('visiting'), hR = teamRunTotal('home');
+  if (vR === hR) return res;                       // a tie yields no decisions
+
+  const winTeam = res.winTeam = vR > hR ? 'visiting' : 'home';
+  const loseTeam = res.loseTeam = vR > hR ? 'home' : 'visiting';
+  const timeline = runTimeline();
+  if (!timeline.length) return res;
+  res.approximate = timeline.some(r => !r.hasSeq);
+
+  // The go-ahead run: the earliest run from which the winner led without ever
+  // giving it back. Scanning from the end, it is the first run at which the
+  // winner's lead becomes unbroken.
+  let idx = timeline.length;
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    if (timeline[i].scoreAfter[winTeam] > timeline[i].scoreAfter[loseTeam]) idx = i;
+    else break;
+  }
+  if (idx === timeline.length) return res;         // shouldn't happen with a winner
+  const goAhead = timeline[idx];
+
+  // Rule 9.17(d): the loss goes to the pitcher charged with the go-ahead run —
+  // which `ab.pitcher` already records, since it is the man who put that runner
+  // on base.
+  res.lp = goAhead.chargedPitcher;
+
+  // Rule 9.17: the win goes to the winning team's pitcher of record at that run.
+  const ofRecord = pitcherOfRecordAt(winTeam, loseTeam, goAhead.realInn);
+  res.wp = ofRecord;
+
+  const winOuts = pitcherOutCounts(winTeam);
+  // Rule 9.17(b): a starter who did not complete 5 innings in a game of 6 or
+  // more cannot be credited with the win — it goes to the most effective
+  // reliever, and the rule says that is the scorer's call. Offer the relievers
+  // who appeared; don't pick one.
+  if (ofRecord === 0 && (winOuts[0] || 0) < 15 && inningsPlayed() >= 6) {
+    res.winCandidates = Object.keys(winOuts).map(Number).filter(i => i !== 0 && winOuts[i] > 0);
+    if (res.winCandidates.length) {
+      res.judgment = 'The starter did not go 5 innings (Rule 9.17(b)) — the win is the scorer\'s call.';
+      res.wp = null;
+    }
+  }
+
+  // A hand override wins over what the rules worked out — and it has to land
+  // before the save is computed, or a scorer who hands the win to the man who
+  // finished the game leaves him holding both the W and the save.
+  const ov = gameState.decisions || {};
+  if (ov.lp !== undefined && ov.lp !== null) res.lp = ov.lp;
+  if (ov.wp !== undefined && ov.wp !== null) { res.wp = ov.wp; res.judgment = null; }
+
+  // Rule 9.19: the save goes to the pitcher who finished the game, is not the
+  // winner, and is charged with at least a third of an inning, provided he also
+  // met one of the three qualifying conditions.
+  const finisher = finishingPitcher(winTeam);
+  if (finisher >= 0 && finisher !== res.wp && (winOuts[finisher] || 0) >= 1) {
+    const entry = pitcherEntryState(winTeam, finisher, timeline);
+    const outs = winOuts[finisher] || 0;
+    const leadAtEntry = entry ? entry.scoreAt[winTeam] - entry.scoreAt[loseTeam] : null;
+    const qualifies =
+      (leadAtEntry !== null && leadAtEntry > 0 && leadAtEntry <= 3 && outs >= 3) ||
+      // The tying run on base, at bat, or on deck: runners inherited, plus the
+      // batter and the man behind him.
+      (leadAtEntry !== null && leadAtEntry > 0 && leadAtEntry <= entry.onBase + 2) ||
+      outs >= 9;
+    if (qualifies) res.sv = finisher;
+  }
+  if (ov.sv !== undefined && ov.sv !== null) res.sv = ov.sv;
+
+  res.overridden = ['wp','lp','sv'].filter(k => ov[k] !== undefined && ov[k] !== null);
+  return res;
+}
+
+/* The decision override picker. Lists the pitchers on the relevant side who
+   actually appeared, plus "Auto" to hand the choice back to the rules. */
+function promptPitcherDecision(which) {
+  const d = computePitcherDecisions();
+  if (!d.winTeam) return;
+  const team = which === 'lp' ? d.loseTeam : d.winTeam;
+  const outs = pitcherOutCounts(team);
+  const appeared = Object.keys(outs).map(Number).filter(i => outs[i] > 0).sort((a, b) => a - b);
+  const title = which === 'wp' ? 'Winning Pitcher' : which === 'lp' ? 'Losing Pitcher' : 'Save';
+
+  let popup = document.getElementById('decision-popup');
+  if (!popup) {
+    popup = document.createElement('div');
+    popup.id = 'decision-popup';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:400;box-shadow:0 8px 40px rgba(26,39,68,0.4);min-width:240px;font-family:var(--font);';
+    document.body.appendChild(popup);
+  }
+  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:10px;font-family:var(--heading)">' + title + '</div>';
+  if (!appeared.length) {
+    html += '<div style="font-size:11px;color:var(--text-light);margin-bottom:10px">No pitcher on that side has recorded an out.</div>';
+  }
+  appeared.forEach(i => {
+    html += '<button class="dp-opt" data-idx="' + i + '" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-bottom:4px;border:1.5px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-family:var(--font)">' +
+      escapeHtml(pitcherLabel(team, i)) + ' <span style="color:var(--text-light);font-size:10px">' + outsToIP(outs[i]) + ' IP</span></button>';
+  });
+  if (which === 'sv') {
+    html += '<button class="dp-opt" data-idx="none" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-bottom:4px;border:1.5px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-family:var(--font)">No save</button>';
+  }
+  html += '<button class="dp-opt" data-idx="auto" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-top:6px;border:1.5px solid var(--navy);border-radius:4px;background:var(--cream);cursor:pointer;font-size:12px;font-weight:700;font-family:var(--font)">Auto (apply the rules)</button>';
+  popup.innerHTML = html;
+  popup.style.display = 'block';
+  popup.querySelectorAll('.dp-opt').forEach(btn => {
+    btn.onclick = function() {
+      popup.style.display = 'none';
+      setPitcherDecision(which, this.dataset.idx);
+    };
+  });
+}
+
+function setPitcherDecision(which, raw) {
+  if (!gameState.decisions) gameState.decisions = {};
+  if (raw === 'auto') delete gameState.decisions[which];
+  else if (raw === 'none') gameState.decisions[which] = -1;
+  else gameState.decisions[which] = parseInt(raw);
+  autoSave();
+  showGameSummary();   // rebuild the card with the new decision
+}
+
+function outsToIP(outs) {
+  const n = outs || 0;
+  return Math.floor(n / 3) + '.' + (n % 3);
 }
 
 /* Game Summary */
@@ -3277,7 +4823,7 @@ function showGameSummary() {
     let cells = '';
     for (let i = 0; i < gsVis; i++) {
       const v = document.querySelector('input[data-ls="' + team + '"][data-inn="' + i + '"]')?.value || '';
-      cells += '<td>' + (v || '-') + '</td>';
+      cells += '<td>' + escapeHtml(v || '-') + '</td>';
     }
     return cells;
   }
@@ -3307,7 +4853,7 @@ function showGameSummary() {
     function addRow(name, posLabel, s, indent) {
       const avg = s.ab > 0 ? (s.h / s.ab).toFixed(3).replace(/^0/, '') : '-';
       const pre = indent ? '&nbsp;&nbsp;↳ ' : '';
-      rows += '<tr><td>' + pre + name + ' <span style="color:var(--text-light);font-size:10px">' + posLabel + '</span></td><td>' + s.ab + '</td><td>' + s.r + '</td><td>' + s.h + '</td><td>' + s.rbi + '</td><td>' + s.bb + '</td><td>' + s.k + '</td><td>' + avg + '</td></tr>';
+      rows += '<tr><td>' + pre + escapeHtml(name) + ' <span style="color:var(--text-light);font-size:10px">' + escapeHtml(posLabel) + '</span></td><td>' + s.ab + '</td><td>' + s.r + '</td><td>' + s.h + '</td><td>' + s.rbi + '</td><td>' + s.bb + '</td><td>' + s.k + '</td><td>' + avg + '</td></tr>';
       totAB += s.ab; totH += s.h; totR += s.r; totRBI += s.rbi; totBB += s.bb;
     }
     for (let pos = 0; pos < POSITIONS; pos++) {
@@ -3315,12 +4861,11 @@ function showGameSummary() {
       const subp = sp + 1;
       const starter = players[sp];
       const sub = players[subp];
-      const overflow = getOverflowForPlayer(team, sp);
-      const allABs = starter.atBats.concat(overflow);
+      const allABs = starter.atBats;
       const hasSub = starter.atBats.some(ab => ab.subChange);
       if (hasSub) {
-        const ss = tallyAtBats(allABs, ab => !ab.subChange);
-        const us = tallyAtBats(allABs, ab => ab.subChange);
+        const ss = tallyAtBats(team, sp, allABs, ab => !ab.subChange);
+        const us = tallyAtBats(team, sp, allABs, ab => ab.subChange);
         if (ss.ab > 0 || ss.bb > 0 || ss.hbp > 0) {
           const name = (starter.num ? '#' + starter.num + ' ' : '') + (starter.name || 'Pos ' + (pos + 1));
           addRow(name, getPosTrail(team, sp), ss, false);
@@ -3331,7 +4876,7 @@ function showGameSummary() {
         }
       } else {
         if (!starter.name && !starter.num) continue;
-        const s = tallyAtBats(allABs, () => true);
+        const s = tallyAtBats(team, sp, allABs, () => true);
         if (s.ab === 0 && s.bb === 0 && s.hbp === 0) continue;
         const name = (starter.num ? '#' + starter.num + ' ' : '') + (starter.name || 'Pos ' + (pos + 1));
         addRow(name, getPosTrail(team, sp), s, false);
@@ -3351,53 +4896,9 @@ function showGameSummary() {
       const ip = p.ip || '0';
       if (ip === '0' && !p.h && !p.k) continue;
       const name = (p.num ? '#' + p.num + ' ' : '') + (p.name || 'Pitcher ' + (i + 1));
-      rows += '<tr><td>' + name + '</td><td>' + (p.ip || '0') + '</td><td>' + (p.pc || '0') + '</td><td>' + (p.h || '0') + '</td><td>' + (p.r || '0') + '</td><td>' + (p.er || '0') + '</td><td>' + (p.k || '0') + '</td><td>' + (p.bb || '0') + '</td></tr>';
+      rows += '<tr><td>' + escapeHtml(name) + '</td><td>' + (p.ip || '0') + '</td><td>' + (p.pc || '0') + '</td><td>' + (p.h || '0') + '</td><td>' + (p.r || '0') + '</td><td>' + (p.er || '0') + '</td><td>' + (p.k || '0') + '</td><td>' + (p.bb || '0') + '</td></tr>';
     }
     return rows;
-  }
-
-  // Determine W/L/S pitchers
-  function findPitcherDecisions() {
-    const result = { wp: '', lp: '', sv: '' };
-    // Winning pitcher: last pitcher for winning team when they took the lead for good
-    // Simplified: winning team's pitcher with most IP, losing team's pitcher who allowed the go-ahead run
-    const wTeam = vR > hR ? 'visiting' : 'home';
-    const lTeam = vR > hR ? 'home' : 'visiting';
-    const wPitchers = gameState.teams[wTeam].pitchers;
-    const lPitchers = gameState.teams[lTeam].pitchers;
-    // Find pitcher with most outs on winning side
-    let bestIP = -1, bestIdx = 0;
-    for (let i = 0; i < PITCHER_ROWS; i++) {
-      const ip = parseFloat(wPitchers[i].ip) || 0;
-      if (ip > bestIP) { bestIP = ip; bestIdx = i; }
-    }
-    if (wPitchers[bestIdx]?.name || wPitchers[bestIdx]?.num) {
-      result.wp = (wPitchers[bestIdx].num ? '#' + wPitchers[bestIdx].num + ' ' : '') + (wPitchers[bestIdx].name || 'Pitcher ' + (bestIdx + 1));
-    }
-    // Losing pitcher: pitcher with most ER on losing side
-    let worstER = -1, worstIdx = 0;
-    for (let i = 0; i < PITCHER_ROWS; i++) {
-      const er = parseInt(lPitchers[i].er) || 0;
-      if (er > worstER) { worstER = er; worstIdx = i; }
-    }
-    if (lPitchers[worstIdx]?.name || lPitchers[worstIdx]?.num) {
-      result.lp = (lPitchers[worstIdx].num ? '#' + lPitchers[worstIdx].num + ' ' : '') + (lPitchers[worstIdx].name || 'Pitcher ' + (worstIdx + 1));
-    }
-    // Save: last pitcher for winning team if they pitched the final inning and lead was ≤3
-    const lastPitcherIdx = (() => {
-      for (let i = PITCHER_ROWS - 1; i >= 0; i--) {
-        if (wPitchers[i].ip && parseFloat(wPitchers[i].ip) > 0) return i;
-      }
-      return -1;
-    })();
-    if (lastPitcherIdx > 0 && lastPitcherIdx !== bestIdx) {
-      const lastP = wPitchers[lastPitcherIdx];
-      const margin = Math.abs(vR - hR);
-      if (margin <= 3 || parseFloat(lastP.ip) >= 3) {
-        result.sv = (lastP.num ? '#' + lastP.num + ' ' : '') + (lastP.name || 'Pitcher ' + (lastPitcherIdx + 1));
-      }
-    }
-    return result;
   }
 
   // Player of the game: highest combined (H + RBI + R) weighted
@@ -3514,40 +5015,50 @@ function showGameSummary() {
     return [...new Set(plays)];
   }
 
-  const decisions = vR !== hR ? findPitcherDecisions() : { wp: '', lp: '', sv: '' };
+  const decisions = computePitcherDecisions();
   const potg = findPlayerOfGame();
   const notable = findNotablePlays();
 
-  let html = '<div style="position:relative"><button onclick="document.getElementById(\'game-summary-modal\').classList.remove(\'active\')" style="position:absolute;top:-8px;right:-12px;font-size:24px;cursor:pointer;color:var(--text-light);background:none;border:none;font-weight:700">&times;</button>';
+  let html = '<div style="position:relative"><button data-act="closeGameSummary" style="position:absolute;top:-8px;right:-12px;font-size:24px;cursor:pointer;color:var(--text-light);background:none;border:none;font-weight:700">&times;</button>';
 
   // Header
   html += '<div class="gs-header"><h2>Game Summary</h2>';
-  html += '<div class="gs-subtitle">' + (date || 'Date TBD') + '</div></div>';
+  html += '<div class="gs-subtitle">' + escapeHtml(date || 'Date TBD') + '</div></div>';
 
   // Score banner
   html += '<div class="gs-score-banner">';
-  html += '<div class="gs-team-score"><div class="gs-team-name">' + vTeam + '</div><div class="gs-score-num">' + vR + '</div></div>';
+  html += '<div class="gs-team-score"><div class="gs-team-name">' + escapeHtml(vTeam) + '</div><div class="gs-score-num">' + vR + '</div></div>';
   html += '<div style="text-align:center"><div class="gs-vs">vs</div><div class="gs-final-tag">Final</div></div>';
-  html += '<div class="gs-team-score"><div class="gs-team-name">' + hTeam + '</div><div class="gs-score-num">' + hR + '</div></div>';
+  html += '<div class="gs-team-score"><div class="gs-team-name">' + escapeHtml(hTeam) + '</div><div class="gs-score-num">' + hR + '</div></div>';
   html += '</div>';
 
   // Highlights row
   html += '<div class="gs-highlight">';
   if (potg) {
     html += '<div class="gs-highlight-card"><div class="gs-hl-label">Player of the Game</div>';
-    html += '<div class="gs-hl-value">' + potg.name + '</div>';
+    html += '<div class="gs-hl-value">' + escapeHtml(potg.name) + '</div>';
     if (potg.isPitcher) {
       html += '<div class="gs-hl-detail">' + potg.ip + ' IP, ' + potg.k + ' K, ' + potg.er + ' ER</div>';
     } else {
       html += '<div class="gs-hl-detail">' + potg.h + '-' + potg.ab + ', ' + potg.rbi + ' RBI, ' + potg.r + ' R' + (potg.hr ? ', ' + potg.hr + ' HR' : '') + '</div>';
     }
-    html += '<div class="gs-hl-detail" style="color:var(--text-light)">' + potg.team + '</div></div>';
+    html += '<div class="gs-hl-detail" style="color:var(--text-light)">' + escapeHtml(potg.team) + '</div></div>';
   }
-  if (decisions.wp) {
+  if (decisions.winTeam) {
+    const change = w => '<button data-act="promptPitcherDecision" data-arg="' + w + '" style="margin-left:6px;font-size:9px;padding:1px 5px;border:1px solid var(--border);border-radius:3px;background:transparent;color:var(--text-light);cursor:pointer;font-family:var(--font)">change</button>';
+    const nameOf = (team, idx) => (idx === null || idx === undefined || idx < 0) ? '—' : escapeHtml(pitcherLabel(team, idx));
     html += '<div class="gs-highlight-card"><div class="gs-hl-label">Pitching Decision</div>';
-    html += '<div class="gs-pitching-line"><b>W:</b> ' + decisions.wp + '</div>';
-    html += '<div class="gs-pitching-line"><b>L:</b> ' + decisions.lp + '</div>';
-    if (decisions.sv) html += '<div class="gs-pitching-line"><b>SV:</b> ' + decisions.sv + '</div>';
+    html += '<div class="gs-pitching-line"><b>W:</b> ' + nameOf(decisions.winTeam, decisions.wp) + change('wp') + '</div>';
+    html += '<div class="gs-pitching-line"><b>L:</b> ' + nameOf(decisions.loseTeam, decisions.lp) + change('lp') + '</div>';
+    html += '<div class="gs-pitching-line"><b>SV:</b> ' + nameOf(decisions.winTeam, decisions.sv) + change('sv') + '</div>';
+    if (decisions.judgment) {
+      html += '<div class="gs-hl-detail" style="color:var(--red);margin-top:4px">' + escapeHtml(decisions.judgment) + '</div>';
+      html += '<div class="gs-hl-detail" style="color:var(--text-light)">Candidates: ' +
+        decisions.winCandidates.map(i => escapeHtml(pitcherLabel(decisions.winTeam, i))).join(', ') + '</div>';
+    }
+    if (decisions.approximate) {
+      html += '<div class="gs-hl-detail" style="color:var(--text-light);margin-top:4px">Approximate: this game was saved before play order was recorded.</div>';
+    }
     html += '</div>';
   }
   html += '</div>';
@@ -3557,30 +5068,30 @@ function showGameSummary() {
   html += '<table class="gs-table"><thead><tr><th></th>';
   for (let i = 1; i <= gsVis; i++) html += '<th>' + i + '</th>';
   html += '<th>R</th><th>H</th><th>E</th></tr></thead><tbody>';
-  html += '<tr><td>' + vTeam + '</td>' + lsRow('visiting') + '<td><b>' + vR + '</b></td><td>' + vH + '</td><td>' + vE + '</td></tr>';
-  html += '<tr><td>' + hTeam + '</td>' + lsRow('home') + '<td><b>' + hR + '</b></td><td>' + hH + '</td><td>' + hE + '</td></tr>';
+  html += '<tr><td>' + escapeHtml(vTeam) + '</td>' + lsRow('visiting') + '<td><b>' + vR + '</b></td><td>' + vH + '</td><td>' + vE + '</td></tr>';
+  html += '<tr><td>' + escapeHtml(hTeam) + '</td>' + lsRow('home') + '<td><b>' + hR + '</b></td><td>' + hH + '</td><td>' + hE + '</td></tr>';
   html += '</tbody></table></div>';
 
   // Box score — Visiting
-  html += '<div class="gs-section"><h3>' + vTeam + ' — Batting</h3>';
+  html += '<div class="gs-section"><h3>' + escapeHtml(vTeam) + ' — Batting</h3>';
   html += '<table class="gs-table"><thead><tr><th>Player</th><th>AB</th><th>R</th><th>H</th><th>RBI</th><th>BB</th><th>K</th><th>AVG</th></tr></thead><tbody>';
   html += playerBox('visiting', vTeam);
   html += '</tbody></table></div>';
 
   // Box score — Home
-  html += '<div class="gs-section"><h3>' + hTeam + ' — Batting</h3>';
+  html += '<div class="gs-section"><h3>' + escapeHtml(hTeam) + ' — Batting</h3>';
   html += '<table class="gs-table"><thead><tr><th>Player</th><th>AB</th><th>R</th><th>H</th><th>RBI</th><th>BB</th><th>K</th><th>AVG</th></tr></thead><tbody>';
   html += playerBox('home', hTeam);
   html += '</tbody></table></div>';
 
   // Pitching — Visiting pitchers
-  html += '<div class="gs-section"><h3>' + vTeam + ' — Pitching</h3>';
+  html += '<div class="gs-section"><h3>' + escapeHtml(vTeam) + ' — Pitching</h3>';
   html += '<table class="gs-table"><thead><tr><th>Pitcher</th><th>IP</th><th>PC</th><th>H</th><th>R</th><th>ER</th><th>K</th><th>BB</th></tr></thead><tbody>';
   html += pitcherBox('visiting');
   html += '</tbody></table></div>';
 
   // Pitching — Home pitchers
-  html += '<div class="gs-section"><h3>' + hTeam + ' — Pitching</h3>';
+  html += '<div class="gs-section"><h3>' + escapeHtml(hTeam) + ' — Pitching</h3>';
   html += '<table class="gs-table"><thead><tr><th>Pitcher</th><th>IP</th><th>PC</th><th>H</th><th>R</th><th>ER</th><th>K</th><th>BB</th></tr></thead><tbody>';
   html += pitcherBox('home');
   html += '</tbody></table></div>';
@@ -3597,7 +5108,7 @@ function showGameSummary() {
     for (const dc of sorted) {
       const teamName = dc.team === 'visiting' ? vTeam : hTeam;
       for (const c of dc.changes) {
-        html += '<tr><td>' + dc.inning + '</td><td>' + teamName + '</td><td>' + c.name + '</td><td>' + c.fromPos + '</td><td>' + c.toPos + '</td></tr>';
+        html += '<tr><td>' + escapeHtml(dc.inning) + '</td><td>' + escapeHtml(teamName) + '</td><td>' + escapeHtml(c.name) + '</td><td>' + escapeHtml(c.fromPos) + '</td><td>' + escapeHtml(c.toPos) + '</td></tr>';
       }
     }
     html += '</tbody></table></div>';
@@ -3607,7 +5118,7 @@ function showGameSummary() {
   if (notable.length > 0) {
     html += '<div class="gs-section"><h3>Notable Plays</h3>';
     html += '<div class="gs-plays">';
-    notable.forEach(p => { html += '<span>' + p + '</span> '; });
+    notable.forEach(p => { html += '<span>' + escapeHtml(p) + '</span> '; });
     html += '</div></div>';
   }
 
@@ -3780,6 +5291,73 @@ document.addEventListener('keydown', function(e) {
     const next = document.querySelector(`.at-bat-cell[data-team="${team}"][data-p="${np}"][data-inn="${ni}"]`);
     if (next) selectCell(next);
   }
+});
+
+/* -------------------------------------------------- event wiring (CSP) ---
+   index.html used to carry ~110 inline `on*` handlers, and that is what kept a
+   strict Content-Security-Policy out of reach: permitting them means permitting
+   every inline script on the page, which is the one thing the policy is for.
+
+   Each is now `data-act`, the name of a global function, with at most one
+   argument — `data-arg` for a string, `data-argnum` for a number, and
+   `data-arg="this"` for the element itself. Two listeners here do the
+   dispatching. The popups app.js builds attach their handlers in JS after
+   setting innerHTML, which is how most of them already worked. */
+
+// The generated popups dispatch through the same listener, so their buttons
+// need named actions too rather than expressions in an attribute.
+function hidePopupById(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'none';
+}
+function closeGameSummary() {
+  const el = document.getElementById('game-summary-modal');
+  if (el) el.classList.remove('active');
+}
+function markRunEarned(i) { setRunEarnedByIndex(i, false); }
+function markRunUnearned(i) { setRunEarnedByIndex(i, true); }
+// The position-change buttons carry four values, more than `data-arg` holds, so
+// they hand over the element and this reads them off it.
+function applyFieldPosFromEl(el) {
+  applyFieldPos(el.dataset.team, Number(el.dataset.p), el.dataset.pos, el.dataset.inn);
+}
+
+function closeHotkeyModal() {
+  document.getElementById('hotkey-modal').classList.remove('active');
+}
+function openImportPicker() {
+  document.getElementById('import-game-file').click();
+}
+// On a modal's own backdrop: close only when the click landed on the backdrop
+// itself, not on anything inside it.
+function closeModalOnBackdrop(el, e) {
+  if (e && e.target === el) el.classList.remove('active');
+}
+
+function runAction(el, e) {
+  const name = el.dataset.act;
+  const fn = window[name];
+  if (typeof fn !== 'function') { console.warn('no action named ' + name); return; }
+  if (name === 'closeModalOnBackdrop') return fn(el, e);
+  if (el.dataset.argnum !== undefined) return fn(Number(el.dataset.argnum));
+  if (el.dataset.arg === 'this') return fn(el);
+  if (el.dataset.arg !== undefined) return fn(el.dataset.arg);
+  return fn();
+}
+
+document.addEventListener('click', function(e) {
+  const el = e.target.closest && e.target.closest('[data-act]');
+  if (!el) return;
+  if ((el.dataset.actOn || 'click') !== 'click') return;
+  runAction(el, e);
+});
+document.addEventListener('change', function(e) {
+  const el = e.target.closest && e.target.closest('[data-act][data-act-on="change"]');
+  if (el) runAction(el, e);
+});
+document.addEventListener('input', function(e) {
+  const el = e.target.closest && e.target.closest('[data-act][data-act-on="input"]');
+  if (el) runAction(el, e);
 });
 
 /* Auto-save on any input/select change (autoSave is itself debounced) */

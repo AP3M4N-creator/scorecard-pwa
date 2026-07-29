@@ -1,5 +1,29 @@
 #!/bin/sh
-# Auto-bump the service-worker cache version when app assets change.
+# Pre-commit:
+#   1. Run the test suite and block the commit if it fails.
+#   2. Auto-bump the service-worker cache version when app assets change.
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+# --- 1. Tests --------------------------------------------------------------
+# Only when something that can change behaviour (or the suites themselves) is
+# staged. Runs against the working tree, not the staged snapshot — commit from a
+# clean tree, or set SKIP_TESTS=1 deliberately (e.g. a fix during a live game).
+if [ -n "$SKIP_TESTS" ]; then
+  echo "pre-commit: SKIP_TESTS set — test suite skipped"
+elif echo "$staged" | grep -Eq '^(index\.html|app\.js|tests\.html|tests-scoring\.js|run-tests\.js|package\.json)$'; then
+  if ! command -v node >/dev/null 2>&1; then
+    echo "pre-commit: node not found — tests skipped (install Node to run them)" >&2
+  else
+    if ! node run-tests.js -q; then
+      echo "pre-commit: tests failed — commit aborted" >&2
+      echo "            fix them, or: SKIP_TESTS=1 git commit ..." >&2
+      exit 1
+    fi
+  fi
+fi
+
+# --- 2. Service-worker cache version --------------------------------------
 # Forces installed PWA clients to drop the old cache and re-precache on
 # activate, so a deploy can never leave a stale shell behind.
 #
@@ -8,7 +32,6 @@
 
 sw="sw.js"
 
-staged=$(git diff --cached --name-only --diff-filter=ACMR)
 echo "$staged" | grep -Eq '^(index\.html|app\.js|styles\.css|manifest\.json|icon-[^/]*\.png|fonts/)' || exit 0
 
 current=$(grep -oE "SHELL_VERSION = 'v[0-9]+'" "$sw" | grep -oE '[0-9]+')

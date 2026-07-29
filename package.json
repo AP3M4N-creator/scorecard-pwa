@@ -1,0 +1,12 @@
+{
+  "name": "scorecard-pwa",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Offline-first baseball scorecard PWA. No build step — the app is plain index.html + app.js; jsdom is only used to run the test suites from the CLI.",
+  "scripts": {
+    "test": "node run-tests.js"
+  },
+  "devDependencies": {
+    "jsdom": "30.0.0"
+  }
+}
