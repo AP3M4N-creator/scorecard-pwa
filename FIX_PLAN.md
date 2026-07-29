@@ -19,9 +19,9 @@ engine end to end, then drove the real `app.js` against the real `index.html`
 DOM in jsdom — 47 diagnostic probes — and reproduced C1, C2 and H1 by hand in a
 live browser at `http://localhost:8765` (`preview_start` → `scorecard`).
 
-**Progress:** Phases 1 and 2 are done (C1, C2, C3, H1); in Phase 3, H4 and M2 are
-fixed and **M1 is what's left**. Everything from Phase 4 on is open. This document
-is the whole state of the work.
+**Progress:** Phases 1–4 are done (C1, C2, C3, H1, H4, M1, M2, H2, H3) — one commit
+per fix. What is left is **Phase 5 polish**: M3–M7 and L1–L5, whose decisions are
+D8–D11 below. This document is the whole state of the work.
 
 ---
 
@@ -44,7 +44,11 @@ Standalone: M2, M3, M5, M6, M7, L1–L7.
 
 ---
 
-## Decisions — **all seven answered (D4–D6 on 2026-07-29, each as recommended)**
+## Decisions — **all eleven answered (D4–D6 and D8–D11 on 2026-07-29, each as recommended)**
+
+D8–D11 are Phase 5's. The rest of Phase 5 needed no decision: M3 (drop the discarded
+row), M6 (`0.0` for an appearance), L2 (say the inning is over), L4 (say the card is
+full) and L5 (`X`) each have one obviously right answer.
 
 | # | Question | My recommendation |
 |---|---|---|
@@ -55,6 +59,10 @@ Standalone: M2, M3, M5, M6, M7, L1–L7.
 | ~~D5~~ **answered: `ROWS_PER_POS = 3`** | **H3 third player in a slot.** Raise `ROWS_PER_POS` to 3, or make sub rows dynamic? | **`ROWS_PER_POS = 3`** is the cheap correct answer — it is already a constant that sizes the grid, the state and ~12 loops, and `stateForStorage` / `refillAtBats` already handle "rows whose at-bats are dropped on the way out". Dynamic rows are a much larger change for a rarer case. Confirm the row-height cost on iPad is acceptable. |
 | ~~D6~~ **answered: warn once and allow** | **M1 lock.** Hard-refuse entry after the game is final, or warn once and allow? | **Warn and allow.** A scorer sometimes needs to correct a final card, and this app's standing policy is "record what happened, never refuse" (see the re-entry prompt). A one-time toast + a FINAL marker is enough. |
 | ~~D7~~ **answered: Yes** | **M2 LOB in a walk-off.** Count runners left on when the half ends without 3 outs? | **Yes** — official scoring counts them. Change the `outs >= 3` condition to "the half-inning is over", which now includes a game-ending run. |
+| ~~D8~~ **answered: cap at 1, with a toast** | **M4 FC out cap.** Cap the popup at one out (auto-revert, the DP/TP mechanism), or let it hold more and refuse on Confirm the way `requiredOuts` does? | **`maxOuts = 1` for FC**, so the existing cap does the work and the three plays read as one rule (FC 1, DP 2, TP 3). Add a **toast naming what flipped** — the auto-revert is silent today, which reads as a dead button, and that fix lands on the DP/TP flips too. One mechanism policing the popup's out count, not two. |
+| ~~D9~~ **answered: leave it, say so** | **M5 undo across a refresh.** Persist the history, or keep it session-scoped? | **Keep it memory-only** — this re-confirms the 2026-07-28 call rather than reversing it. A snapshot is ~6.8 KB, so even a capped 20 would add ~135 KB to every autosave, and the real cost is the load path having to survive snapshots written by an older state shape. What changes is the silence: undo on an empty history **toasts** instead of doing nothing. |
+| ~~D10~~ **answered: synthesize** | **M7 pitch track.** Pad a button-entered BB/K's pitch track to the count its outcome implies, or leave the track as a record of what was tapped? | **Synthesize the missing pitches** — a walk is four balls and a strikeout three strikes, so pad to them (pushing `'S'`, never the undrawable `'X'`). The track, the PC column and the play then agree. Not marked apart from tracked pitches: a second glyph on a cell this dense costs more than the distinction is worth. |
+| ~~D11~~ **answered: leave the line** | **L3 balk / L1 no-op.** Give the pitcher line a BK column, or leave the balk uncounted? | **Leave the pitcher line alone** and demote L3 to the design-gap list. The line has no WP or PB count either, a balk has no at-bat to hang on (attribution would be inferred from the column's pitcher), and a 9th stat column costs iPad width. This settles **L1**: with nothing to record, a bases-empty WP/PB/BK is **refused with a toast** and pushes no undo entry. |
 
 ---
 
