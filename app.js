@@ -189,6 +189,16 @@ function createEmptyState() {
     },
     nextLeadoff: {},
     defChanges: [],
+    // Rule choices that differ by league and can't be derived from the card.
+    // `allowReentry`: OBR 5.10(d) says a replaced player is out of the game;
+    // youth and some rec leagues let a starter back in. Off by default, and the
+    // re-entry prompt is where a scorer turns it on for the game in hand.
+    rules: { allowReentry: false },
+    // Scorer decisions the card can't re-derive: a starter coming back in, and
+    // the inning a side lost its DH. Logs, like `defChanges` — recorded when the
+    // decision is made and not pruned when a cell is later cleared.
+    reentries: [],
+    dhTerminated: { visiting: null, home: null },
     playSeq: 0
   };
 }
@@ -274,7 +284,10 @@ function buildScoringGrid(team, containerId) {
   for (let i = 1; i <= INNINGS; i++) html += `<th class="inn-col" data-inn="${i-1}" style="width:var(--cell-w)">${i}</th>`;
   html += '</tr></thead><tbody>';
 
-  const posSelect = '<select data-field="pos"><option value=""></option><option>P</option><option>C</option><option>1B</option><option>2B</option><option>3B</option><option>SS</option><option>LF</option><option>CF</option><option>RF</option><option>DH</option></select>';
+  // `data-act` dispatch, not an inline handler: the CSP forbids inline script.
+  // The change hook keeps `players[p].pos` in step with the select (the generic
+  // autoSave path only reads them at save time) and puts the DH rules to it.
+  const posSelect = '<select data-field="pos" data-act="posSelectChanged" data-arg="this" data-act-on="change"><option value=""></option><option>P</option><option>C</option><option>1B</option><option>2B</option><option>3B</option><option>SS</option><option>LF</option><option>CF</option><option>RF</option><option>DH</option></select>';
 
   for (let pos = 0; pos < POSITIONS; pos++) {
     const sp = pos * ROWS_PER_POS;     // starter player index
@@ -747,23 +760,40 @@ function teamLOB(team) {
   return total;
 }
 
-function getActivePlayer(team, pIdx, innIdx) {
+// Which row is occupying the slot in this column — the starter's, or the sub's
+// once a sub line covers it.
+function getActivePlayerIndex(team, pIdx, innIdx) {
   const sp = Math.floor(pIdx / ROWS_PER_POS) * ROWS_PER_POS;
-  const subp = sp + 1;
   const ab = gameState.teams[team].players[sp].atBats[innIdx];
-  if (ab && ab.subChange) return gameState.teams[team].players[subp];
-  return gameState.teams[team].players[sp];
+  return (ab && ab.subChange) ? sp + 1 : sp;
+}
+
+function getActivePlayer(team, pIdx, innIdx) {
+  return gameState.teams[team].players[getActivePlayerIndex(team, pIdx, innIdx)];
+}
+
+// A row's `num`/`name` as they stand on the card. `collectState` only scrapes the
+// lineup inputs on the debounced save (~400ms after the last keystroke), so
+// anything that puts a player's name in front of the scorer has to read the
+// input: a name typed a moment ago is not in the state yet, and every popup that
+// asked about "Batter 3" was asking about a man whose name was on screen.
+function livePlayerField(team, pIdx, field) {
+  const inp = document.querySelector(`input[data-field="${field}"][data-team="${team}"][data-p="${pIdx}"]`);
+  if (inp) return inp.value;
+  const pl = gameState.teams[team] && gameState.teams[team].players[pIdx];
+  return (pl && pl[field]) || '';
 }
 
 function getActivePlayerName(team, pIdx, innIdx) {
-  const pl = getActivePlayer(team, pIdx, innIdx);
+  const ap = getActivePlayerIndex(team, pIdx, innIdx);
   const pos = Math.floor(pIdx / ROWS_PER_POS) + 1;
-  return (pl.num ? '#' + pl.num + ' ' : '') + (pl.name || 'Batter ' + pos);
+  const num = livePlayerField(team, ap, 'num');
+  return (num ? '#' + num + ' ' : '') + (livePlayerField(team, ap, 'name') || 'Batter ' + pos);
 }
 
 function getBatterLabel(team, pIdx, innIdx) {
-  const pl = innIdx !== undefined ? getActivePlayer(team, pIdx, innIdx) : gameState.teams[team].players[pIdx];
-  return pl.num || String(Math.floor(pIdx / ROWS_PER_POS) + 1);
+  const ap = innIdx !== undefined ? getActivePlayerIndex(team, pIdx, innIdx) : pIdx;
+  return livePlayerField(team, ap, 'num') || String(Math.floor(pIdx / ROWS_PER_POS) + 1);
 }
 
 function setAdvReason(ab, segIdx, reason) {
@@ -1186,7 +1216,10 @@ function hidePopupBackdrop() {
 // asking about is the one being taken back.
 const PENDING_ENTRY_POPUPS = [
   'runner-popup', 'outcome-popup', 'base-picker', 'pos-popup', 'k-popup',
-  'edit-play-popup', 'move-runner-popup', 'er-review-popup', 'recompute-popup'
+  'edit-play-popup', 'move-runner-popup', 'er-review-popup', 'recompute-popup',
+  // Both defer their write until a choice is made, and both write a whole
+  // player row — so an undo taken in the meantime would be applied on top of.
+  'sub-popup', 'dh-popup'
 ];
 
 function pendingEntryPopupOpen() {
@@ -3608,6 +3641,9 @@ function applyState() {
   if (gameState.timerRunning === undefined) gameState.timerRunning = false;
   if (gameState.notes === undefined) gameState.notes = '';
   if (!gameState.defChanges) gameState.defChanges = [];
+  if (!gameState.rules) gameState.rules = { allowReentry: false };
+  if (!Array.isArray(gameState.reentries)) gameState.reentries = [];
+  if (!gameState.dhTerminated) gameState.dhTerminated = { visiting: null, home: null };
   if (!gameState.visibleInnings) gameState.visibleInnings = 9;
   if (gameState.playSeq === undefined) gameState.playSeq = 0;
   migrateBaseRunners(gameState);   // bare-index base entries from a pre-Phase-7 save
@@ -4016,21 +4052,347 @@ function changePitcher() {
   popup.style.display = 'block';
 }
 
+/* ------------------------------------------------------- substitutions ---
+   SUB is the one control over who occupies a lineup slot, and it used to be a
+   plain toggle: press it once and the sub bats from here on, press it again and
+   the starter is back. That second press is a re-entry, which OBR 5.10(d)
+   forbids — a replaced player is out of the game — and the app was granting it
+   silently, indistinguishable from taking back a press that shouldn't have
+   happened.
+
+   Those are two different acts and the card should say which one it recorded, so
+   the second press now asks. It still never refuses: leagues that allow re-entry
+   exist, and a scorer's job is to record what happened, legal or not. What it
+   won't do any more is decide on its own. */
+
 function markSub() {
   if (!selectedCell) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
+  if (gameState.teams[team].players[pIdx].atBats[innIdx].subChange) {
+    promptSubRemoval(team, pIdx, innIdx);
+    return;
+  }
   pushUndo(team, pIdx, innIdx);
+  setSubLine(team, pIdx, innIdx, INNINGS - 1, true);
+}
+
+// Write a slot's sub line on or off across `[from, to]` and bring the stats and
+// the change marks with it. Turning on skips the first column when a play is
+// already recorded there: that at-bat was the starter's, and the sub takes over
+// from the next one.
+function setSubLine(team, pIdx, from, to, on) {
   const player = gameState.teams[team].players[pIdx];
-  const turning = !player.atBats[innIdx].subChange;
-  const startCol = (turning && player.atBats[innIdx].play) ? innIdx + 1 : innIdx;
-  for (let c = startCol; c < INNINGS; c++) {
-    player.atBats[c].subChange = turning;
+  const start = (on && player.atBats[from].play) ? from + 1 : from;
+  for (let c = start; c <= to && c < INNINGS; c++) {
+    player.atBats[c].subChange = on;
     renderPitcherChange(team, pIdx, c);
   }
   updatePlayerStats(team);
   autoSave();
+}
+
+// The contiguous run of columns a slot's sub line covers around `col`, plus what
+// the sub has recorded inside it. `before` and `after` are the plate appearances
+// either side of `col`, and they are what decide whether taking the sub out here
+// is a re-entry (he batted, so the starter is coming back) or simply an undo
+// (he never came up, so nothing happened to record).
+function subLineRun(team, pIdx, col) {
+  const abs = gameState.teams[team].players[pIdx].atBats;
+  if (!abs[col] || !abs[col].subChange) return null;
+  let start = col, end = col;
+  while (start > 0 && abs[start - 1].subChange) start--;
+  while (end < abs.length - 1 && abs[end + 1].subChange) end++;
+  const plays = (a, b) => {
+    let n = 0;
+    for (let c = a; c <= b; c++) if (abs[c] && abs[c].play) n++;
+    return n;
+  };
+  return { start, end, before: col > start ? plays(start, col - 1) : 0, after: plays(col, end) };
+}
+
+// A one-line description of a lineup row, for a prompt or a log entry. Unlike
+// `getActivePlayerName` this names a specific row rather than whoever is
+// occupying the slot, and it says which row when the name is blank.
+function rowLabel(team, pIdx) {
+  if (!(gameState.teams[team] && gameState.teams[team].players[pIdx])) return 'row ' + pIdx;
+  const spot = Math.floor(pIdx / ROWS_PER_POS) + 1;
+  const fallback = (pIdx % ROWS_PER_POS === 0 ? 'Batter ' : 'Sub ') + spot;
+  const num = livePlayerField(team, pIdx, 'num');
+  return (num ? '#' + num + ' ' : '') + (livePlayerField(team, pIdx, 'name') || fallback);
+}
+
+// The half-inning label a decision is being recorded in — the selected cell's,
+// falling back to the card's first inning when nothing is selected (a lineup
+// edit made before anybody has batted).
+function currentInningLabel(team, innIdx) {
+  const col = innIdx !== undefined && innIdx !== null ? innIdx : 0;
+  return (team === 'visiting' ? 'T' : 'B') + (getRealInning(team, col) + 1);
+}
+
+/* The second press of SUB. Two different acts land on the same button, so this
+   asks which — and spells out what each does to the card, because the choice
+   changes who the recorded at-bats belong to. */
+function promptSubRemoval(team, pIdx, innIdx) {
+  const run = subLineRun(team, pIdx, innIdx);
+  if (!run) return;
+
+  // Nothing recorded under the sub anywhere in the run: this is a mis-press,
+  // not a re-entry. Take the whole line back without ceremony.
+  if (!run.before && !run.after) {
+    pushUndo(team, pIdx, innIdx);
+    setSubLine(team, pIdx, run.start, run.end, false);
+    return;
+  }
+
+  const starter = rowLabel(team, pIdx);
+  const sub = rowLabel(team, pIdx + 1);
+  const innLabel = currentInningLabel(team, innIdx);
+  const allowed = !!(gameState.rules && gameState.rules.allowReentry);
+
+  const opts = [];
+  if (run.before) {
+    // The sub has batted, so clearing from here forward puts the starter back in
+    // the game. That is the re-entry, and it is what gets recorded.
+    opts.push({
+      key: 'reentry',
+      label: starter + ' re-enters at ' + innLabel,
+      note: allowed
+        ? 'Recorded as a re-entry. This league allows it.'
+        : 'Illegal under OBR 5.10(d) — a replaced player may not return. Recorded as entered.',
+      warn: !allowed
+    });
+  }
+  opts.push({
+    key: 'undo',
+    label: 'Undo the substitution',
+    note: run.before + run.after === 1
+      ? 'Clears the whole sub line. The 1 at-bat recorded on it goes back to ' + starter + '.'
+      : 'Clears the whole sub line. The ' + (run.before + run.after) + ' at-bats recorded on it go back to ' + starter + '.'
+  });
+
+  let popup = document.getElementById('sub-popup');
+  if (!popup) {
+    popup = document.createElement('div');
+    popup.id = 'sub-popup';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:400;box-shadow:0 8px 40px rgba(26,39,68,0.4);min-width:280px;max-width:min(92vw,380px);font-family:var(--font);';
+    document.body.appendChild(popup);
+  }
+
+  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:8px;font-family:var(--heading)">Take the sub out? <span style="font-size:11px;color:var(--accent);font-weight:600;margin-left:6px">' + escapeHtml(innLabel) + '</span></div>';
+  html += '<div style="font-size:11px;color:var(--text-light);margin-bottom:10px">' + escapeHtml(sub) +
+    ' is batting in spot ' + (Math.floor(pIdx / ROWS_PER_POS) + 1) + ' for ' + escapeHtml(starter) + '.</div>';
+  opts.forEach(o => {
+    html += '<button class="sub-opt" data-key="' + o.key + '" style="display:block;width:100%;text-align:left;padding:7px 10px;margin-bottom:6px;border:1.5px solid ' +
+      (o.warn ? 'var(--accent)' : '#ccc') + ';border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-weight:600;font-family:var(--font)">' +
+      escapeHtml(o.label) +
+      '<div style="font-size:10px;font-weight:400;margin-top:2px;color:' + (o.warn ? 'var(--accent)' : 'var(--text-light)') + '">' + escapeHtml(o.note) + '</div></button>';
+  });
+  if (run.before && !allowed) {
+    html += '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text-light);margin:2px 0 8px">' +
+      '<input type="checkbox" id="sub-allow-reentry"> This league allows re-entry — stop warning</label>';
+  }
+  html += '<button class="sub-opt" data-key="cancel" style="display:block;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer;font-family:var(--font)">Cancel</button>';
+  popup.innerHTML = html;
+  popup.style.display = 'block';
+
+  popup.querySelectorAll('.sub-opt').forEach(btn => {
+    btn.onclick = function () {
+      const key = this.dataset.key;
+      const box = document.getElementById('sub-allow-reentry');
+      const nowAllowed = !!(box && box.checked);
+      popup.style.display = 'none';
+      if (key === 'cancel') return;
+      if (nowAllowed) {
+        if (!gameState.rules) gameState.rules = { allowReentry: false };
+        gameState.rules.allowReentry = true;
+      }
+      pushUndo(team, pIdx, innIdx);
+      if (key === 'reentry') {
+        recordReentry(team, pIdx, innIdx, innLabel, starter, sub);
+        setSubLine(team, pIdx, innIdx, run.end, false);
+        announce(starter + ' re-enters at ' + innLabel);
+      } else {
+        setSubLine(team, pIdx, run.start, run.end, false);
+        announce('Substitution cleared in spot ' + (Math.floor(pIdx / ROWS_PER_POS) + 1));
+      }
+    };
+  });
+}
+
+// Log a starter coming back in. One entry per slot per column — a scorer who
+// answers the prompt twice at the same cell replaces the record rather than
+// stacking a second one, the same way `applyFieldPos` handles a repeat.
+function recordReentry(team, pIdx, col, innLabel, starterName, subName) {
+  if (!Array.isArray(gameState.reentries)) gameState.reentries = [];
+  const legal = !!(gameState.rules && gameState.rules.allowReentry);
+  const prev = gameState.reentries.findIndex(r => r.team === team && r.pIdx === pIdx && r.col === col);
+  if (prev >= 0) gameState.reentries.splice(prev, 1);
+  gameState.reentries.push({
+    team, pIdx, col, inning: innLabel,
+    spot: Math.floor(pIdx / ROWS_PER_POS) + 1,
+    starter: starterName, sub: subName, legal
+  });
+}
+
+/* ------------------------------------------------------------- the DH ---
+   `DH` was one more option in the position select with nothing behind it. OBR
+   5.11 makes it a role with rules: one to a side, a batter only, and the pitcher
+   is not in the batting order for as long as it lasts. The role can also be
+   lost, and losing it is a legal event to record rather than an error to block —
+   so nothing here refuses an entry either. Where the card cannot tell a lineup
+   slip from a lost DH, it asks (the Rule 9.17(b) pattern), and while the lineup
+   is still being typed it says so without a modal in the way. */
+
+const FIELDING_POS = ['P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF'];
+
+// The DH picture for one side. Read off the live selects, which are the truth
+// until `collectState` runs, with the state as the fallback for a headless
+// caller. Sub rows count: a pinch-hitter who takes the DH's spot is the DH.
+function dhState(team) {
+  const players = (gameState.teams[team] && gameState.teams[team].players) || [];
+  const dh = [], pitchers = [];
+  for (let p = 0; p < players.length; p++) {
+    const sel = document.querySelector(`select[data-field="pos"][data-team="${team}"][data-p="${p}"]`);
+    const pos = sel ? sel.value : (players[p].pos || '');
+    if (pos === 'DH') dh.push(p);
+    else if (pos === 'P') pitchers.push(p);
+  }
+  const t = gameState.dhTerminated && gameState.dhTerminated[team];
+  return { dh, pitchers, hasDH: dh.length > 0, terminated: t || null };
+}
+
+// Has this side batted yet? Before the first record the lineup is being entered
+// and a half-typed card is normal; after it, a lineup that breaks a rule is an
+// in-game event worth stopping for.
+function teamHasRecords(team) {
+  for (let ri = 0; ri < INNINGS; ri++) if (inningHasRecords(team, ri)) return true;
+  return false;
+}
+
+// Set a row's position in the state and in the select together. Used by the DH
+// prompts to put a card right; it deliberately does not re-run the rule check,
+// so answering a prompt can't set off another one.
+function setRowPos(team, pIdx, pos) {
+  const players = gameState.teams[team] && gameState.teams[team].players;
+  if (players && players[pIdx]) players[pIdx].pos = pos;
+  const sel = document.querySelector(`select[data-field="pos"][data-team="${team}"][data-p="${pIdx}"]`);
+  if (sel) sel.value = pos;
+  autoSave();
+}
+
+// A position select changed by hand.
+function posSelectChanged(sel) {
+  const team = sel.dataset.team;
+  const p = parseInt(sel.dataset.p);
+  if (!team || Number.isNaN(p)) return;
+  const players = gameState.teams[team] && gameState.teams[team].players;
+  if (!players || !players[p]) return;
+  const from = players[p].pos || '';
+  players[p].pos = sel.value;
+  checkDHRules(team, p, from, sel.value, null);
+}
+
+/* Put the DH rules to a lineup after row `p` moved from `fromPos` to `toPos`.
+   `innLabel` is the half-inning to record against, or null to take it from the
+   selected cell. Returns the name of the rule that fired, for the tests. */
+function checkDHRules(team, p, fromPos, toPos, innLabel) {
+  const label = innLabel || currentInningLabel(team, selectedCell && selectedCell.dataset.team === team
+    ? parseInt(selectedCell.dataset.inn) : 0);
+  const st = dhState(team);
+
+  // 5.11(a)(3): the designated hitter taking a fielding position ends the role.
+  // A legal and common move, so it is recorded and said out loud, not queried.
+  if (fromPos === 'DH' && FIELDING_POS.includes(toPos)) {
+    terminateDH(team, label, rowLabel(team, p) + ' took the field at ' + toPos);
+    return 'dh-took-field';
+  }
+
+  // One DH to a side. Never legal either way round, and the scorer has just
+  // typed one of the two, so ask which to keep instead of picking.
+  if (toPos === 'DH' && st.dh.length > 1) {
+    const other = st.dh.find(i => i !== p);
+    promptDHChoice(team, {
+      title: 'Two designated hitters',
+      body: rowLabel(team, other) + ' is already the DH. A side may use only one (OBR 5.11(a)).',
+      options: [
+        { label: 'Keep this one — clear ' + rowLabel(team, other), run: () => setRowPos(team, other, '') },
+        { label: 'Undo — leave the DH with ' + rowLabel(team, other), run: () => setRowPos(team, p, fromPos) }
+      ]
+    });
+    return 'two-dh';
+  }
+
+  // 5.11(a): with a DH in the order the pitcher is not one of the nine batters.
+  // Both on the card is either a lineup slip or the moment the DH was lost, and
+  // the card can't tell which — so it asks once the game is under way, and
+  // before then just says so and gets out of the way.
+  if (st.hasDH && st.pitchers.length && !st.terminated) {
+    const pitcherRow = st.pitchers[0], dhRow = st.dh[0];
+    if (!teamHasRecords(team)) {
+      showPlayReject('DH lineup: the pitcher does not bat. ' + rowLabel(team, pitcherRow) +
+        ' is listed at P alongside DH ' + rowLabel(team, dhRow) + '.');
+      return 'dh-and-pitcher-pregame';
+    }
+    promptDHChoice(team, {
+      title: 'Pitcher in the batting order',
+      body: rowLabel(team, pitcherRow) + ' is at P while ' + rowLabel(team, dhRow) +
+        ' is the DH. Under OBR 5.11(a) the pitcher does not bat while a DH is in use.',
+      options: [
+        {
+          label: 'The DH was lost at ' + label,
+          note: 'The pitcher bats from here on. The DH cannot be restored (5.11(b)).',
+          run: () => terminateDH(team, label, 'the pitcher entered the batting order')
+        },
+        {
+          label: 'A mistake — undo this change',
+          run: () => setRowPos(team, p, fromPos)
+        }
+      ]
+    });
+    return 'dh-and-pitcher';
+  }
+  return null;
+}
+
+// Record a side losing its DH. Once lost the role can't be restored (5.11(b)),
+// so one slot per side is the whole record; a later termination overwrites it.
+function terminateDH(team, innLabel, reason) {
+  if (!gameState.dhTerminated) gameState.dhTerminated = { visiting: null, home: null };
+  gameState.dhTerminated[team] = { inning: innLabel, reason };
+  announce('DH terminated at ' + innLabel + ': ' + reason);
+  showPlayReject('DH terminated at ' + innLabel + ' — ' + reason);
+  autoSave();
+}
+
+/* A two-or-three-way DH question. Each option carries the work it does, so the
+   rule logic above reads as rules and this only draws them. */
+function promptDHChoice(team, spec) {
+  let popup = document.getElementById('dh-popup');
+  if (!popup) {
+    popup = document.createElement('div');
+    popup.id = 'dh-popup';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:400;box-shadow:0 8px 40px rgba(26,39,68,0.4);min-width:280px;max-width:min(92vw,380px);font-family:var(--font);';
+    document.body.appendChild(popup);
+  }
+  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:8px;font-family:var(--heading)">' + escapeHtml(spec.title) + '</div>';
+  html += '<div style="font-size:11px;color:var(--text-light);margin-bottom:10px">' + escapeHtml(spec.body) + '</div>';
+  spec.options.forEach((o, i) => {
+    html += '<button class="dh-opt" data-idx="' + i + '" style="display:block;width:100%;text-align:left;padding:7px 10px;margin-bottom:6px;border:1.5px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-weight:600;font-family:var(--font)">' +
+      escapeHtml(o.label) +
+      (o.note ? '<div style="font-size:10px;font-weight:400;margin-top:2px;color:var(--text-light)">' + escapeHtml(o.note) + '</div>' : '') +
+      '</button>';
+  });
+  popup.innerHTML = html;
+  popup.style.display = 'block';
+  popup.querySelectorAll('.dh-opt').forEach(btn => {
+    btn.onclick = function () {
+      const opt = spec.options[parseInt(this.dataset.idx)];
+      popup.style.display = 'none';
+      if (opt && opt.run) opt.run();
+    };
+  });
 }
 
 function changeFieldPos() {
@@ -4055,7 +4417,7 @@ function changeFieldPos() {
   const halfLabel = team === 'visiting' ? 'T' : 'B';
   const realInn = getRealInning(team, innIdx) + 1;
   const innLabel = halfLabel + realInn;
-  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:10px;font-family:var(--heading)">Position Change <span style="font-size:11px;color:var(--red);font-weight:600;margin-left:6px">' + innLabel + '</span></div>';
+  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:10px;font-family:var(--heading)">Position Change <span style="font-size:11px;color:var(--accent);font-weight:600;margin-left:6px">' + innLabel + '</span></div>';
   html += '<div style="font-size:11px;margin-bottom:8px;color:var(--text-light)">' + escapeHtml(name) + ' — current: <b>' + escapeHtml(current || 'none') + '</b></div>';
   html += '<div style="display:flex;gap:4px;flex-wrap:wrap">';
   positions.forEach(pos => {
@@ -4072,6 +4434,10 @@ function applyFieldPos(team, starterP, pos, innLabel) {
   const posSelect = document.querySelector(`select[data-field="pos"][data-team="${team}"][data-p="${starterP}"]`);
   const oldPos = posSelect ? posSelect.value : '';
   if (posSelect) { posSelect.value = pos; }
+  // Setting the select by hand fires no change event, so the state and the DH
+  // check both have to be driven from here.
+  const posPlayer = gameState.teams[team] && gameState.teams[team].players[starterP];
+  if (posPlayer) posPlayer.pos = pos;
   if (oldPos && oldPos !== pos && innLabel) {
     if (!gameState.defChanges) gameState.defChanges = [];
     const player = gameState.teams[team].players[starterP];
@@ -4091,6 +4457,8 @@ function applyFieldPos(team, starterP, pos, innLabel) {
   }
   document.getElementById('pos-change-popup').style.display = 'none';
   autoSave();
+  // After the popup is down, so a DH question doesn't open behind it.
+  if (oldPos !== pos) checkDHRules(team, starterP, oldPos, pos, innLabel);
 }
 
 function setPitcher(idx) {
@@ -5052,7 +5420,7 @@ function showGameSummary() {
     html += '<div class="gs-pitching-line"><b>L:</b> ' + nameOf(decisions.loseTeam, decisions.lp) + change('lp') + '</div>';
     html += '<div class="gs-pitching-line"><b>SV:</b> ' + nameOf(decisions.winTeam, decisions.sv) + change('sv') + '</div>';
     if (decisions.judgment) {
-      html += '<div class="gs-hl-detail" style="color:var(--red);margin-top:4px">' + escapeHtml(decisions.judgment) + '</div>';
+      html += '<div class="gs-hl-detail" style="color:var(--accent);margin-top:4px">' + escapeHtml(decisions.judgment) + '</div>';
       html += '<div class="gs-hl-detail" style="color:var(--text-light)">Candidates: ' +
         decisions.winCandidates.map(i => escapeHtml(pitcherLabel(decisions.winTeam, i))).join(', ') + '</div>';
     }
@@ -5112,6 +5480,38 @@ function showGameSummary() {
       }
     }
     html += '</tbody></table></div>';
+  }
+
+  // Lineup rules — the DH and any re-entry. Both are scorer decisions the card
+  // can't re-derive, so the summary is where they get read back.
+  const dhLines = ['visiting', 'home'].map(t => {
+    const st = dhState(t);
+    if (!st.hasDH && !st.terminated) return null;
+    const name = st.hasDH ? rowLabel(t, st.dh[0]) : null;
+    const who = t === 'visiting' ? vTeam : hTeam;
+    let s = escapeHtml(who) + ' — DH: ' + escapeHtml(name || '—');
+    if (st.terminated) {
+      s += ' <span style="color:var(--accent)">terminated ' + escapeHtml(st.terminated.inning) +
+        ' (' + escapeHtml(st.terminated.reason) + ')</span>';
+    }
+    return s;
+  }).filter(Boolean);
+  const reentries = Array.isArray(gameState.reentries) ? gameState.reentries : [];
+  if (dhLines.length || reentries.length) {
+    html += '<div class="gs-section"><h3>Lineup Rules</h3>';
+    dhLines.forEach(l => { html += '<div class="gs-pitching-line">' + l + '</div>'; });
+    if (reentries.length) {
+      html += '<table class="gs-table"><thead><tr><th>Inning</th><th>Team</th><th>Spot</th><th>Re-entered</th><th>For</th></tr></thead><tbody>';
+      for (const r of reentries) {
+        const teamName = r.team === 'visiting' ? vTeam : hTeam;
+        html += '<tr><td>' + escapeHtml(r.inning) + '</td><td>' + escapeHtml(teamName) + '</td><td>' + r.spot +
+          '</td><td>' + escapeHtml(r.starter) +
+          (r.legal ? '' : ' <span style="color:var(--accent);font-size:10px">illegal (5.10(d))</span>') +
+          '</td><td>' + escapeHtml(r.sub) + '</td></tr>';
+      }
+      html += '</tbody></table>';
+    }
+    html += '</div>';
   }
 
   // Notable plays
