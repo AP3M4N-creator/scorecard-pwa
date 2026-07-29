@@ -1711,8 +1711,28 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
     document.body.appendChild(popup);
   }
 
+  // A play labelled DP has to record 2 outs and a TP 3 — refused on Confirm below.
+  // Open on the forced runners nearest the batter already marked out, so the popup
+  // starts on what the label asserts instead of on a green "Safe" that contradicts
+  // it (#C2). A runner is forced only while every base behind him is occupied.
+  const requiredOuts = /^TP/.test(play) ? 3 : /^DP/.test(play) ? 2 : 0;
+  const forcedBases = [];
+  for (let b = 0; b < 3; b++) {
+    if (inn.bases[b] === null) break;
+    forcedBases.push(b);
+  }
+  // One of the required outs is the batter's; the rest come off the force chain.
+  // If the chain is short (nobody on 1st), no runner gets a default out and the
+  // scorer has to name the tag out himself — Confirm won't take it otherwise.
+  const defaultOutBases = requiredOuts ? forcedBases.slice(0, requiredOuts - 1) : [];
+
   const outcomes = {};
-  runners.forEach(r => { outcomes[r.base] = { action: 'safe', dest: Math.min(r.base + 1, 3) }; });
+  runners.forEach(r => {
+    outcomes[r.base] = {
+      action: defaultOutBases.includes(r.base) ? 'out' : 'safe',
+      dest: Math.min(r.base + 1, 3)
+    };
+  });
   outcomes.batter = { action: isDP ? 'out' : 'safe', dest: 0 };
 
   let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:12px;font-family:var(--heading)">' + play + ' — Runner Outcomes</div>';
@@ -1730,7 +1750,8 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
     }
     // Out options
     for (let d = r.base + 1; d <= 3; d++) {
-      html += `<button class="oc-btn" data-base="${r.base}" data-action="out" data-dest="${d}" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid #ccc;border-radius:3px;background:#fff;color:#555;cursor:pointer;font-family:var(--mono)">Out at ${baseNames[d]}</button>`;
+      const isDefault = outcomes[r.base].action === 'out' && d === outcomes[r.base].dest;
+      html += `<button class="oc-btn" data-base="${r.base}" data-action="out" data-dest="${d}" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid ${isDefault ? 'var(--accent)' : '#ccc'};border-radius:3px;background:${isDefault ? '#fce4ec' : '#fff'};color:${isDefault ? 'var(--accent)' : '#555'};cursor:pointer;font-family:var(--mono)">Out at ${baseNames[d]}</button>`;
     }
     html += `</div></div>`;
   });
@@ -1853,6 +1874,25 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
       bad.forEach(flashOcRow);
       showPlayReject(runnerOrderMessage(parties));
       return;
+    }
+    // A DP that records one out is not a DP. The card would assert a double play
+    // while the state recorded the opposite of its second out, leaving the inning
+    // an out short (#C2). Refuse rather than silently disagree with the label.
+    if (requiredOuts) {
+      let outCount = outcomes.batter && outcomes.batter.action === 'out' ? 1 : 0;
+      for (let b = 0; b < 3; b++) {
+        if (outcomes[b] && outcomes[b].action === 'out') outCount++;
+      }
+      if (outCount < requiredOuts) {
+        const label = requiredOuts === 3 ? 'triple play' : 'double play';
+        popup.querySelectorAll('.oc-row').forEach(row => {
+          const key = row.dataset.base;
+          const oc = key === 'batter' ? outcomes.batter : outcomes[parseInt(key)];
+          if (!oc || oc.action !== 'out') flashOcRow(key);
+        });
+        showPlayReject(`A ${label} needs ${requiredOuts} outs — ${outCount} marked.`);
+        return;
+      }
     }
     popup.style.display = 'none';
     hidePopupBackdrop();

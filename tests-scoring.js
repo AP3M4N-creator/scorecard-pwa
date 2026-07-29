@@ -1056,15 +1056,60 @@
     eq('batter on 1st', onB('visiting', 0, 0), 2);
   });
 
-  test('the DP outcome popup lets a runner hold when the batter is out', () => {
+  test('the DP outcome popup offers a hold but will not confirm one out', () => {
     sel('visiting', 0, 0);
     play('1B');                                    // p0 on 1st
     promptPositionPlay('DP ');
     positionPopup('6-4-3');                        // batter is out by default on a DP
+    // Holding 1st collides with nobody — the batter is out, so the base is free.
+    // It is still not a double play, and Confirm says so (C2).
     ok('holding 1st is allowed', !ocBtn(0, 'safe', 0).disabled);
     outcomePopup({ 0: ['safe', 0] });
-    eq('runner still on 1st', onB('visiting', 0, 0), 0);
-    eq('outs', inn('visiting', 0).outs, 1);
+    ok('the refusal is shown', visible('play-reject'));
+    ok('the popup is still open', visible('outcome-popup'));
+    eq('no outs reached state', inn('visiting', 0).outs, 0);
+    eq('the runner is untouched', onB('visiting', 0, 0), 0);
+  });
+
+  // C2 — the popup used to default every runner to a green "Safe" and require no
+  // selection, so Confirming a `DP 6-4-3` straight off recorded one out and
+  // *advanced* the forced runner. The card asserted a double play while the state
+  // recorded the opposite of its second out, leaving the inning an out short.
+  test('a DP confirmed on its own defaults records two outs', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    promptPositionPlay('DP ');
+    positionPopup('6-4-3');
+    outcomePopup({});                              // Confirm, nothing touched
+    eq('outs', inn('visiting', 0).outs, 2);
+    eq('outs recorded on the play', ab('visiting', 2, 0).outsRecorded, 2);
+    eq('the forced runner did not advance', onB('visiting', 0, 1), null);
+    eq('and is off 1st', onB('visiting', 0, 0), null);
+  });
+
+  test('a TP confirmed on its own defaults records three outs', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                    // p0 on 1st
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });   // p2 on 1st, p0 to 2nd
+    promptPositionPlay('TP ');
+    positionPopup('5-4-3');
+    outcomePopup({});                              // Confirm, nothing touched
+    eq('outs', inn('visiting', 0).outs, 3);
+    eq('bases are empty', occupants('visiting', 0).length, 0);
+  });
+
+  test('a DP with nobody forced needs the scorer to name the second out', () => {
+    sel('visiting', 0, 0);
+    play('2B');                                    // p0 on 2nd — not a forced runner
+    promptPositionPlay('DP ');
+    positionPopup('8-6');
+    // Nothing off the force chain to default, so the popup opens one out short.
+    outcomePopup({});
+    ok('the refusal is shown', visible('play-reject'));
+    eq('no outs reached state', inn('visiting', 0).outs, 0);
+    // Naming the tag out is accepted.
+    outcomePopup({ 1: ['out', 2] });
+    eq('outs', inn('visiting', 0).outs, 2);
   });
 
   // #4 — the steal picker used to offer a base someone was already standing on.

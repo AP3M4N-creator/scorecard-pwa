@@ -19,7 +19,8 @@ engine end to end, then drove the real `app.js` against the real `index.html`
 DOM in jsdom — 47 diagnostic probes — and reproduced C1, C2 and H1 by hand in a
 live browser at `http://localhost:8765` (`preview_start` → `scorecard`).
 
-**Nothing has been fixed yet.** This document is the whole state of the work.
+**Progress:** Phase 1 is done — C1 and C2 are fixed. Everything else is open. This
+document is the whole state of the work.
 
 ---
 
@@ -56,7 +57,7 @@ Standalone: M2, M3, M5, M6, M7, L1–L7.
 
 ---
 
-## Phase 1 — the two live-game correctness bugs ✅ ship first
+## Phase 1 — the two live-game correctness bugs ✅ DONE
 
 These are the only findings that silently produce a **wrong card during a live
 game from ordinary taps**. Both are small. Do these before anything else.
@@ -97,24 +98,46 @@ opening the popup, a tap-through causes two distinct failures:
 Fix per **D1**. Note both halves need covering — a guard that only blocks
 `selectCell` still lets a play button fire at the already-selected cell.
 
-### C2 — DP/TP on the popup's own defaults records one out and advances the runner (RC-B)
-`showRunnerOutcomePopup` [app.js:1686–1687], `applyRunnerOutcomes` [app.js:1832]
+### C2 — DP/TP on the popup's own defaults records one out and advances the runner (RC-B) — ✅ **FIXED**
+Fixed per D2 (both halves). `showRunnerOutcomePopup` now computes
+`requiredOuts` (3 for TP, 2 for DP, 0 otherwise) and a `forcedBases` chain — a
+runner is forced only while every base behind him is occupied — then opens with
+the forced runners nearest the batter already marked **out**, so the popup starts
+on what the label asserts. Confirm additionally refuses any DP under 2 outs or TP
+under 3 with `A double play needs 2 outs — 1 marked.`, flashing the rows that
+aren't outs. When the force chain is short (nobody on 1st) no runner gets a
+default out and the scorer has to name the tag out himself — the refusal is what
+makes him.
 
-Defaults are `{action:'safe', dest: base+1}` for every runner and `out` for the
-batter, and unlike `showRunnerPopup` nothing requires a runner selection.
-Verified in the browser on `DP 6-4-3` with a runner on 1st — the popup shows a
+Covered by 3 new cases in `tests-scoring.js` (DP and TP on untouched defaults, and
+a DP with nobody forced). The existing case at the same spot asserted the bug's
+`outs === 1` outcome; it now asserts that the hold is still *offered* — it
+collides with nobody — but no longer confirmable. Suite: **213 passed, 0 failed**.
+
+Verified live at `localhost:8765` on `DP 6-4-3` with a runner on 1st: the popup
+opens with pink `Out at 2nd` + pink `Out` and no green Safe; Confirm untouched
+gives `outs: 2 · outsRecorded: 2 · bases empty`. Marking the runner `Safe 2nd`
+and confirming leaves `outs: 0`, the runner on 1st, and the popup open with the
+refusal shown.
+
+**M4 was deliberately left open** — the plan notes it folds into this work, but
+the FC out cap is a separate call and stays in Phase 5.
+
+`showRunnerOutcomePopup` [app.js:1695], `applyRunnerOutcomes` [app.js:1863]
+
+Defaults were `{action:'safe', dest: base+1}` for every runner and `out` for the
+batter, and unlike `showRunnerPopup` nothing required a runner selection.
+Verified in the browser on `DP 6-4-3` with a runner on 1st — the popup showed a
 **green "Safe 2nd"** for the runner and **pink "Out"** for the batter; Confirm
-gives:
+gave:
 
 ```
 outs: 1 · outsRecorded: 1 · runner now on 2nd · card text "DP 6-4-3" · out badge "1"
 ```
 
-The card asserts a 6-4-3 double play while the state records the *opposite* of
-its second out. The inning is one out short, and the green default actively
-steers the scorer into it. `TP` is identical (1 out).
-
-Fix per **D2**.
+The card asserted a 6-4-3 double play while the state recorded the *opposite* of
+its second out. The inning was one out short, and the green default actively
+steered the scorer into it. `TP` was identical (1 out).
 
 ---
 
@@ -260,9 +283,9 @@ queued transitions. Odd player indices are sub rows — batters are `0, 2, 4, �
 
 | id | sev | statement | where | repro |
 |---|---|---|---|---|
-| **C1a** | critical | A play entered while a runner/outcome popup is pending is orphaned: play on the card, nobody on base, no out, but counted in **H** | applyPlay [1360], selectCell [420], BACKDROP_GUARDED [1199] | `sel(v,0,0); play('1B'); sel(v,2,0); play('1B'); sel(v,4,0); play('K')` → `ab(v,2,0).play==='1B'` but `bases` all false, `H` reads 2 |
-| **C1b** | critical | Answering the stale popup afterwards writes runs/advancement into a state that never happened | same | continue C1a, then click `.rp-btn[data-base="0"][data-dest="3"]` + confirm → phantom run, `R` +1, `p0.bases===[t,t,t,t]` |
-| **C2** | critical | `DP`/`TP` confirmed on popup defaults records 1 out and **advances** the runner | showRunnerOutcomePopup [1686], applyRunnerOutcomes [1832] | `sel(v,0,0); play('1B'); sel(v,2,0); play('DP 6-4-3'); outcomePopup({})` → `outs===1`, runner on 2nd, card reads `DP 6-4-3` |
+| **C1a** ✅ | critical | A play entered while a runner/outcome popup is pending is orphaned: play on the card, nobody on base, no out, but counted in **H** | applyPlay [1360], selectCell [420], BACKDROP_GUARDED [1199] | `sel(v,0,0); play('1B'); sel(v,2,0); play('1B'); sel(v,4,0); play('K')` → `ab(v,2,0).play==='1B'` but `bases` all false, `H` reads 2 |
+| **C1b** ✅ | critical | Answering the stale popup afterwards writes runs/advancement into a state that never happened | same | continue C1a, then click `.rp-btn[data-base="0"][data-dest="3"]` + confirm → phantom run, `R` +1, `p0.bases===[t,t,t,t]` |
+| **C2** ✅ | critical | `DP`/`TP` confirmed on popup defaults records 1 out and **advances** the runner | showRunnerOutcomePopup [1695], applyRunnerOutcomes [1863] | `sel(v,0,0); play('1B'); sel(v,2,0); play('DP 6-4-3'); outcomePopup({})` → `outs===1`, runner on 2nd, card reads `DP 6-4-3` |
 | **C3** | critical | RBI is never recomputed when a non-latest play is cleared or edited → team RBI can exceed team R | clearSelectedCell [3296], editPlayType [2896] | `sel(v,0,0); play('1B'); sel(v,2,0); play('HR')` → R 2, p2 RBI 2. Then `sel(v,0,0); clearSelectedCell()` → R 1, **p2 RBI still 2** |
 | **H1** | high | Linescore **E** is never derived from error plays, and errors aren't attributed to the fielding team | updateLinescoreTotals [3410] | `sel(v,0,0); play('E6')` → both E inputs stay `''` |
 | **H2** | high | No pinch runner — the run goes to the starter | setSubLine [4141] | `sel(v,0,0); play('1B'); sel(v,0,0); markSub(); sel(v,2,0); play('HR')` → starter R 1, sub R blank |
