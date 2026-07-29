@@ -4457,13 +4457,19 @@ function updatePlayerStats(team) {
 }
 
 /* Pitcher Stats Auto-Calculation (Feature 5) */
+// One shape for a pitcher's line, since three places build it and a field added to
+// only some of them (`faced`, M6) reads as NaN in the others.
+function emptyPitcherLine() {
+  return { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0, faced: 0, prov: false };
+}
+
 function updatePitcherStats(battingTeam) {
   // When visiting is batting, HOME pitchers face them. So update HOME pitcher stats.
   const pitchingTeam = battingTeam === 'visiting' ? 'home' : 'visiting';
   const pitchers = gameState.teams[pitchingTeam].pitchers;
   const stats = {};
   for (let i = 0; i < PITCHER_ROWS; i++) {
-    stats[i] = { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0, prov: false };
+    stats[i] = emptyPitcherLine();
   }
 
   // Innings whose ER total is provisional (contained an error/PB/CI) — a run
@@ -4480,8 +4486,12 @@ function updatePitcherStats(battingTeam) {
       const ab = player.atBats[col];
       if (!ab.play) continue;
       const pi = ab.pitcher || 0;
-      if (!stats[pi]) stats[pi] = { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0, prov: false };
+      if (!stats[pi]) stats[pi] = emptyPitcherLine();
       const s = stats[pi];
+      // Batters faced — the record that he pitched at all, which IP alone cannot
+      // carry: a reliever who retires nobody has 0 outs and so did read as an empty
+      // row (M6).
+      s.faced++;
       // Pitch count
       s.pc += (ab.pitches || []).length;
       // Outs are not counted here — see the outsLog pass below.
@@ -4508,7 +4518,7 @@ function updatePitcherStats(battingTeam) {
   for (let ri = 0; ri < INNINGS; ri++) {
     for (const o of inningOutsLog(battingTeam, ri)) {
       const pi = o.pitcher || 0;
-      if (!stats[pi]) stats[pi] = { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0, prov: false };
+      if (!stats[pi]) stats[pi] = emptyPitcherLine();
       stats[pi].outs++;
     }
   }
@@ -4516,9 +4526,13 @@ function updatePitcherStats(battingTeam) {
   // Update pitcher table cells for the pitching team
   for (let i = 0; i < PITCHER_ROWS; i++) {
     const s = stats[i];
-    const fullInnings = Math.floor(s.outs / 3);
-    const partialOuts = s.outs % 3;
-    const ipStr = partialOuts > 0 ? `${fullInnings}.${partialOuts}` : (s.outs > 0 ? `${fullInnings}` : '');
+    // IP in the box-score form: full innings, then the outs left over. A pitcher who
+    // appeared and retired nobody is `0.0`, not a blank — he pitched, and a blank says
+    // he didn't (M6). "Appeared" is a batter faced or an out recorded, so a row for a
+    // pitcher who never came in stays empty. A whole inning now reads `1.0` rather
+    // than `1`, which is the same convention `0.1` and `0.2` were already using.
+    const appeared = s.faced > 0 || s.outs > 0;
+    const ipStr = appeared ? `${Math.floor(s.outs / 3)}.${s.outs % 3}` : '';
 
     const fields = { ip: ipStr, pc: s.pc || '', h: s.h || '', r: s.r || '', er: s.er || '', k: s.k || '', bb: s.bb || '' };
     Object.keys(fields).forEach(field => {

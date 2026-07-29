@@ -747,13 +747,35 @@
     eq('hits allowed', pStat('visiting', 0, 'h'), '2');
   });
 
+  // M6 — IP was blank at 0 outs, so a reliever who came in, gave up a hit and was
+  // pulled read as a man who never pitched. The row he shares that blank with is the
+  // one that genuinely never pitched, which is the whole problem.
+  test('a pitcher who retires nobody has an IP of 0.0', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    eq('IP', pStat('visiting', 0, 'ip'), '0.0');
+    eq('and a hit against him', pStat('visiting', 0, 'h'), '1');
+  });
+
+  test('a pitcher who never came in still has no line', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    eq('the reliever\'s IP', pStat('visiting', 1, 'ip'), '');
+  });
+
+  test('a walk with nobody retired is an appearance too', () => {
+    sel('visiting', 0, 0);
+    play('BB');
+    eq('IP', pStat('visiting', 0, 'ip'), '0.0');
+  });
+
   // #10 — the batter's own out was already counted; this guards against the
   // outsLog pass double-counting it.
   test('three strikeouts charge exactly one full inning', () => {
     sel('visiting', 0, 0);
     play('K'); play('K'); play('K');
     eq('out log length', inn('visiting', 0).outsLog.length, 3);
-    eq('IP', pStat('visiting', 0, 'ip'), '1');
+    eq('IP', pStat('visiting', 0, 'ip'), '1.0');
   });
 
   test('a double play charges two outs and two thirds of an inning', () => {
@@ -880,7 +902,7 @@
     eq('same real inning', getRealInning('visiting', 1), 0);
     play('K'); play('K');                          // outs 2 and 3, in column 1
     eq('outs', inn('visiting', 1).outs, 3);
-    eq('IP', pStat('visiting', 0, 'ip'), '1');
+    eq('IP', pStat('visiting', 0, 'ip'), '1.0');
   });
 
   // #9 — a batter's SECOND time up in a batted-around inning is a different runner
@@ -951,7 +973,8 @@
     eq('outs', inn('visiting', 0).outs, 0);
     eq('out log length', inn('visiting', 0).outsLog.length, 0);
     eq('runner back on 1st', onB('visiting', 0, 0), 0);
-    eq('IP', pStat('visiting', 0, 'ip'), '');
+    // The single is still on the card, so he has faced a batter and retired nobody (M6).
+    eq('IP', pStat('visiting', 0, 'ip'), '0.0');
   });
 
   test('undo reverts a double play, both outs included', () => {
@@ -965,7 +988,7 @@
     eq('out log length', inn('visiting', 0).outsLog.length, 0);
     eq('runner back on 1st', onB('visiting', 0, 0), 0);
     eq('batter has no play', ab('visiting', 3, 0).play, '');
-    eq('IP', pStat('visiting', 0, 'ip'), '');
+    eq('IP', pStat('visiting', 0, 'ip'), '0.0');
   });
 
   // A game saved before Phase 3 has no out log; IP has to come back from the
@@ -1796,7 +1819,7 @@
     eq('three outs', inn('visiting', 0).outs, 3);
     eq('out log', inn('visiting', 0).outsLog.length, 3);
     eq('the runner is off the bases', occupants('visiting', 0).length, 0);
-    eq('IP', pStat('visiting', 0, 'ip'), '1');
+    eq('IP', pStat('visiting', 0, 'ip'), '1.0');
   });
 
   test('a double play with no room for its second out is refused and rolled back', () => {
@@ -2050,7 +2073,7 @@
     eq('the runner has no out number', ab('visiting', 0, 0).out, 0);
     eq('and was not put out on the bases', ab('visiting', 0, 0).outOnBase, null);
     eq('so he is back on 1st', onB('visiting', 0, 0), 0);
-    eq('IP', pStat('visiting', 0, 'ip'), '');
+    eq('IP', pStat('visiting', 0, 'ip'), '0.0');
   });
 
   // Loading a game re-derives every inning that has records, which is what fixes a
@@ -3404,7 +3427,7 @@
     sel('visiting', 0, 0);
     play('HR');                                     // 1 earned run
     play('K'); play('K'); play('K');                // one full inning
-    eq('a full inning', pStat('visiting', 0, 'ip'), '1');
+    eq('a full inning', pStat('visiting', 0, 'ip'), '1.0');
     eq('one earned run', pStat('visiting', 0, 'er'), '1');
     eq('ERA', pEra('visiting', 0), '9.00');
   });
@@ -3420,7 +3443,7 @@
   test('an earned run without an out recorded reads INF', () => {
     sel('visiting', 0, 0);
     play('HR');
-    eq('no outs', pStat('visiting', 0, 'ip'), '');
+    eq('no outs, but he pitched', pStat('visiting', 0, 'ip'), '0.0');
     eq('ERA', pEra('visiting', 0), 'INF');
   });
 

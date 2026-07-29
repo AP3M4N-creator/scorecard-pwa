@@ -508,7 +508,7 @@ single-double-homer across the three rows of spot 1 splitting 1/1 · 1/1 · 1/1/
 | M3 ✅ | The runner popup offers a **batter-destination row on `SF`/`SH`** that is silently discarded. `defaultAdv` is 1 for a sacrifice → `batterDefaultBase` is 0 → the row renders (3 buttons); the callback then calls `recordBatterOut` and ignores the choice. Also excluded from collision validation, since `rpParties` only adds the batter when `batterTakesBase`. | [app.js:1460], [app.js:2046], [app.js:2081] |
 | M4 ✅ | An **`FC` can record three outs** — `maxOuts` is 3 for anything not DP/TP, and `playEntryReject` doesn't constrain FC. (Folds into the D2 work — **it did not**; see below.) | [app.js:1761], [app.js:1344] |
 | M5 | **Undo history is memory-only** — after a refresh `undoLastPlay` does nothing (`historyDepth: 0`, state unchanged). `clearSelectedCell` still works correctly post-refresh. The 2026-07-28 plan deliberately left this; re-confirm rather than assume. | [app.js:2817] |
-| M6 | A pitcher who records **no outs shows blank IP**, not `0.0` — `s.outs > 0 ? fullInnings : ''`. Run/ER attribution across a mid-inning change is otherwise **correct** (`ab.pitcher` is frozen at entry). | [app.js:4047] |
+| M6 ✅ | A pitcher who records **no outs shows blank IP**, not `0.0` — `s.outs > 0 ? fullInnings : ''`. Run/ER attribution across a mid-inning change is otherwise **correct** (`ab.pitcher` is frozen at entry). | [app.js:4047] |
 | M7 | **Manually-entered `BB`/`K` leave the pitch count inconsistent.** A `BB` tapped on a 3-ball count stays at 3 pitches (the `push('B')` only fires when `pitches.length === 0`); a `K` tapped by button pushes `'X'`, which `getPitchCount` reads as 0 strikes and `renderPitches` draws as nothing — so the cell shows "1 pitch" over an empty pitch track. | [app.js:1382–1392], [app.js:2327] |
 | L1 | `WP`/`PB`/`BK` with the bases empty record nothing but still **push an undo entry** (2 no-op undos to press through). | [app.js:2748] |
 | L2 | A play refused because the inning already has 3 outs **returns silently** — no `showPlayReject`, unlike every other refusal. | [app.js:1368] |
@@ -567,6 +567,27 @@ itself. Reverting the FC clause fails the first two and nothing else; reverting 
 the toast fails the two that assert it. Not verified in a live browser: the suite
 drives the real popup through its own buttons, and the toast is `showPlayReject`, whose
 surface M1 already verified.
+
+### M6 — a pitcher with no outs shows blank IP — ✅ **FIXED**
+`updatePitcherStats` [app.js:4433]
+
+**What was done.** `ipStr` was `s.outs > 0 ? … : ''`, so a reliever who came in, gave up
+a hit and was pulled shared his blank with the row of a pitcher who never came in at
+all. IP alone cannot tell those apart, so the accumulation pass now counts batters
+faced and "appeared" is a batter faced *or* an out recorded. `emptyPitcherLine()` was
+split out while adding the field: three places build that object, and a field added to
+only one of them reads as `NaN` in the others.
+
+A consequence worth naming: IP is now always `full.remainder`, so a whole inning reads
+`1.0` where it read `1`. That is the convention `0.1` and `0.2` were already using, and
+`0.0` beside a bare `1` would have been the odd pair.
+
+Verified: 3 new cases (263 passed · 0 failed) — the 0-out appearance, the row that
+never pitched staying blank, and a walk counting as an appearance. Eight existing
+assertions moved with the format: four full innings `'1'` → `'1.0'`, and four that read
+`''` for a pitcher who had in fact faced somebody (a home run with nobody out, and
+three take-back cases where a single stays on the card). Reverting the appearance test
+alone fails 6, all of them 0-out appearances.
 
 **Not defects — design gaps, listed so they aren't re-found:**
 
