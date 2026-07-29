@@ -19,6 +19,13 @@
   <span style="flex:1;min-width:200px">⚠ Changes are not being saved on this device. Download a backup to avoid losing this game.</span>
   <button onclick="exportGameJSON()" style="background:#fff;color:#8a1f1f;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer">Download backup</button>
 </div>
+<!-- Shown when a stored game or the library could not be parsed. The raw text is
+     kept rather than overwritten, so it is still recoverable by hand. -->
+<div id="unreadable-warning" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;z-index:1000;background:#8a5a1f;color:#fff;padding:10px 14px;font-family:-apple-system,sans-serif;font-size:13px;font-weight:600">
+  <span style="flex:1;min-width:200px">⚠ Saved data on this device could not be read. It has been kept, not overwritten — download it if you want to recover that game.</span>
+  <button onclick="downloadUnreadableSaves()" style="background:#fff;color:#8a5a1f;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer">Download unreadable save</button>
+  <button onclick="discardUnreadableSaves()" style="background:transparent;color:#fff;border:2px solid #fff;border-radius:6px;padding:5px 11px;font-weight:700;cursor:pointer">Discard</button>
+</div>
 <div class="app">
   <!-- Header -->
   <div class="header-bar">

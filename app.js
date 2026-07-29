@@ -23,12 +23,73 @@ function reportStorageFailure() {
   const banner = (typeof document !== 'undefined') && document.getElementById('storage-warning');
   if (banner) banner.style.display = 'flex';
 }
+
+/* ------------------------------------------------ unreadable saves (#25) ---
+   A stored game that won't parse used to be discarded with a console line, and
+   the next autoSave — 400ms later — wrote over it. A corrupt library key read
+   as "no saved games yet", and saving one game then replaced however many were
+   in there. Either way the only copy of the data was gone before anybody knew
+   there was a problem.
+
+   So: keep the raw string, both in memory (for the download button, which has
+   to work even when storage is full) and under a `-unreadable` key. A write to
+   the original key is refused only if that copy could not be made — otherwise
+   the quarantined copy is the backup and the app stays usable. */
+const UNREADABLE_SUFFIX = '-unreadable';
+const _unreadable = {};   // storage key -> { raw, stashed }
+
+function quarantineUnreadable(key, raw) {
+  if (!_unreadable[key]) {
+    _unreadable[key] = { raw, stashed: safeStorage.setItem(key + UNREADABLE_SUFFIX, raw) };
+  }
+  showUnreadableBanner();
+  return _unreadable[key].stashed;
+}
+
+// True only when we could not put the unreadable text anywhere safe, which is
+// the one case where overwriting the key would actually lose it.
+function saveBlockedFor(key) {
+  return !!_unreadable[key] && !_unreadable[key].stashed;
+}
+
+// A quarantine from an earlier session is still the user's data — pick it back
+// up on load so the banner and its download button reappear.
+function adoptExistingQuarantine(key) {
+  if (_unreadable[key]) return;
+  const raw = safeStorage.getItem(key + UNREADABLE_SUFFIX);
+  if (raw === null) return;
+  _unreadable[key] = { raw, stashed: true };
+  showUnreadableBanner();
+}
+
+function showUnreadableBanner() {
+  const banner = (typeof document !== 'undefined') && document.getElementById('unreadable-warning');
+  if (banner) banner.style.display = 'flex';
+}
+
+function downloadUnreadableSaves() {
+  Object.keys(_unreadable).forEach(key => {
+    downloadTextFile(key + UNREADABLE_SUFFIX + '.txt', _unreadable[key].raw);
+  });
+}
+
+function discardUnreadableSaves() {
+  if (!confirm('Delete the unreadable saved data? Download it first if you might want to recover the game by hand.')) return;
+  Object.keys(_unreadable).forEach(key => {
+    safeStorage.removeItem(key + UNREADABLE_SUFFIX);
+    delete _unreadable[key];
+  });
+  const banner = document.getElementById('unreadable-warning');
+  if (banner) banner.style.display = 'none';
+}
 // Escapes user free-text (team/player names, notes, linescore cells) before it
-// is interpolated into an innerHTML sink — the play log, saved-game library, and
+// is interpolated into an innerHTML sink — the popups, saved-game library, and
 // game summary. Without this a stray '<' breaks rendering and a crafted name
-// persists as injected markup in the saved library.
+// persists as injected markup in the saved library. `'` is escaped too because
+// several sinks build single-quoted attributes.
 function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // Field image embedded directly in SVG
@@ -36,7 +97,6 @@ const POSITIONS = 9;
 const ROWS_PER_POS = 2;
 const INNINGS = 15;
 const PITCHER_ROWS = 8;
-const STANDINGS_ROWS = 5;
 
 let selectedCell = null;
 let gameState = createEmptyState();
@@ -44,8 +104,46 @@ let gameState = createEmptyState();
 // Identity column->inning map sized to INNINGS ([0,1,2,...,INNINGS-1]).
 function defaultColumnMap() { return Array.from({ length: INNINGS }, (_, i) => i); }
 
+// Every at-bat cell on the card carries the *starter's* row index — a sub bats
+// on the starter's line — so `players[1].atBats` and every other odd row is 15
+// untouched objects. They stay allocated in memory, because a dozen loops walk
+// every player and index by column, but `stateForStorage` drops them on the way
+// out and `refillAtBats` puts them back on the way in (#33).
+function makeEmptyAtBat() {
+  return { bases:[false,false,false,false], advReason:['','','',''], outOnBase:null, play:'', out:0, outsRecorded:0, pitches:[], hitLoc:null, rbi:0, pitcher:0, reachedOnError:false, pitcherChangeNum:'', subChange:false, seq:0 };
+}
+
+// A player row's at-bats, padded to INNINGS — for a save from a build with fewer
+// innings, and for the sub rows `stateForStorage` empties.
+function refillAtBats(state) {
+  ['visiting','home'].forEach(t => {
+    const team = state.teams && state.teams[t];
+    if (!team || !Array.isArray(team.players)) return;
+    team.players.forEach(player => {
+      if (!Array.isArray(player.atBats)) player.atBats = [];
+      while (player.atBats.length < INNINGS) player.atBats.push(makeEmptyAtBat());
+    });
+  });
+}
+
+// A shallow copy of `state` with the sub rows' at-bats emptied. Used for every
+// write and for change detection, so both sides of a comparison are the same
+// shape. The live `gameState` is never mutated.
+function stateForStorage(state) {
+  if (!state || !state.teams) return state;
+  const out = Object.assign({}, state, { teams: Object.assign({}, state.teams) });
+  ['visiting','home'].forEach(t => {
+    const team = state.teams[t];
+    if (!team || !Array.isArray(team.players)) return;
+    out.teams[t] = Object.assign({}, team, {
+      players: team.players.map((pl, i) => i % ROWS_PER_POS === 0 ? pl : Object.assign({}, pl, { atBats: [] }))
+    });
+  });
+  return out;
+}
+
 function createEmptyState() {
-  const makeAtBat = () => ({ bases:[false,false,false,false], advReason:['','','',''], outOnBase:null, play:'', out:0, outsRecorded:0, pitches:[], hitLoc:null, rbi:0, pitcher:0, reachedOnError:false, pitcherChangeNum:'', subChange:false, seq:0 });
+  const makeAtBat = makeEmptyAtBat;
   const makeInning = () => ({ outs:0, bases:[null,null,null], currentPitcher:0, lob:0, outsLog:[], lastPA:null });
   return {
     info: { date:'', startTime:'', timeOfGame:'', visitingTeam:'', homeTeam:'', weather:'', attendance:'' },
@@ -56,13 +154,11 @@ function createEmptyState() {
     timerStart: null,
     timerElapsed: 0,
     timerRunning: false,
-    log: [],
     linescore: {
       visiting: { innings: Array(INNINGS).fill(''), r:'', h:'', e:'' },
       home: { innings: Array(INNINGS).fill(''), r:'', h:'', e:'' }
     },
     visibleInnings: 9,
-    standings: Array(STANDINGS_ROWS).fill(null).map(() => ({ team:'', rec:'', gb:'' })),
     innings: {
       visiting: Array(INNINGS).fill(null).map(() => makeInning()),
       home: Array(INNINGS).fill(null).map(() => makeInning())
@@ -1444,7 +1540,7 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
 
   runners.forEach(r => {
     html += `<div class="oc-row" data-base="${r.base}" style="margin-bottom:8px;padding:6px;background:var(--cream);border-radius:4px">`;
-    html += `<div style="font-size:11px;font-weight:600;margin-bottom:4px">${r.name} <span style="color:var(--text-light)">(on ${r.fromLabel})</span></div>`;
+    html += `<div style="font-size:11px;font-weight:600;margin-bottom:4px">${escapeHtml(r.name)} <span style="color:var(--text-light)">(on ${r.fromLabel})</span></div>`;
     html += `<div style="display:flex;gap:4px;flex-wrap:wrap">`;
     // Hold option — keep the runner on their current base (e.g. runner on 3rd during a DP)
     html += `<button class="oc-btn" data-base="${r.base}" data-action="safe" data-dest="${r.base}" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid #ccc;border-radius:3px;background:#fff;color:#555;cursor:pointer;font-family:var(--mono)">Hold ${r.fromLabel}</button>`;
@@ -1736,9 +1832,6 @@ function finishPlay(team, pIdx, innIdx, snapshot) {
   redoHistory.length = 0;
   playHistory.push(snapshot);
 
-  // Play-by-play log
-  addPlayLogEntry(team, pIdx, innIdx);
-
   // Show spray chart for hits
   if (isHitPlay(ab.play) || isErrorPlay(ab.play)) {
     showSprayChart(team, pIdx, innIdx);
@@ -1786,7 +1879,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
   runners.forEach(r => {
     choices[r.base] = undefined;
     html += `<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">`;
-    html += `<span style="font-size:11px;font-weight:600;min-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.name}</span>`;
+    html += `<span style="font-size:11px;font-weight:600;min-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(r.name)}</span>`;
     html += `<span style="font-size:10px;color:#999;min-width:24px">${r.fromLabel}→</span>`;
     html += `<div style="display:flex;gap:3px;flex-wrap:wrap">`;
     for (let d = r.minDest; d <= 3; d++) {
@@ -1807,7 +1900,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
       ? getActivePlayerName(team, opts.batterPIdx, innIdx)
       : (selectedCell ? getActivePlayerName(selectedCell.dataset.team, parseInt(selectedCell.dataset.p), parseInt(selectedCell.dataset.inn)) : 'Batter');
     html += `<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid #ddd;padding-top:8px">`;
-    html += `<span style="font-size:11px;font-weight:600;min-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${batterName}</span>`;
+    html += `<span style="font-size:11px;font-weight:600;min-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(batterName)}</span>`;
     html += `<span style="font-size:10px;color:#999;min-width:24px">Batter→</span>`;
     html += `<div style="display:flex;gap:3px;flex-wrap:wrap">`;
     for (let d = batterDefaultBase; d <= 2; d++) {
@@ -2264,16 +2357,6 @@ function updateSituation() {
   fillLinescoreZeros();
 
   // (count, batter, LOB now handled in the panel loop above)
-
-  // LOB
-  // #32: `#sit-lob` isn't in index.html, so this has never rendered; Phase 9
-  // deletes it. Reads the one LOB definition meanwhile, rather than a per-column
-  // sum that would double-count a batted-around inning if the element came back.
-  const lobEl = document.getElementById('sit-lob');
-  if (lobEl) {
-    const totalLOB = teamLOB('visiting') + teamLOB('home');
-    lobEl.textContent = totalLOB > 0 ? `LOB: ${totalLOB}` : '';
-  }
 }
 
 function updateLiveStatsFromState() {
@@ -2631,7 +2714,6 @@ function restoreSnapshot(snap) {
   updatePlayerStats(team);
   updatePitcherStats(team);
   updateSituation();
-  rebuildPlayLog();
   autoSave();
 }
 
@@ -2818,7 +2900,7 @@ function moveRunner() {
   let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:10px;font-family:var(--heading)">Move Runner</div>';
   runners.forEach(r => {
     html += '<div style="margin-bottom:8px;padding:6px;background:var(--cream);border-radius:4px">';
-    html += '<div style="font-size:11px;font-weight:600;margin-bottom:4px">' + r.name + ' <span style="color:var(--text-light)">(on ' + baseNames[r.base] + ')</span></div>';
+    html += '<div style="font-size:11px;font-weight:600;margin-bottom:4px">' + escapeHtml(r.name) + ' <span style="color:var(--text-light)">(on ' + baseNames[r.base] + ')</span></div>';
     html += '<div style="display:flex;gap:4px">';
     for (let d = 0; d <= 3; d++) {
       if (d === r.base) continue;
@@ -3099,7 +3181,6 @@ function clearSelectedCell() {
     ab.advReason = ['','','',''];
     ab.advSrc = null;
     ab.reachedOnError = false;
-    ab.extraOuts = 0;
     ab.pitcherChangeNum = '';
     // A sub line spans from here to the end of the game; clear the whole contiguous run.
     if (ab.subChange) {
@@ -3128,7 +3209,6 @@ function clearSelectedCell() {
   updateSituation();
   updatePlayerStats(team);
   updatePitcherStats(team);
-  rebuildPlayLog();
   autoSave();
 }
 
@@ -3219,7 +3299,10 @@ function flushSave() {
   clearTimeout(_saveTimer);
   _saveTimer = null;
   collectState();
-  safeStorage.setItem(CURRENT_GAME_KEY, JSON.stringify(gameState));
+  // The stored game wouldn't parse and we couldn't stash a copy of it anywhere,
+  // so this write would be the thing that actually loses it (#25).
+  if (saveBlockedFor(CURRENT_GAME_KEY)) return;
+  safeStorage.setItem(CURRENT_GAME_KEY, JSON.stringify(stateForStorage(gameState)));
 }
 
 function collectState() {
@@ -3288,7 +3371,6 @@ function saveGame() {
 // code hits an undefined object. Mutates and returns `parsed`.
 function mergeStateDefaults(parsed) {
   const defaults = createEmptyState();
-  if (!parsed.log) parsed.log = [];
   if (!parsed.innings) parsed.innings = defaults.innings;
   if (parsed.timerElapsed === undefined) parsed.timerElapsed = 0;
   if (parsed.timerRunning === undefined) parsed.timerRunning = false;
@@ -3302,6 +3384,12 @@ function mergeStateDefaults(parsed) {
   if (!parsed.teams) parsed.teams = defaults.teams;
   if (!parsed.innings) parsed.innings = defaults.innings;
   if (!parsed.columnMap) parsed.columnMap = defaults.columnMap;
+  // Dropped in Phase 9: an older save still carries an unbounded play log (#31)
+  // and an unused standings table (#33). Shed them rather than writing them back
+  // out on every autoSave.
+  delete parsed.log;
+  delete parsed.standings;
+  refillAtBats(parsed);
   backfillOutsLog(parsed);
   migrateBaseRunners(parsed);
   return parsed;
@@ -3391,12 +3479,16 @@ function backfillOutsLog(state) {
 }
 
 function loadState() {
+  adoptExistingQuarantine(CURRENT_GAME_KEY);
+  adoptExistingQuarantine(LIBRARY_KEY);
   const saved = safeStorage.getItem(CURRENT_GAME_KEY);
   if (saved) {
     try {
       gameState = mergeStateDefaults(JSON.parse(saved));
     } catch(e) {
+      // #25: keep the text before starting a fresh game on top of it.
       console.error('Failed to load state', e);
+      quarantineUnreadable(CURRENT_GAME_KEY, saved);
       gameState = createEmptyState();
     }
   }
@@ -3412,13 +3504,11 @@ function applyState() {
   if (!gameState.teams) gameState.teams = d.teams;
   if (!gameState.innings) gameState.innings = d.innings;
   if (!gameState.columnMap) gameState.columnMap = d.columnMap;
-  if (!gameState.log) gameState.log = [];
   if (gameState.timerElapsed === undefined) gameState.timerElapsed = 0;
   if (gameState.timerRunning === undefined) gameState.timerRunning = false;
   if (gameState.notes === undefined) gameState.notes = '';
   if (!gameState.defChanges) gameState.defChanges = [];
   if (!gameState.visibleInnings) gameState.visibleInnings = 9;
-  const makeAtBat = () => ({ bases:[false,false,false,false], advReason:['','','',''], outOnBase:null, play:'', out:0, outsRecorded:0, pitches:[], hitLoc:null, rbi:0, pitcher:0, reachedOnError:false, pitcherChangeNum:'', subChange:false, seq:0 });
   if (gameState.playSeq === undefined) gameState.playSeq = 0;
   migrateBaseRunners(gameState);   // bare-index base entries from a pre-Phase-7 save
   ['visiting','home'].forEach(t => {
@@ -3433,7 +3523,7 @@ function applyState() {
     // Extend player atBat arrays if loaded from older save with fewer innings
     if (gameState.teams && gameState.teams[t]) {
       gameState.teams[t].players.forEach(player => {
-        while (player.atBats.length < INNINGS) player.atBats.push(makeAtBat());
+        while (player.atBats.length < INNINGS) player.atBats.push(makeEmptyAtBat());
       });
     }
     // Extend innings array
@@ -3528,7 +3618,6 @@ function applyState() {
   });
 
   updateSprayMini();
-  refreshPlayLogDisplay();
   updateExtraInnings();
   updateLiveStatsFromState();
 
@@ -3819,7 +3908,7 @@ function changePitcher() {
     const name = p.name || `Pitcher ${i + 1}`;
     const num = p.num ? '#' + p.num + ' ' : '';
     const isActive = getEffectivePitcher(battingTeam, innIdx) === i;
-    html += `<button onclick="setPitcher(${i})" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-bottom:4px;border:1.5px solid ${isActive ? '#1565c0' : '#ccc'};border-radius:4px;background:${isActive ? '#e3f2fd' : '#fff'};cursor:pointer;font-size:12px;font-weight:${isActive ? '700' : '500'};font-family:var(--font)">${num}${name}</button>`;
+    html += `<button onclick="setPitcher(${i})" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-bottom:4px;border:1.5px solid ${isActive ? '#1565c0' : '#ccc'};border-radius:4px;background:${isActive ? '#e3f2fd' : '#fff'};cursor:pointer;font-size:12px;font-weight:${isActive ? '700' : '500'};font-family:var(--font)">${escapeHtml(num)}${escapeHtml(name)}</button>`;
   });
   html += '<button onclick="document.getElementById(\'pitcher-popup\').style.display=\'none\'" style="margin-top:6px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button>';
   popup.innerHTML = html;
@@ -3866,7 +3955,7 @@ function changeFieldPos() {
   const realInn = getRealInning(team, innIdx) + 1;
   const innLabel = halfLabel + realInn;
   let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:10px;font-family:var(--heading)">Position Change <span style="font-size:11px;color:var(--red);font-weight:600;margin-left:6px">' + innLabel + '</span></div>';
-  html += '<div style="font-size:11px;margin-bottom:8px;color:var(--text-light)">' + name + ' — current: <b>' + (current || 'none') + '</b></div>';
+  html += '<div style="font-size:11px;margin-bottom:8px;color:var(--text-light)">' + escapeHtml(name) + ' — current: <b>' + escapeHtml(current || 'none') + '</b></div>';
   html += '<div style="display:flex;gap:4px;flex-wrap:wrap">';
   positions.forEach(pos => {
     const isCurrent = pos === current;
@@ -4006,66 +4095,12 @@ function recomputePitcherAssignments() {
     plan.forEach(p => { p.ab.pitcher = p.to; });
     updatePitcherStats('visiting');
     updatePitcherStats('home');
-    rebuildPlayLog();
     autoSave();
     popup.style.display = 'none';
   };
 }
 
 /* Play-by-Play Log (Feature 7) */
-function generatePlayDescription(team, pIdx, innIdx) {
-  const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
-  const name = getActivePlayerName(team, pIdx, innIdx).replace(/^#\d+\s*/, '');
-  const half = team === 'visiting' ? 'T' : 'B';
-  const innNum = getRealInning(team, innIdx) + 1;
-  const prefix = `${half}${innNum}`;
-  const play = ab.play;
-
-  let desc = '';
-  if (play === '1B') desc = `${name} singled`;
-  else if (play === '2B') desc = `${name} doubled`;
-  else if (play === '3B') desc = `${name} tripled`;
-  else if (play === 'HR') desc = `${name} homered`;
-  else if (play === 'BB') desc = `${name} walked`;
-  else if (play === 'IBB') desc = `${name} was intentionally walked`;
-  else if (play === 'HBP') desc = `${name} was hit by pitch`;
-  else if (play === 'K') desc = `${name} struck out swinging`;
-  else if (play === 'ꓘ') desc = `${name} struck out looking`;
-  else if (play === 'K+WP') desc = `${name} struck out but reached on wild pitch`;
-  else if (play === 'SF') desc = `${name} hit a sacrifice fly`;
-  else if (play === 'SH') desc = `${name} laid down a sacrifice bunt`;
-  else if (play === 'SAC') desc = `${name} sacrificed`;
-  else if (play === 'DP' || /^DP /.test(play)) desc = `${name} hit into a double play (${play})`;
-  else if (play === 'FC') desc = `${name} reached on fielder's choice`;
-  else if (isErrorPlay(play)) desc = `${name} reached on an error (${play})`;
-  else if (/^F\d/.test(play)) desc = `${name} flied out to ${play.substring(1)}`;
-  else if (/^P\d/.test(play)) desc = `${name} popped out to ${play.substring(1)}`;
-  else if (/^L\d/.test(play)) desc = `${name} lined out to ${play.substring(1)}`;
-  else if (/^\d+-\d/.test(play)) desc = `${name} grounded out ${play}`;
-  else desc = `${name}: ${play}`;
-
-  // RBI info
-  if (ab.rbi > 0) desc += ` (${ab.rbi} RBI)`;
-
-  return `${prefix}: ${desc}`;
-}
-
-function addPlayLogEntry(team, pIdx, innIdx) {
-  const desc = generatePlayDescription(team, pIdx, innIdx);
-  if (!gameState.log) gameState.log = [];
-  gameState.log.push(desc);
-  refreshPlayLogDisplay();
-}
-
-function refreshPlayLogDisplay() {
-  const el = document.getElementById('play-log');
-  if (!el || !gameState.log) return;
-  el.innerHTML = (gameState.log || []).map(entry => `<div>${escapeHtml(entry)}</div>`).join('');
-  el.scrollTop = el.scrollHeight;
-  const section = el.closest('.play-log-section');
-  if (section) section.classList.toggle('empty', !gameState.log.length);
-}
-
 function toggleQBDrawer() {
   const drawers = document.querySelectorAll('.qb-drawer');
   const btns = document.querySelectorAll('.qb-more-btn');
@@ -4095,28 +4130,6 @@ function addExtraInning() {
 }
 
 function updateExtraInnings() { updateInningVisibility(); }
-
-function rebuildPlayLog() {
-  if (!gameState.log) gameState.log = [];
-  gameState.log = [];
-  for (let innIdx = 0; innIdx < INNINGS; innIdx++) {
-    for (const team of ['visiting', 'home']) {
-      const players = gameState.teams[team].players;
-      const plays = [];
-      for (let p = 0; p < players.length; p += 2) {
-        const ab = players[p].atBats[innIdx];
-        if (ab.play) {
-          plays.push({ p, out: ab.out || 999 });
-        }
-      }
-      plays.sort((a, b) => a.out - b.out);
-      for (const pl of plays) {
-        gameState.log.push(generatePlayDescription(team, pl.p, innIdx));
-      }
-    }
-  }
-  refreshPlayLogDisplay();
-}
 
 /* Game Timer (Feature 13) */
 let timerInterval = null;
@@ -4174,13 +4187,28 @@ const LIBRARY_KEY = 'baseball-scorecard-library';
 const CURRENT_GAME_KEY = 'baseball-scorecard';
 
 function getGameLibrary() {
+  const raw = safeStorage.getItem(LIBRARY_KEY);
+  if (raw === null || raw === '') return [];
+  let parsed;
   try {
-    return JSON.parse(safeStorage.getItem(LIBRARY_KEY) || '[]');
-  } catch(e) { return []; }
+    parsed = JSON.parse(raw);
+  } catch(e) { parsed = undefined; }
+  // A library that won't parse used to read as "no saved games yet", and the
+  // next save wrote one entry over however many were in there (#25).
+  if (!Array.isArray(parsed)) {
+    quarantineUnreadable(LIBRARY_KEY, raw);
+    return [];
+  }
+  return parsed;
 }
 
 function saveGameLibrary(library) {
+  if (saveBlockedFor(LIBRARY_KEY)) {
+    alert('The saved-game library on this device is unreadable and could not be backed up. Download it from the banner at the top of the page, then discard it, before saving another game.');
+    return false;
+  }
   safeStorage.setItem(LIBRARY_KEY, JSON.stringify(library));
+  return true;
 }
 
 function openGameLibrary() {
@@ -4249,7 +4277,7 @@ function buildLibraryEntry(id) {
     teams: `${vis} vs ${hom}`,
     score: score,
     lastSaved: gameState.lastSaved,
-    state: JSON.parse(JSON.stringify(gameState))
+    state: JSON.parse(JSON.stringify(stateForStorage(gameState)))
   };
 }
 
@@ -4281,7 +4309,9 @@ function updateSavedGame() {
 
 // Serialize state for change-detection, ignoring the save timestamp.
 function stateSignature(state) {
-  const clone = JSON.parse(JSON.stringify(state));
+  // Through stateForStorage so a live state and a stored one — which has its sub
+  // rows emptied — compare as the same game rather than always differing.
+  const clone = JSON.parse(JSON.stringify(stateForStorage(state)));
   delete clone.lastSaved;
   return JSON.stringify(clone);
 }
@@ -4303,7 +4333,10 @@ function loadGameFromLibrary(idx) {
     return;
   }
   flushSave();  // persist the outgoing game before switching
-  gameState = library[idx].state;
+  // #28: run the same backfill `importGameJSON` does. A library entry saved by
+  // an older build is missing whatever has been added to the state since, and
+  // assigning it raw left those fields undefined downstream.
+  gameState = mergeStateDefaults(library[idx].state);
   playHistory = [];
   redoHistory = [];
   gameOverShown = false;
@@ -4324,21 +4357,25 @@ function deleteGameFromLibrary(idx) {
 /* Export / Import — offline JSON backup of the in-progress game. No
    dependencies: a Blob download out, a file input in. Doubles as the recovery
    path when localStorage can't persist (see reportStorageFailure). */
-function exportGameJSON() {
-  collectState();
-  const slug = s => (s || '').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase();
-  const vis = slug(gameState.info.visitingTeam) || 'visiting';
-  const hom = slug(gameState.info.homeTeam) || 'home';
-  const blob = new Blob([JSON.stringify(gameState, null, 2)], { type: 'application/json' });
+function downloadTextFile(filename, text) {
+  const blob = new Blob([text], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `scorecard-${vis}-vs-${hom}.json`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
   // Delay revoke so the download has time to start (Safari/iOS).
   setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function exportGameJSON() {
+  collectState();
+  const slug = s => (s || '').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase();
+  const vis = slug(gameState.info.visitingTeam) || 'visiting';
+  const hom = slug(gameState.info.homeTeam) || 'home';
+  downloadTextFile(`scorecard-${vis}-vs-${hom}.json`, JSON.stringify(stateForStorage(gameState), null, 2));
 }
 
 function importGameJSON(input) {

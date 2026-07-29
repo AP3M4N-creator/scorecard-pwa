@@ -440,22 +440,6 @@ input:focus { outline: 2px solid var(--gold); outline-offset: -1px; }
   border-color: transparent var(--accent) transparent transparent; pointer-events: none;
 }
 
-/* Standings */
-.standings-box { border: 1.5px solid var(--border); border-radius: 3px; padding: 6px; }
-.standings-box h3 {
-  font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
-  text-align: center; margin-bottom: 6px; font-weight: 700;
-}
-.standings-table { border-collapse: collapse; width: 100%; }
-.standings-table th, .standings-table td { border: 1px solid #ccc; font-size: 11px; padding: 2px 4px; }
-.standings-table th { background: #eee; font-weight: 700; font-size: 10px; text-transform: uppercase; }
-.standings-table td input {
-  width: 100%; border: none; font-size: 11px; padding: 0; background: transparent;
-}
-.standings-table td.team-name input { font-weight: 500; }
-.standings-table td.stat-cell { width: 38px; text-align: center; }
-.standings-table td.stat-cell input { text-align: center; font-family: var(--mono); }
-
 /* Field diagram */
 .field-diagram {
   display: flex; justify-content: center; padding: 8px 0;
@@ -802,12 +786,6 @@ input:focus { outline: 2px solid var(--gold); outline-offset: -1px; }
   text-transform: uppercase; letter-spacing: 0.5px; transition: all 0.15s;
 }
 .game-timer button:hover { background: rgba(255,255,255,0.2); }
-
-/* LOB display in situation panel */
-.sit-lob {
-  font-size: 9px; color: rgba(255,255,255,0.5); margin-top: 2px;
-  font-family: var(--heading); text-transform: uppercase; letter-spacing: 0.5px;
-}
 
 /* Running score annotation */
 .running-score {

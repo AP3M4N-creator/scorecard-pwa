@@ -1768,6 +1768,139 @@
     eq('so it costs no at-bat', bStat('visiting', 2, 'ab'), '');
   });
 
+  /* =====================================================================
+     Phase 9 — storage that doesn't lose things quietly
+     ===================================================================== */
+
+  // Anything these cases put in storage has to come back out, and the
+  // quarantine registry is module state the harness's reset() doesn't touch.
+  function clearStorage() {
+    [CURRENT_GAME_KEY, LIBRARY_KEY].forEach(k => {
+      safeStorage.removeItem(k);
+      safeStorage.removeItem(k + UNREADABLE_SUFFIX);
+      delete _unreadable[k];
+    });
+    const banner = document.getElementById('unreadable-warning');
+    if (banner) banner.style.display = 'none';
+  }
+
+  // #25 — a library that wouldn't parse read as "no saved games yet", and the
+  // next save wrote one entry over however many were really in there.
+  test('a saved-game library that will not parse is kept, not silently emptied', () => {
+    clearStorage();
+    try {
+      const corrupt = '[{"id":"a","teams":"Jays vs Sox"';
+      safeStorage.setItem(LIBRARY_KEY, corrupt);
+      eq('it reads as no games', getGameLibrary().length, 0);
+      eq('but the text is kept', safeStorage.getItem(LIBRARY_KEY + UNREADABLE_SUFFIX), corrupt);
+      ok('and the user is told', visible('unreadable-warning'));
+      ok('saving another game is allowed, the copy is safe', !saveBlockedFor(LIBRARY_KEY));
+    } finally { clearStorage(); }
+  });
+
+  test('a library holding something that is not a list is quarantined too', () => {
+    clearStorage();
+    try {
+      safeStorage.setItem(LIBRARY_KEY, '{"id":"a"}');
+      eq('it reads as no games', getGameLibrary().length, 0);
+      eq('and is kept', safeStorage.getItem(LIBRARY_KEY + UNREADABLE_SUFFIX), '{"id":"a"}');
+    } finally { clearStorage(); }
+  });
+
+  test('an empty library is not mistaken for a corrupt one', () => {
+    clearStorage();
+    try {
+      eq('no games', getGameLibrary().length, 0);
+      eq('nothing quarantined', safeStorage.getItem(LIBRARY_KEY + UNREADABLE_SUFFIX), null);
+      ok('no banner', !visible('unreadable-warning'));
+    } finally { clearStorage(); }
+  });
+
+  // #25 — the current game: the parse failure used to be a console line, and
+  // the autoSave 400ms later wrote over the only copy.
+  test('a stored game that will not parse is kept before a fresh one starts', () => {
+    clearStorage();
+    try {
+      const corrupt = '{"info":{"visitingTeam":"Jays"},"teams"';
+      safeStorage.setItem(CURRENT_GAME_KEY, corrupt);
+      loadState();
+      eq('the text is kept', safeStorage.getItem(CURRENT_GAME_KEY + UNREADABLE_SUFFIX), corrupt);
+      ok('and the user is told', visible('unreadable-warning'));
+      flushSave();
+      ok('the fresh game saves over the unreadable one, whose copy is safe',
+        safeStorage.getItem(CURRENT_GAME_KEY) !== corrupt);
+      eq('the copy is still there', safeStorage.getItem(CURRENT_GAME_KEY + UNREADABLE_SUFFIX), corrupt);
+    } finally { clearStorage(); }
+  });
+
+  // When the copy could not be made — the quota case, which is what truncates a
+  // save in the first place — the overwrite is the thing that loses it.
+  test('when the unreadable save cannot be copied, nothing overwrites it', () => {
+    clearStorage();
+    try {
+      const corrupt = '{"teams"';
+      safeStorage.setItem(CURRENT_GAME_KEY, corrupt);
+      _unreadable[CURRENT_GAME_KEY] = { raw: corrupt, stashed: false };
+      ok('writes are refused', saveBlockedFor(CURRENT_GAME_KEY));
+      flushSave();
+      eq('the original is untouched', safeStorage.getItem(CURRENT_GAME_KEY), corrupt);
+    } finally { clearStorage(); }
+  });
+
+  // #28 — `loadGameFromLibrary` assigned the snapshot raw, skipping the backfill
+  // `importGameJSON` runs, so a game saved by an older build came back with
+  // whatever has been added to the state since left undefined.
+  test('loading a saved game backfills the fields its build did not have', () => {
+    clearStorage();
+    try {
+      const old = JSON.parse(JSON.stringify(createEmptyState()));
+      old.info.visitingTeam = 'Jays';
+      delete old.defChanges;
+      delete old.playSeq;
+      delete old.columnMap;
+      safeStorage.setItem(LIBRARY_KEY, JSON.stringify([{ id: 'x', date: '', teams: 'a vs b', score: '0 - 0', state: old }]));
+      loadGameFromLibrary(0);
+      ok('defChanges is there', Array.isArray(gameState.defChanges));
+      ok('columnMap is there', !!gameState.columnMap);
+      eq('and it is the right game', gameState.info.visitingTeam, 'Jays');
+    } finally { clearStorage(); }
+  });
+
+  // #33 — a sub bats on the starter's line, so every odd player row is 15
+  // untouched at-bats that were serialized into every save and library entry.
+  test('sub rows are not written to storage and come back on load', () => {
+    const stored = JSON.parse(JSON.stringify(stateForStorage(gameState)));
+    eq('the starter keeps his line', stored.teams.visiting.players[0].atBats.length, INNINGS);
+    eq('the sub row is dropped', stored.teams.visiting.players[1].atBats.length, 0);
+    ok('and the live state is untouched', gameState.teams.visiting.players[1].atBats.length === INNINGS);
+    refillAtBats(stored);
+    eq('the row is rebuilt on the way in', stored.teams.visiting.players[1].atBats.length, INNINGS);
+    eq('empty, as it was', stored.teams.visiting.players[1].atBats[0].play, '');
+  });
+
+  test('a game that round-trips through storage keeps its at-bats', () => {
+    clearStorage();
+    try {
+      sel('visiting', 0, 0);
+      play('1B');
+      flushSave();
+      const back = mergeStateDefaults(JSON.parse(safeStorage.getItem(CURRENT_GAME_KEY)));
+      eq('the single survived', back.teams.visiting.players[0].atBats[0].play, '1B');
+      eq('and the sub row is a full, empty line again', back.teams.visiting.players[1].atBats.length, INNINGS);
+    } finally { clearStorage(); }
+  });
+
+  // #31/#33 — the play log grew unbounded in a key that never rendered, and the
+  // standings table was serialized on every save without ever being read.
+  test('an older save sheds the play log and the standings table', () => {
+    const old = JSON.parse(JSON.stringify(createEmptyState()));
+    old.log = ['T1: somebody singled'];
+    old.standings = [{ team: 'Jays', rec: '1-0', gb: '-' }];
+    const merged = mergeStateDefaults(old);
+    eq('no log', merged.log, undefined);
+    eq('no standings', merged.standings, undefined);
+  });
+
   test('a bunt that moved nobody is charged as an at-bat', () => {
     sel('visiting', 0, 0);
     play('1B');                                     // p0 on 1st
