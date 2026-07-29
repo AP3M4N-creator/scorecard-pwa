@@ -7,11 +7,12 @@
  * poking state, so a fix has to work on the real user path.
  *
  * test(...)         must pass; a failure fails the run.
- * xfail('#n', ...)  asserts the CORRECT behaviour for audit finding #n, which
- *                   the code does not have yet (see FIX_PLAN.md Appendix A).
- *                   A failure is expected and reported as a known failure. When
- *                   the fixing phase lands, the case starts passing and the
- *                   runner tells you to drop the marker.
+ * xfail('#n', ...)  asserts the CORRECT behaviour for a known bug the code does
+ *                   not have yet. A failure is expected and reported as a known
+ *                   failure; once the fix lands the case starts passing and the
+ *                   runner tells you to drop the marker. No cases currently use
+ *                   it — the 2026-07-28 audit's findings were all promoted to
+ *                   plain tests — but it stays for the next one.
  */
 (function () {
   'use strict';
