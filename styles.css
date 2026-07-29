@@ -274,9 +274,8 @@ input:focus { outline: 2px solid var(--gold); outline-offset: -1px; }
   box-shadow: 0 2px 8px rgba(26,39,68,0.1);
 }
 
-/* Main area & sidebar */
+/* Main area */
 .main-area { flex: 1; min-width: 0; overflow-x: auto; }
-.sidebar { width: 200px; flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; }
 
 /* Notes */
 .notes-box { margin-bottom: 12px; }
@@ -403,16 +402,6 @@ input:focus { outline: 2px solid var(--gold); outline-offset: -1px; }
 .diamond-svg .out-on-cross { stroke: #222; stroke-width: 2.5; stroke-linecap: butt; }
 .diamond-svg .adv-label { font-size: 7px; font-weight: 700; fill: #111; font-family: var(--mono); pointer-events: none; }
 
-/* RBI indicator */
-.rbi-dot {
-  position: absolute; top: 3px; right: 3px;
-  width: 14px; height: 14px; border-radius: 50%;
-  font-size: 9px; font-weight: 700; color: var(--card);
-  background: var(--accent); display: flex; align-items: center;
-  justify-content: center; cursor: pointer; display: none;
-}
-.rbi-dot.active { display: flex; }
-
 /* Pitcher Table */
 .pitcher-section { margin-top: 2px; }
 .pitcher-section h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-weight: 700; }
@@ -446,20 +435,6 @@ input:focus { outline: 2px solid var(--gold); outline-offset: -1px; }
   border-width: 0 7px 7px 0; border-style: solid;
   border-color: transparent var(--accent) transparent transparent; pointer-events: none;
 }
-
-/* Field diagram */
-.field-diagram {
-  display: flex; justify-content: center; padding: 8px 0;
-}
-.field-svg { width: 190px; height: 180px; }
-
-/* Legend */
-.legend-box { border: 1px solid #ddd; border-radius: 3px; padding: 6px; font-size: 10px; }
-.legend-box h4 { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-weight: 700; }
-.legend-box .legend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 8px; }
-.legend-box .lg-item { display: flex; gap: 4px; }
-.legend-box .lg-key { font-weight: 700; font-family: var(--mono); min-width: 28px; }
-.legend-box .lg-val { color: var(--text-light); }
 
 /* Quick entry toolbar */
 .quick-bar {
@@ -649,35 +624,6 @@ input:focus { outline: 2px solid var(--gold); outline-offset: -1px; }
 .at-bat-cell.selected { outline: 2px solid var(--gold); outline-offset: -2px; animation: pulse 1.5s ease-in-out infinite; }
 @keyframes pulse { 0%,100%{ outline-color: var(--gold); } 50%{ outline-color: var(--gold-light); } }
 
-/* Game Situation Panel */
-.situation-panel {
-  border: 2px solid var(--navy); border-radius: 6px; padding: 8px;
-  background: linear-gradient(135deg, var(--navy) 0%, var(--navy-light) 100%);
-  text-align: center; color: #fff; box-shadow: 0 2px 8px rgba(26,39,68,0.3);
-}
-.sit-score { font-size: 16px; font-weight: 700; font-family: var(--heading); display: flex; align-items: center; justify-content: center; gap: 6px; }
-.sit-score .sit-team { font-size: 9px; color: var(--gold); text-transform: uppercase; min-width: 30px; letter-spacing: 0.5px; }
-.sit-score .sit-runs { font-size: 22px; min-width: 20px; color: #fff; font-family: var(--mono); }
-.sit-score .sit-dash { color: rgba(255,255,255,0.3); }
-.sit-inning { font-size: 10px; font-weight: 600; text-transform: uppercase; color: rgba(255,255,255,0.6); margin: 2px 0 4px; font-family: var(--heading); letter-spacing: 1px; }
-.sit-mid { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 4px; }
-.sit-diamond-svg { width: 56px; height: 56px; }
-.sit-outs-wrap { display: flex; flex-direction: column; gap: 3px; align-items: center; }
-.sit-outs-label { font-size: 8px; font-weight: 700; text-transform: uppercase; color: rgba(255,255,255,0.4); font-family: var(--heading); letter-spacing: 1px; }
-.sit-out-dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.3); }
-.sit-out-dot.active { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 6px rgba(196,30,58,0.5); }
-.sit-count { font-size: 18px; font-weight: 700; font-family: var(--mono); color: var(--gold); }
-.sit-count-label { font-size: 8px; color: rgba(255,255,255,0.4); text-transform: uppercase; font-weight: 700; font-family: var(--heading); letter-spacing: 1px; }
-.sit-batter { font-size: 10px; color: rgba(255,255,255,0.7); margin-top: 2px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-/* Position & Hotkey Reference */
-.ref-panel { border: 1px solid var(--border-light); border-radius: 4px; padding: 5px 8px; background: var(--card); }
-.ref-panel h4 { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 3px; font-weight: 700; color: var(--navy); font-family: var(--heading); }
-.pos-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; font-size: 10px; font-family: var(--mono); font-weight: 600; gap: 0; color: var(--navy); }
-.hk-grid { display: grid; grid-template-columns: 24px 1fr 24px 1fr; font-size: 9px; gap: 0 2px; line-height: 1.6; }
-.hk-grid .hk-key { font-family: var(--mono); font-weight: 700; background: var(--navy); color: var(--gold); border-radius: 2px; text-align: center; padding: 0 2px; font-size: 8px; }
-.hk-grid .hk-val { color: var(--text-light); }
-
 /* Mid-at-bat runner buttons */
 .quick-btn.runner { color: var(--green); border-color: #a5d6a7; }
 .quick-btn.runner:hover { background: #e8f5e9; border-color: var(--green); }
@@ -794,20 +740,10 @@ input:focus { outline: 2px solid var(--gold); outline-offset: -1px; }
 }
 .game-timer button:hover { background: rgba(255,255,255,0.2); }
 
-/* Running score annotation */
-.running-score {
-  position: absolute; top: 50%; right: -1px; transform: translateY(-50%);
-  font-size: 7px; font-weight: 700; color: var(--accent); font-family: var(--mono);
-  z-index: 1; display: none; background: rgba(255,255,255,0.8); padding: 0 1px;
-  border-radius: 2px;
-}
-.running-score.active { display: block; }
-
 /* Pitcher change button */
 .quick-btn.pitcher-change { color: #6a1b9a; border-color: #ce93d8; }
 .quick-btn.pitcher-change:hover { background: #f3e5f5; border-color: #6a1b9a; }
 
-/* Print */
 /* iPad / Tablet responsive */
 @media (pointer: coarse) {
   html { touch-action: manipulation; -webkit-tap-highlight-color: rgba(212,168,83,0.2); }
@@ -815,7 +751,6 @@ input:focus { outline: 2px solid var(--gold); outline-offset: -1px; }
 }
 
 @media (max-width: 1100px) {
-  .sidebar { display: none; }
   .tab-content.active { gap: 0; }
   .main-area { flex: 1; }
 }
@@ -887,7 +822,6 @@ input:focus { outline: 2px solid var(--gold); outline-offset: -1px; }
   .at-bat-cell .play-text.play-out { font-size: 12px; }
   .at-bat-cell .play-text.play-on { font-size: 12px; }
   .at-bat-cell .out-num { font-size: 12px; }
-  .pitch-col .pitch-dot { width: 4px; height: 4px; }
 
   /* Fixed bottom action bar: keep the pitch/result buttons in reach while
      scrolling the grid, so scoring a pitch no longer means scroll-up/scroll-down.
