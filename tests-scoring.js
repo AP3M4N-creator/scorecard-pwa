@@ -1034,6 +1034,28 @@
     eq('IP', pStat('visiting', 0, 'ip'), '0.0');
   });
 
+  // M5 — the history is memory-only by decision (D9), so a reload empties it.
+  // What the finding was about is the silence: pressing Undo on a reloaded card
+  // did nothing at all and read as a dead button.
+  test('undo on a reloaded card says the history is gone rather than nothing', () => {
+    clearStorage();
+    try {
+      sel('visiting', 0, 0);
+      play('1B');
+      flushSave();
+      playHistory.length = 0;   // a real refresh reloads the module; the harness keeps it
+      loadState();
+      applyState();
+      eq('the card came back', ab('visiting', 0, 0).play, '1B');
+      undoLastPlay();
+      ok('the press is answered', visible('play-reject'));
+      ok('and it names the session limit',
+        document.getElementById('play-reject').textContent.indexOf('this session only') >= 0);
+      eq('the play is still on the card', ab('visiting', 0, 0).play, '1B');
+      eq('and the runner is still on 1st', onB('visiting', 0, 0), 0);
+    } finally { clearStorage(); }
+  });
+
   // A game saved before Phase 3 has no out log; IP has to come back from the
   // per-at-bat `out` fields rather than reading blank.
   test('a game saved without an out log is backfilled on load', () => {

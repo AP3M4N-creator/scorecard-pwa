@@ -20,9 +20,9 @@ DOM in jsdom — 47 diagnostic probes — and reproduced C1, C2 and H1 by hand i
 live browser at `http://localhost:8765` (`preview_start` → `scorecard`).
 
 **Progress:** Phases 1–4 are done (C1, C2, C3, H1, H4, M1, M2, H2, H3), and so are
-M3, M4, M6 and M7 of Phase 5 — one commit per fix. What is left is **M5 and L1–L5**
-(L3 and L6–L7 are design gaps, not work). This document is the whole state of the
-work.
+M3, M4, M5, M6 and M7 of Phase 5 — one commit per fix. What is left is **L1, L2, L4
+and L5** (L3 and L6–L7 are design gaps, not work). This document is the whole state
+of the work.
 
 ---
 
@@ -508,7 +508,7 @@ single-double-homer across the three rows of spot 1 splitting 1/1 · 1/1 · 1/1/
 |---|---|---|
 | M3 ✅ | The runner popup offers a **batter-destination row on `SF`/`SH`** that is silently discarded. `defaultAdv` is 1 for a sacrifice → `batterDefaultBase` is 0 → the row renders (3 buttons); the callback then calls `recordBatterOut` and ignores the choice. Also excluded from collision validation, since `rpParties` only adds the batter when `batterTakesBase`. | [app.js:1460], [app.js:2046], [app.js:2081] |
 | M4 ✅ | An **`FC` can record three outs** — `maxOuts` is 3 for anything not DP/TP, and `playEntryReject` doesn't constrain FC. (Folds into the D2 work — **it did not**; see below.) | [app.js:1761], [app.js:1344] |
-| M5 | **Undo history is memory-only** — after a refresh `undoLastPlay` does nothing (`historyDepth: 0`, state unchanged). `clearSelectedCell` still works correctly post-refresh. The 2026-07-28 plan deliberately left this; re-confirm rather than assume. | [app.js:2817] |
+| M5 ✅ | **Undo history is memory-only** — after a refresh `undoLastPlay` does nothing (`historyDepth: 0`, state unchanged). `clearSelectedCell` still works correctly post-refresh. The 2026-07-28 plan deliberately left this; re-confirm rather than assume. | [app.js:2817] |
 | M6 ✅ | A pitcher who records **no outs shows blank IP**, not `0.0` — `s.outs > 0 ? fullInnings : ''`. Run/ER attribution across a mid-inning change is otherwise **correct** (`ab.pitcher` is frozen at entry). | [app.js:4047] |
 | M7 ✅ | **Manually-entered `BB`/`K` leave the pitch count inconsistent.** A `BB` tapped on a 3-ball count stays at 3 pitches (the `push('B')` only fires when `pitches.length === 0`); a `K` tapped by button pushes `'X'`, which `getPitchCount` reads as 0 strikes and `renderPitches` draws as nothing — so the cell shows "1 pitch" over an empty pitch track. | [app.js:1382–1392], [app.js:2327] |
 | L1 | `WP`/`PB`/`BK` with the bases empty record nothing but still **push an undo entry** (2 no-op undos to press through). | [app.js:2748] |
@@ -568,6 +568,38 @@ itself. Reverting the FC clause fails the first two and nothing else; reverting 
 the toast fails the two that assert it. Not verified in a live browser: the suite
 drives the real popup through its own buttons, and the toast is `showPlayReject`, whose
 surface M1 already verified.
+
+### M5 — undo history is memory-only — ✅ **FIXED (as decided, not as reported)**
+`undoLastPlay` [app.js:3245]
+
+**What was done.** Fix per D9, which re-confirmed the 2026-07-28 call: the history stays
+in memory and a reload still empties it. Persisting it was priced and rejected — a
+snapshot is ~6.8 KB, a capped 20 would add ~135 KB to every autosave, and the load path
+would have to keep surviving snapshots written by an older state shape.
+
+So what changed is the silence, which is the part that actually misled. `undoLastPlay`
+returned bare on an empty history, so a scorer who reopened the card, pressed Undo and
+watched nothing happen had no way to tell a lost history from a broken button. It now
+toasts `Nothing to undo — undo covers this session only. Clear the cell instead.` —
+the limit *and* the tool that does still reach a reloaded play, since
+`clearSelectedCell` works post-refresh and was verified so in Appendix B.
+
+The bare `return` was left in place above the toast for the guard cases (an open entry
+popup), and the pre-existing side effects ahead of the emptiness check — the spray
+dismiss, the transition-timer clear, `gameOverShown = false` — were deliberately not
+moved. Nothing in the finding is about them and reordering them changes behaviour the
+suite pins elsewhere.
+
+Verified: 1 new case (267 passed · 0 failed) — a play saved, the module's history
+emptied the way a refresh empties it, `loadState` + `applyState`, then Undo: the toast
+appears, names the session limit, and the play and its runner are still on the card.
+Reverting the toast fails it and nothing else.
+
+Not verified in a live browser, deliberately: the repro needs a *saved* game reloaded
+from `localStorage`, which on the real origin is the scorer's own card — the one thing
+this repo does not do (a live-origin check has destroyed a saved card before). The suite
+drives the real `undoLastPlay` against the real DOM, and the toast surface itself was
+verified in the browser under M1.
 
 ### M6 — a pitcher with no outs shows blank IP — ✅ **FIXED**
 `updatePitcherStats` [app.js:4433]
@@ -652,7 +684,7 @@ is where those rows were when the finding was written.
 | **M2** ✅ | med | LOB is 0 in a walk-off | recomputeInning [748] | walk-off single with a man left on 1st → `inn.lob === 0` |
 | **M3** ✅ | med | `SF`/`SH` runner popup shows a batter-destination row that is discarded and unvalidated | [1460], [2046], [2081] | `sel(v,0,0); play('3B'); sel(v,2,0); play('SF')` → popup has 3 `[data-base="batter"]` buttons; picking one changes nothing |
 | **M4** ✅ | med | An `FC` can record three outs | [1761], [1344] | `FC 6` with 2 on → `outcomePopup({1:['out',2],0:['out',1],batter:['out']})` → `outs===3` |
-| **M5** | med | Undo history is memory-only; after a refresh the last play can't be undone | playHistory [2817] | `flushSave(); loadState(); applyState();` with `playHistory` empty → `undoLastPlay()` is a no-op |
+| **M5** ✅ | med | Undo history is memory-only; after a refresh the last play can't be undone | playHistory [2817] | `flushSave(); loadState(); applyState();` with `playHistory` empty → `undoLastPlay()` is a no-op |
 | **M6** ✅ | med | A pitcher with 0 outs shows blank IP, not `0.0` | updatePitcherStats [4047] | single, then mid-inning `usePitcher(1)` → starter IP `''` |
 | **M7** ✅ | med | Manually-entered `BB`/`K` leave the pitch count inconsistent (3-ball walk; `K` as an `'X'` pitch with 0 strikes) | [1382], [2327] | `pitch('B')×3; play('BB')` → 3 pitches. `play('K')` cold → `pitches===['X']`, `getPitchCount` 0/0 |
 | **L1** | low | `WP`/`PB`/`BK` with bases empty record nothing but push an undo entry | applyRunnerEvent [2748] | `applyRunnerEvent('BK')` with nobody on → `playHistory.length` +1, card unchanged |

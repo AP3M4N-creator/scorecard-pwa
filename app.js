@@ -3247,7 +3247,12 @@ function undoLastPlay() {
   dismissSprayPopup();
   if (pendingTransitionTimer) { clearTimeout(pendingTransitionTimer); pendingTransitionTimer = null; }
   gameOverShown = false;
-  if (!playHistory.length) return;
+  // The history lives in memory only (D9), so a reload empties it. Say so rather
+  // than reading as a dead button, and point at the tool that does still work.
+  if (!playHistory.length) {
+    showPlayReject('Nothing to undo — undo covers this session only. Clear the cell instead.');
+    return;
+  }
   const last = playHistory[playHistory.length - 1];
   const redo = snapshotForRedo(last.team, last.pIdx, last.innIdx);
   redoHistory.push(redo);
