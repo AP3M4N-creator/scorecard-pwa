@@ -511,7 +511,7 @@ single-double-homer across the three rows of spot 1 splitting 1/1 · 1/1 · 1/1/
 | M5 ✅ | **Undo history is memory-only** — after a refresh `undoLastPlay` does nothing (`historyDepth: 0`, state unchanged). `clearSelectedCell` still works correctly post-refresh. The 2026-07-28 plan deliberately left this; re-confirm rather than assume. | [app.js:2817] |
 | M6 ✅ | A pitcher who records **no outs shows blank IP**, not `0.0` — `s.outs > 0 ? fullInnings : ''`. Run/ER attribution across a mid-inning change is otherwise **correct** (`ab.pitcher` is frozen at entry). | [app.js:4047] |
 | M7 ✅ | **Manually-entered `BB`/`K` leave the pitch count inconsistent.** A `BB` tapped on a 3-ball count stays at 3 pitches (the `push('B')` only fires when `pitches.length === 0`); a `K` tapped by button pushes `'X'`, which `getPitchCount` reads as 0 strikes and `renderPitches` draws as nothing — so the cell shows "1 pitch" over an empty pitch track. | [app.js:1382–1392], [app.js:2327] |
-| L1 | `WP`/`PB`/`BK` with the bases empty record nothing but still **push an undo entry** (2 no-op undos to press through). | [app.js:2748] |
+| L1 ✅ | `WP`/`PB`/`BK` with the bases empty record nothing but still **push an undo entry** (2 no-op undos to press through). | [app.js:2748] |
 | L2 | A play refused because the inning already has 3 outs **returns silently** — no `showPlayReject`, unlike every other refusal. | [app.js:1368] |
 | L3 | A **balk** is visible only as a `BK` advancement label on the runner's diamond; no BK count on the pitcher line. | [app.js:2809] |
 | L4 | Batting around in the **15th column can't overflow** (`nextCol >= INNINGS` returns), leaving the selection on a filled cell and further batters silently unenterable. | [app.js:2211] |
@@ -649,6 +649,35 @@ Verified: 5 new cases (266 passed · 0 failed) — the cold K, a K on a worked c
 padding only what is missing, the 3-ball walk, the IBB exemption, and an auto-triggered
 K not being padded past three.
 
+### L1 — a bases-empty `WP`/`PB`/`BK` records nothing but pushes an undo entry — ✅ **FIXED**
+`applyRunnerEvent` [app.js:3134]
+
+**What was done.** Fix per D11. With nobody on, every branch of the function is a
+no-op — `advanceRunners` has nothing to advance and the CS loop nothing to remove —
+but `pushUndo` ran first, so each press left a snapshot of a state it hadn't changed.
+Two taps of BK put two dead presses of Undo between the scorer and the last play that
+really happened, which is the worst place for them: Undo is what you reach for when
+you have just made a mistake.
+
+The bases-empty check now refuses ahead of the snapshot, and it says why in the terms
+the rules use rather than a generic "nothing to do": 9.13 charges a wild pitch or a
+passed ball only when a runner advances, and under 6.02(a) a balk with the bases empty
+is a ball to the batter — which is also the one of the three that still has somewhere
+to go on the card, as a pitch. The message per type lives in a `NOTHING_TO_MOVE` map
+next to the function; `SB` and `CS` get an entry too, since both branches are
+unreachable with the bases empty for the same reason.
+
+This is the second half of D11, whose first half was leaving the pitcher line without
+a BK column (**L3**, demoted). With nothing to record and no column to record it in, a
+refusal that explains itself is the whole fix.
+
+Verified: 4 new cases (271 passed · 0 failed) — a balk that does move runners (the
+positive path, so the refusal is a refusal of something that otherwise works), the
+plan's own bases-empty repro asserting `playHistory.length` stays 0, the wild-pitch
+message, and a passed ball pressed after a home run cleared the bases, which is the
+same empty state arrived at mid-inning. Reverting the guard fails three of them and
+nothing else.
+
 **Not defects — design gaps, listed so they aren't re-found:**
 
 - **L6** Force out vs tag out isn't distinguished — the popup offers "Out at *N*"
@@ -687,7 +716,7 @@ is where those rows were when the finding was written.
 | **M5** ✅ | med | Undo history is memory-only; after a refresh the last play can't be undone | playHistory [2817] | `flushSave(); loadState(); applyState();` with `playHistory` empty → `undoLastPlay()` is a no-op |
 | **M6** ✅ | med | A pitcher with 0 outs shows blank IP, not `0.0` | updatePitcherStats [4047] | single, then mid-inning `usePitcher(1)` → starter IP `''` |
 | **M7** ✅ | med | Manually-entered `BB`/`K` leave the pitch count inconsistent (3-ball walk; `K` as an `'X'` pitch with 0 strikes) | [1382], [2327] | `pitch('B')×3; play('BB')` → 3 pitches. `play('K')` cold → `pitches===['X']`, `getPitchCount` 0/0 |
-| **L1** | low | `WP`/`PB`/`BK` with bases empty record nothing but push an undo entry | applyRunnerEvent [2748] | `applyRunnerEvent('BK')` with nobody on → `playHistory.length` +1, card unchanged |
+| **L1** ✅ | low | `WP`/`PB`/`BK` with bases empty record nothing but push an undo entry | applyRunnerEvent [2748] | `applyRunnerEvent('BK')` with nobody on → `playHistory.length` +1, card unchanged |
 | **L2** | low | A play refused for 3 outs gives no feedback | applyPlay [1368] | enter a play in a 3-out inning → silent return |
 | **L3** | low | Balk isn't counted on the pitcher line | [2809] | — |
 | **L4** | low | Bat-around in the 15th column can't overflow; further batters silently unenterable | overflowToNextColumn [2211] | 9 × `play('BB')` in col 14 → selection stuck on a filled cell |

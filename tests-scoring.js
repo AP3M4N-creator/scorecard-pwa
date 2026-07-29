@@ -2277,6 +2277,47 @@
     ok('a wild pitch is the pitcher\'s own doing', !ab('visiting', 0, 0).reachedOnError);
   });
 
+  // A balk moves everybody up one, like a wild pitch. The positive path, so the
+  // bases-empty refusal below is a refusal of something that otherwise works.
+  test('a balk moves the runners up a base', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                     // p0 on 1st
+    applyRunnerEvent('BK');
+    eq('he took 2nd on the balk', onB('visiting', 0, 1), 0);
+    eq('one entry to undo', playHistory.length, 2);  // the single, then the balk
+  });
+
+  // L1 — with nobody on, every branch of applyRunnerEvent is a no-op, and it used to
+  // run them after pushing an undo snapshot: dead presses of Undo standing between
+  // the scorer and the last play that really happened.
+  test('a balk with the bases empty is refused, and pushes nothing to undo', () => {
+    sel('visiting', 0, 0);
+    applyRunnerEvent('BK');
+    eq('nothing to undo', playHistory.length, 0);
+    ok('the press is answered', visible('play-reject'));
+    ok('and it says what a balk with nobody on is',
+      document.getElementById('play-reject').textContent.indexOf('ball to the batter') >= 0);
+  });
+
+  test('a wild pitch with nobody on says why it is not charged', () => {
+    sel('visiting', 0, 0);
+    applyRunnerEvent('WP');
+    eq('nothing to undo', playHistory.length, 0);
+    ok('the press is answered', visible('play-reject'));
+    ok('and it names the rule\'s condition',
+      document.getElementById('play-reject').textContent.indexOf('when a runner advances') >= 0);
+  });
+
+  // The runner scored on the play, so the bases are empty again — the same state a
+  // leadoff press sees, and it must not be mistaken for one.
+  test('a passed ball after the bases empty out is refused too', () => {
+    sel('visiting', 0, 0);
+    play('HR');
+    applyRunnerEvent('PB');
+    eq('only the home run is on the history', playHistory.length, 1);
+    ok('the press is answered', visible('play-reject'));
+  });
+
   // #17 — Rule 9.02(a)(1): the sacrifice has to achieve something.
   test('a sacrifice fly with the bases empty is charged as an at-bat', () => {
     sel('visiting', 0, 0);

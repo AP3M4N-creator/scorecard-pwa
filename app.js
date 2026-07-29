@@ -3119,6 +3119,18 @@ function showBasePickerPopup(title, options, callback) {
   });
 }
 
+/* Why each of these needs somebody on base, in the words a scorer would use. Rule
+   9.13 charges a wild pitch or a passed ball only when a runner advances on it, and
+   6.02(a) makes a balk with the bases empty a ball to the batter — so with nobody on
+   there is no runner event to write, and the card has nowhere to write one. */
+const NOTHING_TO_MOVE = {
+  WP: 'Nobody on — a wild pitch is only charged when a runner advances.',
+  PB: 'Nobody on — a passed ball is only charged when a runner advances.',
+  BK: 'Nobody on — a balk with the bases empty is a ball to the batter.',
+  SB: 'Nobody on — no runner to steal a base.',
+  CS: 'Nobody on — no runner to catch stealing.'
+};
+
 function applyRunnerEvent(type) {
   if (!selectedCell) return;
   const team = selectedCell.dataset.team;
@@ -3126,6 +3138,14 @@ function applyRunnerEvent(type) {
   const innIdx = parseInt(selectedCell.dataset.inn);
   const inn = getInnState(team, innIdx);
   if (inn.outs >= 3) return;
+  // L1: with the bases empty every branch below is a no-op, and the old code ran
+  // them all anyway — after pushing an undo snapshot. Two presses of BK left two
+  // dead presses of Undo between the scorer and the last play that really happened.
+  // Refused, and named, rather than silently recorded as nothing (D11).
+  if (inn.bases.every(b => b === null)) {
+    showPlayReject(NOTHING_TO_MOVE[type] || 'Nobody is on base.');
+    return;
+  }
   pushUndo(team, pIdx, innIdx);
 
   if (type === 'WP' || type === 'PB') {
