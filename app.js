@@ -698,6 +698,28 @@ function renumberOuts(team, innIdx) {
   }
 }
 
+// The R totals as the line shows them. `checkGameOver` and the walk-off clause of
+// `halfInningIsOver` have to read the same two numbers, and the line is where they
+// live: an inning nobody has records for may have been typed in by hand — a scorer
+// picking a game up in the 4th — and those runs still count towards who is ahead.
+function runsOnLine(team) {
+  return parseInt(document.querySelector(`input[data-ls="${team}"][data-stat="r"]`)?.value) || 0;
+}
+
+/* Is this half-inning over? Three outs, normally — but the home half of the last
+   inning also ends on the run that puts the home team ahead, with nobody out and
+   runners still standing. Those runners were left on base, and LOB read 0 for
+   every walk-off because the only test was `outs >= 3` (M2).
+
+   Deliberately the same condition `checkGameOver` [app.js:2052] ends the game on,
+   through the same `runsOnLine`, so the card can't call a game final and its LOB
+   column still say the inning is being played. */
+function halfInningIsOver(team, realInn, outs) {
+  if (outs >= 3) return true;
+  return team === 'home' && realInn >= lastRegulationIdx()
+    && runsOnLine('home') > runsOnLine('visiting');
+}
+
 /* ------------------------------------------------- recomputing an inning ---
    An inning's derived state — the out count, who is standing on which base, the
    runs on the linescore, LOB — is a function of the at-bat records and the out
@@ -750,20 +772,26 @@ function recomputeInning(team, realInn) {
     }
   }
 
-  // One definition of LOB (#16): the runners left standing when the half-inning
-  // ends. Nothing is left on base until it does, so an inning in progress is 0.
-  const lob = outs >= 3 ? bases.filter(r => r !== null).length : 0;
-
   for (const col of cols) {
     const inn = getInnState(team, col);
     inn.outs = outs;
     // In place — callers hold `inn.bases` across a recompute.
     for (let b = 0; b < 3; b++) inn.bases[b] = bases[b];
-    inn.lob = lob;
   }
 
-  // Runs on the line, by real inning, then the R/H/LOB totals.
+  // Runs on the line, by real inning, then the R/H/E/LOB totals. Ahead of LOB
+  // rather than after it now: `halfInningIsOver` asks whether the home team is
+  // ahead, and on a walk-off the run that puts them there is the one this
+  // recompute has just derived.
   updateInningRuns(team, cols[cols.length - 1]);
+
+  // One definition of LOB (#16): the runners left standing when the half-inning
+  // ends. Nothing is left on base until it does, so an inning in progress is 0.
+  const lob = halfInningIsOver(team, realInn, outs) ? bases.filter(r => r !== null).length : 0;
+  for (const col of cols) getInnState(team, col).lob = lob;
+  // The figure this inning contributes has just moved, and the total on the line
+  // was added up from the old one a few lines above. Re-add it.
+  writeTeamLOB(team);
 }
 
 // Has anybody batted in this inning? Distinguishes "0 runs" from "not played" —
@@ -791,6 +819,16 @@ function teamLOB(team) {
     if (inn && inn.lob) total += inn.lob;
   }
   return total;
+}
+
+// LOB on the line. Split out of `updateLinescoreTotals` because `recomputeInning`
+// settles a half-inning's figure *after* the runs are on the line — the walk-off
+// test needs them — so the total has to be re-added once it does.
+function writeTeamLOB(team) {
+  const total = teamLOB(team);
+  gameState.linescore[team].lob = total;
+  const inp = document.querySelector(`input[data-ls="${team}"][data-stat="lob"]`);
+  if (inp) inp.value = total || '';
 }
 
 // Which row is occupying the slot in this column — the starter's, or the sub's
@@ -2044,8 +2082,8 @@ function scheduleTransition(fn, delay) {
 function checkGameOver(team, innIdx) {
   const inn = getInnState(team, innIdx);
   const realInn = getRealInning(team, innIdx);
-  const vR = parseInt(document.querySelector('input[data-ls="visiting"][data-stat="r"]')?.value) || 0;
-  const hR = parseInt(document.querySelector('input[data-ls="home"][data-stat="r"]')?.value) || 0;
+  const vR = runsOnLine('visiting');
+  const hR = runsOnLine('home');
   // The bottom half ends the instant the home team goes ahead — a walk-off doesn't
   // wait for a 3rd out, and it doesn't care whether the run came in on a hit or on
   // a wild pitch. Otherwise the half has to be complete and the game not tied.
@@ -3594,10 +3632,7 @@ function updateLinescoreTotals(team) {
   // and fell as they scored, and it counted a runner two plays before anyone was
   // left on anything. `recomputeInning` settles the figure when the half-inning
   // ends; this only adds them up.
-  const totalLob = teamLOB(team);
-  gameState.linescore[team].lob = totalLob;
-  const lobInp = document.querySelector(`input[data-ls="${team}"][data-stat="lob"]`);
-  if (lobInp) lobInp.value = totalLob || '';
+  writeTeamLOB(team);
 }
 
 /* Tabs */

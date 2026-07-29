@@ -19,8 +19,9 @@ engine end to end, then drove the real `app.js` against the real `index.html`
 DOM in jsdom — 47 diagnostic probes — and reproduced C1, C2 and H1 by hand in a
 live browser at `http://localhost:8765` (`preview_start` → `scorecard`).
 
-**Progress:** Phase 1 is done (C1, C2) and C3 is fixed. Everything else is open.
-This document is the whole state of the work.
+**Progress:** Phases 1 and 2 are done (C1, C2, C3, H1); in Phase 3, H4 and M2 are
+fixed and **M1 is what's left**. Everything from Phase 4 on is open. This document
+is the whole state of the work.
 
 ---
 
@@ -53,7 +54,7 @@ Standalone: M2, M3, M5, M6, M7, L1–L7.
 | D4 | **H2 pinch runner.** New mechanism, or overload SUB? | A distinct **PR** action that transfers the *run* to the sub row while leaving AB/H on the starter. Overloading SUB can't work — `setSubLine` skipping the played column is correct for a PH. |
 | D5 | **H3 third player in a slot.** Raise `ROWS_PER_POS` to 3, or make sub rows dynamic? | **`ROWS_PER_POS = 3`** is the cheap correct answer — it is already a constant that sizes the grid, the state and ~12 loops, and `stateForStorage` / `refillAtBats` already handle "rows whose at-bats are dropped on the way out". Dynamic rows are a much larger change for a rarer case. Confirm the row-height cost on iPad is acceptable. |
 | D6 | **M1 lock.** Hard-refuse entry after the game is final, or warn once and allow? | **Warn and allow.** A scorer sometimes needs to correct a final card, and this app's standing policy is "record what happened, never refuse" (see the re-entry prompt). A one-time toast + a FINAL marker is enough. |
-| D7 | **M2 LOB in a walk-off.** Count runners left on when the half ends without 3 outs? | **Yes** — official scoring counts them. Change the `outs >= 3` condition to "the half-inning is over", which now includes a game-ending run. |
+| ~~D7~~ **answered: Yes** | **M2 LOB in a walk-off.** Count runners left on when the half ends without 3 outs? | **Yes** — official scoring counts them. Change the `outs >= 3` condition to "the half-inning is over", which now includes a game-ending run. |
 
 ---
 
@@ -238,7 +239,7 @@ is outside the C1 guard. Worth a look when M1/H4 are in hand.
 
 ## Phase 3 — game flow
 
-### H4 — `editPlayType` never calls `afterStateChange` (RC-D)
+### H4 — `editPlayType` never calls `afterStateChange` (RC-D) — ✅ **FIXED** in `1b9278a`
 [app.js:2997–3007]
 
 It ends with its own render/recompute tail. Consequences:
@@ -259,12 +260,35 @@ make sure a transition isn't scheduled from a change that then gets rolled back.
 After a walk-off (`gameOverShown: true`), another HR was accepted and moved R
 from 1 to 2. Fix per **D6**.
 
-### M2 — LOB is 0 in a walk-off
+### M2 — LOB is 0 in a walk-off — ✅ **FIXED**
 `recomputeInning` [app.js:748]
 
 `lob = outs >= 3 ? … : 0`, so a half-inning ending on the winning run reports no
 runners left on. Repro: a runner standing on 1st, `innLob: 0`, LOB total blank.
 Fix per **D7**.
+
+**What was done.** `halfInningIsOver(team, realInn, outs)` replaces the bare
+`outs >= 3` test: three outs, *or* the home half of the last inning with the home
+team ahead — a walk-off, which ends the half on a run with nobody out. Both it and
+`checkGameOver` now read the score through one `runsOnLine(team)` helper, so the
+card can't call a game final while its LOB column still says the inning is being
+played. `runsOnLine` reads the **line**, not the records, because an inning a
+scorer typed in by hand (picking a game up in the 4th) still counts towards who is
+ahead — the same figures `checkGameOver` has always used.
+
+Ordering inside `recomputeInning` changed: `updateInningRuns` now runs *before* LOB
+is settled, since on a walk-off the run that ends the game is the one the recompute
+has just derived. The LOB total the line shows is therefore re-added afterwards
+through `writeTeamLOB(team)`, split out of `updateLinescoreTotals` so both callers
+write it one way.
+
+Verified: 3 new tests (230 passed · 0 failed) — the walk-off strands its runner,
+a run that only *ties* the last inning leaves the half live (LOB still 0), and the
+visiting team going ahead in the top of the 9th strands nobody, since the walk-off
+clause is the home half's alone. Reverting just the condition to `outs >= 3` fails
+the first and passes the other two, which is the shape a real repro should have.
+In the browser, a bottom-of-the-9th triple then an RBI single reads `9: 1 · R 1 ·
+LOB 1` on the line with 0 outs.
 
 ---
 
@@ -340,9 +364,9 @@ queued transitions. Odd player indices are sub rows — batters are `0, 2, 4, �
 | **H1** ✅ | high | Linescore **E** is never derived from error plays, and errors aren't attributed to the fielding team | updateLinescoreTotals [3410] | `sel(v,0,0); play('E6')` → both E inputs stay `''` |
 | **H2** | high | No pinch runner — the run goes to the starter | setSubLine [4141] | `sel(v,0,0); play('1B'); sel(v,0,0); markSub(); sel(v,2,0); play('HR')` → starter R 1, sub R blank |
 | **H3** | high | Only two players per lineup slot; a PH then a defensive replacement can't be recorded | ROWS_PER_POS [97] | third `markSub()` on the same slot opens `sub-popup` instead of adding a row |
-| **H4** | high | `editPlayType` never calls `afterStateChange` → no half-inning flip on a 3rd out, no game-over on a walk-off | editPlayType [2997] | 2 outs + a single, then `editPlay('K')` → `outs===3`, `pendingTransitionTimer === null` |
+| **H4** ✅ | high | `editPlayType` never calls `afterStateChange` → no half-inning flip on a 3rd out, no game-over on a walk-off | editPlayType [2997] | 2 outs + a single, then `editPlay('K')` → `outs===3`, `pendingTransitionTimer === null` |
 | **M1** | med | Nothing locks the card once the game is final | checkGameOver [1916] | walk-off, `flushTimers()`, then another `play('HR')` → accepted, R +1 |
-| **M2** | med | LOB is 0 in a walk-off | recomputeInning [748] | walk-off single with a man left on 1st → `inn.lob === 0` |
+| **M2** ✅ | med | LOB is 0 in a walk-off | recomputeInning [748] | walk-off single with a man left on 1st → `inn.lob === 0` |
 | **M3** | med | `SF`/`SH` runner popup shows a batter-destination row that is discarded and unvalidated | [1460], [2046], [2081] | `sel(v,0,0); play('3B'); sel(v,2,0); play('SF')` → popup has 3 `[data-base="batter"]` buttons; picking one changes nothing |
 | **M4** | med | An `FC` can record three outs | [1761], [1344] | `FC 6` with 2 on → `outcomePopup({1:['out',2],0:['out',1],batter:['out']})` → `outs===3` |
 | **M5** | med | Undo history is memory-only; after a refresh the last play can't be undone | playHistory [2817] | `flushSave(); loadState(); applyState();` with `playHistory` empty → `undoLastPlay()` is a no-op |

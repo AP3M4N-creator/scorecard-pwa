@@ -1406,6 +1406,41 @@
     eq('three left on for the game', lobTotal('visiting'), '3');
   });
 
+  // M2 — the only test for "the half-inning is over" was `outs >= 3`, so a walk-off
+  // — a half that ends on a run, nobody out, men still standing — left nobody on
+  // base. Official scoring counts them.
+  test('runners standing when a walk-off lands are left on base', () => {
+    sel('home', 0, 8);                              // bottom of the 9th, 0-0
+    play('3B');                                     // p0 on 3rd
+    play('1B'); runnerPopup({ 2: 3, batter: 0 });   // he scores it, batter on 1st
+    eq('the winning run is in', lsInput('home', 8).value, '1');
+    ok('game recognised as over', gameOverShown);
+    eq('and it ended with nobody out', inn('home', 8).outs, 0);
+    eq('the man on 1st was left there', inn('home', 8).lob, 1);
+    eq('and the line says so', lobTotal('home'), '1');
+  });
+
+  test('a run that only ties the last inning leaves the half-inning live', () => {
+    lsInput('visiting', 0).value = '1';
+    updateLinescoreTotals('visiting');
+    sel('home', 0, 8);
+    play('3B');
+    play('1B'); runnerPopup({ 2: 3, batter: 0 });   // 1-1, batter on 1st
+    ok('game still going', !gameOverShown);
+    eq('nobody is left on yet', inn('home', 8).lob, 0);
+    eq('nor on the line', lobTotal('home'), '');
+  });
+
+  // The walk-off clause is the home half's alone: the visiting team going ahead in
+  // the top of the last inning ends nothing.
+  test('the visiting team going ahead in the 9th does not strand its runners', () => {
+    sel('visiting', 0, 8);                          // top of the 9th
+    play('HR');                                     // visiting 1-0
+    play('1B');                                     // a man on, still nobody out
+    eq('ahead', rTotal('visiting'), '1');
+    eq('the inning is still being played', inn('visiting', 8).lob, 0);
+  });
+
   // H1 — E was a hand-typed input while R, H and LOB were all derived, so the card
   // read `E: ""` after an E5 and the box score never reconciled. Errors are recorded
   // on the card of the team that was batting, so the count belongs to the other team.
