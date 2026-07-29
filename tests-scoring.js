@@ -213,6 +213,11 @@
     const t = battingTeam === 'visiting' ? 'home' : 'visiting';
     return document.querySelector(`input[data-team="${t}"][data-pitcher="${i}"][data-field="${field}"]`).value;
   }
+  // Batting stats live on the batter's own row; writeStats blanks a zero, so an
+  // empty string is what "none" reads as.
+  function bStat(team, p, field) {
+    return document.getElementById(`st-${field}-${team}-${p}`).textContent;
+  }
   function innHeaderCell(team, col) {
     const gridId = team === 'visiting' ? 'grid-visiting' : 'grid-home';
     return rawAll(`#${gridId} .scoring-grid thead th.inn-col`)[col];
@@ -1637,5 +1642,137 @@
     recomputeInning('visiting', 0);
     eq('inning state unchanged', JSON.stringify([inn('visiting', 0).outs, inn('visiting', 0).bases, inn('visiting', 0).lob]), before);
     eq('runs unchanged', lsInput('visiting', 0).value, '');
+  });
+
+  /* =====================================================================
+     Phase 8a — box-score rules
+     ===================================================================== */
+
+  // #11 — `placeBatter` is the only thing that sets `reachedOnError`, and the
+  // extra-base branch skips it, so the batter who took second on the throw was
+  // recorded as having reached cleanly and his run counted as earned.
+  test('a batter who takes an extra base on the error still reached on the error', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                     // p0 on 1st
+    play('E6'); runnerPopup({ 0: 2, batter: 1 });   // p0 to 3rd, batter takes 2nd
+    eq('the batter is on 2nd', onB('visiting', 0, 1), 2);
+    ok('and his card is charged to the error', ab('visiting', 2, 0).reachedOnError);
+  });
+
+  test('a batter held at first on the error is charged to it too', () => {
+    sel('visiting', 0, 0);
+    play('E6');
+    ok('reached on the error', ab('visiting', 0, 0).reachedOnError);
+  });
+
+  // #12 — Rule 9.04(b)(1).
+  test('a run that scores on a double play is nobody\'s RBI', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                     // p0 on 3rd
+    play('1B'); runnerPopup({ 2: 2, batter: 0 });   // p2 on 1st, p0 holds 3rd
+    promptPositionPlay('DP ');
+    positionPopup('6-4-3');
+    outcomePopup({ 2: ['safe', 3], 0: ['out', 1], batter: ['out'] });
+    eq('the run is on the board', lsInput('visiting', 0).value, '1');
+    eq('but the double play earns no RBI', ab('visiting', 4, 0).rbi, 0);
+  });
+
+  // A fielder's choice is not covered by the rule — that run is the batter's.
+  test('a run that scores on a fielder\'s choice is still an RBI', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                     // p0 on 3rd
+    play('1B'); runnerPopup({ 2: 2, batter: 0 });   // p2 on 1st, p0 holds 3rd
+    promptPositionPlay('FC ');
+    positionPopup('6');
+    outcomePopup({ 2: ['safe', 3], 0: ['out', 1], batter: ['safe', 0] });
+    eq('the run is on the board', lsInput('visiting', 0).value, '1');
+    eq('and it is his RBI', ab('visiting', 4, 0).rbi, 1);
+  });
+
+  // #12 — the other half: a run scored on the wild pitch of a K+WP came in on the
+  // pitch, and the batter struck out.
+  test('a run scored on the wild pitch of a K+WP is nobody\'s RBI', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                     // p0 on 3rd
+    play('K+WP'); runnerPopup({ 2: 3, batter: 0 }); // he comes home on the wild pitch
+    eq('the run is on the board', lsInput('visiting', 0).value, '1');
+    eq('but a strikeout drives in nobody', ab('visiting', 2, 0).rbi, 0);
+  });
+
+  // #13 — a throwing error on a steal leaves no error play on any cell, so the
+  // inning read as clean: the run counted as earned and nothing asked for review.
+  test('a runner who takes an extra base on a throw is charged to the error', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                     // p0 on 1st
+    promptSBBase(); basePicker(0, 'error');         // steals 2nd, throw away → 3rd
+    eq('he is on 3rd', onB('visiting', 0, 2), 0);
+    ok('the extra base is the error\'s', ab('visiting', 0, 0).reachedOnError);
+  });
+
+  test('a runner moved up by a throw on a pickoff is charged to the error', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                     // p0 on 1st
+    promptPickoff(); basePicker(0, 'error');        // throw away → 2nd
+    eq('he is on 2nd', onB('visiting', 0, 1), 0);
+    ok('charged to the error', ab('visiting', 0, 0).reachedOnError);
+  });
+
+  test('an inning whose only error was a throw on a steal still asks for ER review', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                     // p0 on 1st
+    promptSBBase(); basePicker(0, 'error');         // → 3rd
+    play('1B'); runnerPopup({ 2: 3, batter: 0 });   // driven in
+    ok('the inning is provisional', inningErProvisional('visiting', 0));
+    eq('the run counts', pStat('visiting', 0, 'r'), '1');
+    eq('but is unearned until a human says otherwise', pStat('visiting', 0, 'er'), '');
+  });
+
+  // #14 — Rule 9.16. This flagged only the runner on 3rd, so a man moved up from
+  // 1st by the same passed ball scored as an earned run later.
+  test('a passed ball marks every runner it moves, not just the man on 3rd', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                     // p0 on 1st
+    applyRunnerEvent('PB');
+    eq('he took 2nd on the passed ball', onB('visiting', 0, 1), 0);
+    ok('and the base is the passed ball\'s', ab('visiting', 0, 0).reachedOnError);
+  });
+
+  test('a wild pitch leaves the runner it moves earned', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    applyRunnerEvent('WP');
+    eq('he took 2nd', onB('visiting', 0, 1), 0);
+    ok('a wild pitch is the pitcher\'s own doing', !ab('visiting', 0, 0).reachedOnError);
+  });
+
+  // #17 — Rule 9.02(a)(1): the sacrifice has to achieve something.
+  test('a sacrifice fly with the bases empty is charged as an at-bat', () => {
+    sel('visiting', 0, 0);
+    play('SF');
+    eq('a fly ball that scored nobody is an ordinary out', bStat('visiting', 0, 'ab'), '1');
+  });
+
+  test('a sacrifice fly that scores a run costs no at-bat', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                     // p0 on 3rd
+    play('SF'); runnerPopup({ 2: 3, batter: 0 });   // he tags and scores
+    eq('the run is his RBI', ab('visiting', 2, 0).rbi, 1);
+    eq('and the sacrifice costs no at-bat', bStat('visiting', 2, 'ab'), '');
+  });
+
+  test('a sacrifice bunt that moves a runner costs no at-bat', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                     // p0 on 1st
+    play('SH'); runnerPopup({ 0: 1, batter: 0 });   // bunted to 2nd
+    eq('the bunt did its job', onB('visiting', 0, 1), 0);
+    eq('so it costs no at-bat', bStat('visiting', 2, 'ab'), '');
+  });
+
+  test('a bunt that moved nobody is charged as an at-bat', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                     // p0 on 1st
+    play('SH'); runnerPopup({ 0: 0, batter: 0 });   // the runner holds
+    eq('nobody advanced', onB('visiting', 0, 0), 0);
+    eq('so it is an ordinary out', bStat('visiting', 2, 'ab'), '1');
   });
 })();

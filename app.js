@@ -1201,7 +1201,10 @@ function applyPlayEffects(team, pIdx, innIdx, play, prev, done) {
         const bDest = choices.batterDest !== undefined ? choices.batterDest : 0;
         for (let s = 0; s <= bDest; s++) ab.bases[s] = true;
         setRunnerOn(inn, bDest, runnerRef(pIdx, innIdx));
-        ab.rbi = countRunnersScored(team, prev);
+        // Rule 9.04(b): a run that scores on a wild pitch is nobody's RBI — and on
+        // a K+WP the batter struck out, so every run on the play came in on the
+        // pitch, not off the bat (#12).
+        ab.rbi = 0;
         done();
       }, { batterTakesBase: true, batterPIdx: pIdx });
       return;
@@ -1217,6 +1220,10 @@ function applyPlayEffects(team, pIdx, innIdx, play, prev, done) {
         if (choices.batterDest !== undefined && choices.batterDest > 0) {
           for (let s = 0; s <= choices.batterDest; s++) ab.bases[s] = true;
           setRunnerOn(inn, choices.batterDest, runnerRef(pIdx, innIdx));
+          // `placeBatter` is the only other setter, and this branch skips it — so a
+          // batter who took an extra base on the error used to count as having
+          // reached cleanly, and his run as earned (#11).
+          if (isErrorPlay(play)) ab.reachedOnError = true;
         } else {
           placeBatter(ab, inn, play, pIdx, innIdx);
         }
@@ -1260,7 +1267,10 @@ function applyPlayEffects(team, pIdx, innIdx, play, prev, done) {
     if (hasRunnersOnBase(team, innIdx)) {
       showRunnerOutcomePopup(team, innIdx, play, isDP, function(outcomes) {
         applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes);
-        ab.rbi = countRunnersScored(team, prev);
+        // Rule 9.04(b)(1): no RBI when the batter grounds into a double play, even
+        // if a run crosses the plate. A fielder's choice is not covered by the rule
+        // — the run there is his (#12).
+        ab.rbi = isDP ? 0 : countRunnersScored(team, prev);
         done();
       });
       return;
@@ -2366,6 +2376,9 @@ function applySBAtBase(team, innIdx, fromBase, withError) {
     rab.bases[step] = true;
     setAdvReason(rab, step, step === fromBase + 1 ? 'SB' : 'E');
   }
+  // Rule 9.16: the extra base came on a throwing error, so a run this runner goes
+  // on to score is unearned — and the inning is one a human should review (#13).
+  if (withError && dest > fromBase + 1) rab.reachedOnError = true;
   renderDiamond(team, rn.p, rn.col);
   afterStateChange(team, innIdx);
 }
@@ -2453,6 +2466,8 @@ function applyPickoff(team, innIdx, atBase, withError) {
     if (!moveRunnerTo(inn, atBase, dest, rn)) return;
     rab.bases[dest] = true;
     setAdvReason(rab, dest, 'E');
+    // Same as the SB+E path: he advanced on the error, so the run is unearned (#13).
+    rab.reachedOnError = true;
     renderDiamond(team, rn.p, rn.col);
   } else {
     // See applyCSAtBase: the out's pitcher lives in the log, `rab.pitcher` keeps
@@ -2506,12 +2521,21 @@ function applyRunnerEvent(type) {
   pushUndo(team, pIdx, innIdx);
 
   if (type === 'WP' || type === 'PB') {
-    // PB: runs scored are unearned. Mark runners on 3rd before advancing.
-    if (type === 'PB' && inn.bases[2] !== null) {
-      const rab = runnerAtBat(team, inn.bases[2]);
-      if (rab) rab.reachedOnError = true;
-    }
+    // Rule 9.16: a run that scores as a result of a passed ball is unearned (a wild
+    // pitch is the pitcher's own doing, so the WP side is right to do nothing).
+    // This used to flag only the runner on 3rd, so a man moved up from 1st or 2nd
+    // by the same passed ball scored as an earned run later (#14). Flag whoever the
+    // ball actually moved — a runner it couldn't advance keeps his own reckoning.
+    const before = type === 'PB' ? inn.bases.slice() : null;
     advanceRunners(team, innIdx, 1, type);
+    if (before) {
+      for (let b = 0; b < 3; b++) {
+        const rn = before[b];
+        if (!rn || sameRunner(inn.bases[b], rn)) continue;
+        const rab = runnerAtBat(team, rn);
+        if (rab) rab.reachedOnError = true;
+      }
+    }
   } else if (type === 'SB') {
     // Lead runner first, so 2nd is free for the man behind him. A blocked steal is
     // refused, not converted into an extra base: this used to send the runner from
@@ -2944,7 +2968,11 @@ function inningErProvisional(battingTeam, realInn) {
   if (!collectScoredRuns(battingTeam, realInn).length) return false;
   const players = gameState.teams[battingTeam].players;
   const cols = getColumnsForInning(battingTeam, realInn);
-  const hasSignal = ab => ab.reachedOnError || isErrorPlay(ab.play) || ab.play === 'CI';
+  // An 'E' advancement reason is the third signal: a runner moved up by a throwing
+  // error on a steal or a pickoff leaves no error play on any cell, so without this
+  // the inning read as clean and never asked for review (#13).
+  const hasSignal = ab => ab.reachedOnError || isErrorPlay(ab.play) || ab.play === 'CI' ||
+    (Array.isArray(ab.advReason) && ab.advReason.includes('E'));
   for (const col of cols) {
     for (const player of players) {
       if (hasSignal(player.atBats[col])) return true;
@@ -3607,11 +3635,45 @@ function renderPitchCount(team, pIdx, innIdx) {
 }
 
 /* Auto Player Stats (Feature 1) */
-function tallyAtBats(atBats, filterFn) {
+
+// Did this plate appearance move anybody? `markAdvance` stamps every base a play
+// gives a runner with the batter's own cell, so the answer is written on the
+// runners' rows, not his.
+function advancedARunner(team, srcP, srcCol) {
+  const players = gameState.teams[team].players;
+  const cols = getColumnsForInning(team, getRealInning(team, srcCol));
+  for (const col of cols) {
+    for (let p = 0; p < players.length; p++) {
+      if (p === srcP && col === srcCol) continue;   // the batter's own cell
+      const ab = players[p].atBats[col];
+      if (!ab || !Array.isArray(ab.advSrc)) continue;
+      for (let seg = 0; seg < 4; seg++) {
+        const s = ab.advSrc[seg];
+        if (s && s.p === srcP && s.col === srcCol) return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Rule 9.02(a)(1): a sacrifice costs no at-bat only if it did its job. A sac fly
+// needs a run to score; a sac bunt needs a runner to advance. A fly ball or a bunt
+// that achieved neither is an ordinary out and the batter is charged for it — the
+// reachable case being an `SF` entered with the bases empty (#17).
+function sacrificeExemptsAB(team, pIdx, col, ab) {
+  if (ab.play === 'SF') return (ab.rbi || 0) > 0;
+  return advancedARunner(team, pIdx, col);
+}
+
+function tallyAtBats(team, pIdx, atBats, filterFn) {
   let ab = 0, h = 0, r = 0, rbi = 0, bb = 0, k = 0, hbp = 0;
-  for (const atBat of atBats) {
+  for (let col = 0; col < atBats.length; col++) {
+    const atBat = atBats[col];
     if (!atBat.play || !filterFn(atBat)) continue;
-    const noAB = ['BB','HBP','IBB','SAC','SF','SH','CI'].includes(atBat.play);
+    const isSac = ['SAC','SF','SH'].includes(atBat.play);
+    const noAB = isSac
+      ? sacrificeExemptsAB(team, pIdx, col, atBat)
+      : ['BB','HBP','IBB','CI'].includes(atBat.play);
     if (!noAB) ab++;
     if (isHitPlay(atBat.play)) h++;
     if (atBat.bases[0] && atBat.bases[1] && atBat.bases[2] && atBat.bases[3] && atBat.outOnBase == null) r++;
@@ -3640,10 +3702,10 @@ function updatePlayerStats(team) {
     const allABs = player.atBats;
     const hasSub = player.atBats.some(a => a.subChange);
     if (hasSub) {
-      writeStats(team, sp, tallyAtBats(allABs, a => !a.subChange));
-      writeStats(team, subp, tallyAtBats(allABs, a => a.subChange));
+      writeStats(team, sp, tallyAtBats(team, sp, allABs, a => !a.subChange));
+      writeStats(team, subp, tallyAtBats(team, sp, allABs, a => a.subChange));
     } else {
-      writeStats(team, sp, tallyAtBats(allABs, () => true));
+      writeStats(team, sp, tallyAtBats(team, sp, allABs, () => true));
       writeStats(team, subp, { ab:0, h:0, r:0, rbi:0, bb:0 });
     }
   }
@@ -4387,8 +4449,8 @@ function showGameSummary() {
       const allABs = starter.atBats;
       const hasSub = starter.atBats.some(ab => ab.subChange);
       if (hasSub) {
-        const ss = tallyAtBats(allABs, ab => !ab.subChange);
-        const us = tallyAtBats(allABs, ab => ab.subChange);
+        const ss = tallyAtBats(team, sp, allABs, ab => !ab.subChange);
+        const us = tallyAtBats(team, sp, allABs, ab => ab.subChange);
         if (ss.ab > 0 || ss.bb > 0 || ss.hbp > 0) {
           const name = (starter.num ? '#' + starter.num + ' ' : '') + (starter.name || 'Pos ' + (pos + 1));
           addRow(name, getPosTrail(team, sp), ss, false);
@@ -4399,7 +4461,7 @@ function showGameSummary() {
         }
       } else {
         if (!starter.name && !starter.num) continue;
-        const s = tallyAtBats(allABs, () => true);
+        const s = tallyAtBats(team, sp, allABs, () => true);
         if (s.ab === 0 && s.bb === 0 && s.hbp === 0) continue;
         const name = (starter.num ? '#' + starter.num + ' ' : '') + (starter.name || 'Pos ' + (pos + 1));
         addRow(name, getPosTrail(team, sp), s, false);
