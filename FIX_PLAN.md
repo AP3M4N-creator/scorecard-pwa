@@ -345,13 +345,13 @@ LOB 1` on the line with 0 outs.
 
 ---
 
-## Phase 4 — roster (RC-F) — **unblocked: D4 + D5 answered**
+## Phase 4 — roster (RC-F) ✅ DONE
 
 The two real feature gaps. Both need a state-shape change: a distinct **PR** action
 (D4) and **`ROWS_PER_POS = 3`** (D5). Split into two commits — the rows and their
 migration first, so the index remap is reviewable on its own, then PR on top.
 
-### H2 — no pinch runner; the run is credited to the starter
+### H2 — no pinch runner; the run is credited to the starter — ✅ **FIXED**
 `setSubLine` [app.js:4141]
 
 `const start = (on && player.atBats[from].play) ? from + 1 : from` — the sub
@@ -359,6 +359,54 @@ line skips a column that already has a play. Correct for a pinch hitter arriving
 *after* the at-bat, but it means a pinch runner can never own the column he is
 running in. Repro: starter singles, PR comes in, PR scores →
 `starterR: "1"`, `subR: ""`. There is no separate PR mechanism.
+
+**What was done.** A `PR` button beside `SUB` (both panels), and one new field:
+`ab.prRow`, the row that did the running. The plate appearance is left exactly where
+it is — that is the whole difference from `SUB`, which takes the column over and
+therefore can't express a man arriving *inside* one.
+
+The attribution split is the substance. A column now credits two rows
+independently: the plate appearance goes to the row that **batted** it (`subRowOf`),
+the run to the row that **ran** it (`runRowOf`, which is `prRow` when set and
+`subRowOf` otherwise). They were one test before, which is why the run landed on the
+starter. `tallyAtBats` and `findPlayerOfGame`'s `consider` both took a `filterFn`
+that was always `ab => subRowOf(ab) === r` at every call site; both now take the row
+itself, since the function has to make the batting/running distinction internally
+and a caller-supplied predicate can't.
+
+`markPinchRunner` also hands the line forward (`innIdx + 1` on), because a pinch
+runner stays in the game and bats in that spot next time up — one press for the
+whole act rather than PR followed by SUB. It refuses four ways: no play in the
+column (nobody has reached yet), a runner already marked there, no row left in the
+slot, and a man who is no longer on base. The sub-change mark now also fires on a
+`prRow` column, since a pinch runner changes hands inside a column rather than at
+its edge. `clearSelectedCell` clears `prRow` with the rest of the at-bat.
+
+Fixed in passing, because H2 requires it: the box score's "did this row appear"
+test was `ab > 0 || bb > 0 || hbp > 0`, so a pinch runner who scored and never came
+to the plate was **left off the box score entirely** while his run counted in the
+totals — the R column didn't add up. It now counts a run as an appearance.
+
+**Known limitations, both deliberate:**
+- A stolen base after the pinch runner comes on is still attributed by `advReason`
+  segment, which `scanNotable` reads without reference to `prRow`. D4 scoped H2 to
+  the run; per-segment base-running credit is a larger change.
+- `prRow` is a row *offset* within the slot, not an absolute index, so
+  `migrateLineupRows` deliberately does **not** remap it.
+
+Verified: 251 passed · 0 failed. 7 new cases, the first of them the plan's own repro
+(starter keeps the AB and the hit, the runner takes the run and has neither), plus
+the runner batting his own next time up, the entry mark, all the refusals, clearing
+taking the runner with the play, and the box score printing both men with the run on
+the right line. Reverting the attribution split, the box-score clause and the mark
+fails 3 of them and nothing else. In the browser, through the real `PR` button:
+`prRow: 1`, Alou `1/1/-/-`, Ruiz `-/-/1/-`.
+
+**Separately flagged, not fixed here:** the same box-score appearance test still
+omits a batter whose only plate appearance was a **sacrifice** — `sacrificeExemptsAB`
+means no AB, and with no walk or HBP he has nothing to qualify on, yet his RBI is in
+the totals. Pre-existing and unrelated to the pinch runner, so it was left out of
+this commit rather than smuggled in; spun off as its own task.
 
 ### H3 — only two players per lineup slot — ✅ **FIXED**
 `ROWS_PER_POS = 2` [app.js:97]

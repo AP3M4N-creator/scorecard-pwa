@@ -2876,6 +2876,112 @@
     eq('one re-entry logged', gameState.reentries.length, 1);
   });
 
+  /* H2 — a pinch runner. SUB skips a column that already has a play (right for a
+     pinch *hitter*, who arrives before the at-bat, not after), so a pinch runner
+     could never own the at-bat he was running in: the run he scored landed on the
+     starter's line and his own read blank. PR marks the column instead of taking it
+     over — the plate appearance stays put and only the run follows the runner (D4). */
+
+  // The plan's repro: starter singles, PR comes in, PR scores.
+  test('a pinch runner takes the run and leaves the hit with the starter', () => {
+    setPlayer('visiting', 0, '12', 'Alou');
+    setPlayer('visiting', 1, '30', 'Ruiz');
+    sel('visiting', 0, 0);
+    play('1B');                                     // Alou singles
+    sel('visiting', 0, 0);
+    markPinchRunner();                              // Ruiz runs for him
+    sel('visiting', 3, 0);
+    play('HR');                                     // the next man homers him in
+    eq('the starter keeps the at-bat', bStat('visiting', 0, 'ab'), '1');
+    eq('and the hit', bStat('visiting', 0, 'h'), '1');
+    eq('but not the run', bStat('visiting', 0, 'r'), '');
+    eq('the pinch runner has the run', bStat('visiting', 1, 'r'), '1');
+    eq('and no at-bat for it', bStat('visiting', 1, 'ab'), '');
+    eq('nor a hit', bStat('visiting', 1, 'h'), '');
+  });
+
+  test('a pinch runner stays in the game and bats next time up', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    sel('visiting', 0, 0);
+    markPinchRunner();
+    eq('the column he ran in still belongs to the batter', subLine('visiting', 0)[0], '0');
+    eq('and he has the line from the next one on', subLine('visiting', 0), '011111111111111');
+    sel('visiting', 0, 1);
+    play('2B');                                     // his own at-bat, in the 2nd
+    eq('the double is his', bStat('visiting', 1, 'h'), '1');
+    eq('the starter still has only his single', bStat('visiting', 0, 'h'), '1');
+    eq('and only his one at-bat', bStat('visiting', 0, 'ab'), '1');
+  });
+
+  test('the pinch runner is marked on the column he came into', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    sel('visiting', 0, 0);
+    markPinchRunner();
+    ok('the change is marked where he entered',
+      document.getElementById('scm-visiting-0-0').classList.contains('active'));
+  });
+
+  test('PR is refused where there is nobody to run for', () => {
+    sel('visiting', 0, 0);
+    markPinchRunner();                              // no play in the cell yet
+    ok('the refusal is shown', visible('play-reject'));
+    eq('and nothing was marked', ab('visiting', 0, 0).prRow, 0);
+    play('K');                                      // he made an out
+    sel('visiting', 0, 0);
+    markPinchRunner();
+    ok('still refused', visible('play-reject'));
+    eq('nothing marked', ab('visiting', 0, 0).prRow, 0);
+  });
+
+  test('a second pinch runner in the same column is refused, not stacked', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    sel('visiting', 0, 0);
+    markPinchRunner();
+    eq('the first is in', ab('visiting', 0, 0).prRow, 1);
+    markPinchRunner();
+    ok('the refusal is shown', visible('play-reject'));
+    eq('and he is still the runner', ab('visiting', 0, 0).prRow, 1);
+  });
+
+  test('clearing the at-bat takes the pinch runner with it', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    sel('visiting', 0, 0);
+    markPinchRunner();
+    eq('the runner is on the column', ab('visiting', 0, 0).prRow, 1);
+    sel('visiting', 0, 0);
+    clearSelectedCell();
+    eq('and goes with the play', ab('visiting', 0, 0).prRow, 0);
+  });
+
+  // The box score has to agree with the card: three lines out of one slot, and the
+  // run on the right one.
+  test('the box score puts the pinch runner\'s run on his own line', () => {
+    setPlayer('visiting', 0, '12', 'Alou');
+    setPlayer('visiting', 1, '30', 'Ruiz');
+    sel('visiting', 0, 0);
+    play('1B');
+    sel('visiting', 0, 0);
+    markPinchRunner();
+    sel('visiting', 3, 0);
+    play('HR');
+    collectState();   // the box score reads state, not the live inputs
+    showGameSummary();
+    const rows = [...document.querySelectorAll('#gs-inner tr')]
+      .map(tr => [...tr.children].map(td => td.textContent.trim()))
+      .filter(c => c[0] && (c[0].includes('Alou') || c[0].includes('Ruiz')));
+    const alou = rows.find(c => c[0].includes('Alou'));
+    const ruiz = rows.find(c => c[0].includes('Ruiz'));
+    ok('the starter is on the box score', !!alou);
+    ok('and so is the pinch runner', !!ruiz);
+    eq('the starter: 1 AB, 0 R, 1 H', [alou[1], alou[2], alou[3]].join('/'), '1/0/1');
+    eq('the runner: 0 AB, 1 R, 0 H', [ruiz[1], ruiz[2], ruiz[3]].join('/'), '0/1/0');
+    document.getElementById('game-summary-modal').classList.remove('active');
+  });
+
   /* The migration. A row index *is* a player's place in the slot, so widening a
      slot is a remap, not an append: row 2 of a 2-row save is spot 1's starter, and
      in a 3-row card that index belongs to spot 0's second sub. Every stored player

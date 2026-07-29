@@ -137,7 +137,7 @@ function defaultColumnMap() { return Array.from({ length: INNINGS }, (_, i) => i
 // every player and index by column, but `stateForStorage` drops them on the way
 // out and `refillAtBats` puts them back on the way in (#33).
 function makeEmptyAtBat() {
-  return { bases:[false,false,false,false], advReason:['','','',''], outOnBase:null, play:'', out:0, outsRecorded:0, pitches:[], hitLoc:null, rbi:0, pitcher:0, reachedOnError:false, pitcherChangeNum:'', subChange:0, seq:0 };
+  return { bases:[false,false,false,false], advReason:['','','',''], outOnBase:null, play:'', out:0, outsRecorded:0, pitches:[], hitLoc:null, rbi:0, pitcher:0, reachedOnError:false, pitcherChangeNum:'', subChange:0, prRow:0, seq:0 };
 }
 
 /* Which row of the slot owns this at-bat: 0 for the starter, 1..ROWS_PER_POS-1 for
@@ -161,6 +161,20 @@ function subRowOf(ab) {
 // a slot's figures per row and would otherwise each write the same loop bounds.
 function subRowOffsets() {
   return Array.from({ length: ROWS_PER_POS - 1 }, (_, i) => i + 1);
+}
+
+/* Which row is credited with the *running* in this at-bat, as against the batting.
+   They are the same man unless a pinch runner came on: then the plate appearance —
+   the AB, the hit, the RBI it drove in — stays with the batter who earned it, and
+   only what happens on the bases from that point, the run above all, belongs to the
+   man who did the running (H2, D4).
+
+   `prRow` is that runner's row. Everything else about the column, including which
+   row *batted* it, still comes from `subRowOf`. */
+function runRowOf(ab) {
+  if (!ab || !ab.prRow) return subRowOf(ab);
+  const r = Math.floor(ab.prRow);
+  return r >= 1 && r < ROWS_PER_POS ? r : subRowOf(ab);
 }
 
 // Which row is in the slot *now* — the one owning the last column of the game,
@@ -3661,6 +3675,8 @@ function clearSelectedCell() {
     ab.advSrc = null;
     ab.reachedOnError = false;
     ab.pitcherChangeNum = '';
+    // The pinch runner went with the plate appearance he was running in (H2).
+    ab.prRow = 0;
     // A sub line spans from here to the end of the game; clear the whole contiguous
     // run, and hand those columns back to the row above rather than all the way to
     // the starter — with two sub rows the man before this one may be another sub.
@@ -4361,18 +4377,26 @@ function sacrificeExemptsAB(team, pIdx, col, ab) {
   return advancedARunner(team, pIdx, col);
 }
 
-function tallyAtBats(team, pIdx, atBats, filterFn) {
+/* One row of a slot's figures, from the slot's at-bats. `row` is which row —
+   0 for the starter — and a column counts towards it in two independent ways:
+   the plate appearance goes to the row that *batted* it (`subRowOf`), the run goes
+   to the row that *ran* it (`runRowOf`), and a pinch runner is exactly the case
+   where those differ (H2). Before that they were one test, so a run scored by a
+   pinch runner landed on the starter's line and the sub's read blank. */
+function tallyAtBats(team, pIdx, atBats, row) {
   let ab = 0, h = 0, r = 0, rbi = 0, bb = 0, k = 0, hbp = 0;
   for (let col = 0; col < atBats.length; col++) {
     const atBat = atBats[col];
-    if (!atBat.play || !filterFn(atBat)) continue;
+    if (!atBat.play) continue;
+    const scored = atBat.bases[0] && atBat.bases[1] && atBat.bases[2] && atBat.bases[3] && atBat.outOnBase == null;
+    if (scored && runRowOf(atBat) === row) r++;
+    if (subRowOf(atBat) !== row) continue;
     const isSac = ['SAC','SF','SH'].includes(atBat.play);
     const noAB = isSac
       ? sacrificeExemptsAB(team, pIdx, col, atBat)
       : ['BB','HBP','IBB','CI'].includes(atBat.play);
     if (!noAB) ab++;
     if (isHitPlay(atBat.play)) h++;
-    if (atBat.bases[0] && atBat.bases[1] && atBat.bases[2] && atBat.bases[3] && atBat.outOnBase == null) r++;
     rbi += (atBat.rbi || 0);
     if (atBat.play === 'BB' || atBat.play === 'IBB') bb++;
     if (atBat.play === 'K' || atBat.play === 'ꓘ' || atBat.play === 'K+WP') k++;
@@ -4398,9 +4422,9 @@ function updatePlayerStats(team) {
     // Every row of the slot is tallied from the starter's at-bats, split by which
     // row owns each column. A row nobody has batted in tallies to zeros and shows
     // blank, so an untouched sub row reads empty rather than "0".
-    writeStats(team, sp, tallyAtBats(team, sp, allABs, a => subRowOf(a) === 0));
+    writeStats(team, sp, tallyAtBats(team, sp, allABs, 0));
     subRowOffsets().forEach(r => {
-      writeStats(team, sp + r, tallyAtBats(team, sp, allABs, a => subRowOf(a) === r));
+      writeStats(team, sp + r, tallyAtBats(team, sp, allABs, r));
     });
   }
 }
@@ -4553,6 +4577,52 @@ function markSub() {
   }
   pushUndo(team, pIdx, innIdx);
   setSubLine(team, pIdx, innIdx, INNINGS - 1, 1);
+}
+
+/* PR — a pinch runner, which SUB cannot express (H2, D4).
+
+   SUB deliberately skips a column that already has a play in it: that plate
+   appearance belongs to the man who made it, and a pinch *hitter* arrives before
+   one, not after. A pinch runner arrives in the middle of exactly such a column —
+   somebody reached, and somebody else does the running — so under SUB he could
+   never own the at-bat he was running in, and the run he scored went onto the
+   starter's line while his own read blank.
+
+   So this marks the column instead of taking it over: `prRow` says who ran, the
+   plate appearance stays where it is, and only the run follows the runner. The
+   line forward *is* handed over, because a pinch runner stays in the game and
+   bats in that spot next time up — one press for the whole act.
+
+   Refused when the column has no play (nobody is on base to run for) or when the
+   slot has no row left to put him in. */
+function markPinchRunner() {
+  if (!selectedCell) return;
+  const team = selectedCell.dataset.team;
+  const pIdx = parseInt(selectedCell.dataset.p);
+  const innIdx = parseInt(selectedCell.dataset.inn);
+  const player = gameState.teams[team].players[pIdx];
+  const ab = player.atBats[innIdx];
+
+  if (!ab.play) { showPlayReject('Record how he reached first, then run for him.'); return; }
+  if (ab.prRow) { showPlayReject(rowLabel(team, pIdx + ab.prRow) + ' is already running here.'); return; }
+  const runner = subRowOf(ab) + 1;
+  if (runner >= ROWS_PER_POS) { showPlayReject('No row left in this spot for a pinch runner.'); return; }
+  // Nobody to run for: he is already off the bases, out or scored.
+  const inn = getInnState(team, innIdx);
+  const onBase = inn.bases.some(b => b && b.p === pIdx && b.col === innIdx);
+  if (!onBase && !(ab.bases[0] && ab.outOnBase == null)) {
+    showPlayReject('He is not on base — nothing to pinch-run.');
+    return;
+  }
+
+  pushUndo(team, pIdx, innIdx);
+  ab.prRow = runner;
+  // From the next column on he is simply the man in the slot.
+  setSubLine(team, pIdx, innIdx + 1, INNINGS - 1, runner);
+  renderPitcherChange(team, pIdx, innIdx);
+  updatePlayerStats(team);
+  announce(rowLabel(team, pIdx + runner) + ' pinch-runs for ' + rowLabel(team, pIdx + subRowOf(ab)));
+  autoSave();
 }
 
 // Write a slot's sub line across `[from, to]` and bring the stats and the change
@@ -5007,7 +5077,9 @@ function renderPitcherChange(team, pIdx, innIdx) {
     const prev = innIdx > 0 ? gameState.teams[team].players[pIdx].atBats[innIdx - 1] : null;
     // The mark goes on the column where the slot changes hands, so a *second*
     // substitution is marked too — not just the first one off the starter (H3).
-    const isSubStart = subRowOf(ab) > 0 && subRowOf(ab) !== subRowOf(prev);
+    // A pinch runner changes hands *inside* his column rather than at its edge, so
+    // he is marked on the column he came into (H2).
+    const isSubStart = !!ab.prRow || (subRowOf(ab) > 0 && subRowOf(ab) !== subRowOf(prev));
     sel.classList.toggle('active', isSubStart);
   }
 }
@@ -5776,12 +5848,16 @@ function showGameSummary() {
     // One line per row of the slot that actually came to the plate, in row order —
     // so a spot with two substitutions prints all three men (H3). A slot with no
     // sub prints the starter's whole line, which is the `subRowOf === 0` tally.
-    const came = s => s.ab > 0 || s.bb > 0 || s.hbp > 0;
+    // Did this row appear in the game at all? A run counts on its own: a pinch
+    // runner who scored and never came to the plate has no AB, no walk and no HBP,
+    // and without him the box score's R column doesn't add up to the team's runs
+    // (H2).
+    const came = s => s.ab > 0 || s.bb > 0 || s.hbp > 0 || s.r > 0;
     for (let pos = 0; pos < POSITIONS; pos++) {
       const sp = pos * ROWS_PER_POS;
       const starter = players[sp];
       const allABs = starter.atBats;
-      const ss = tallyAtBats(team, sp, allABs, ab => subRowOf(ab) === 0);
+      const ss = tallyAtBats(team, sp, allABs, 0);
       if (came(ss) || starter.name || starter.num) {
         if (came(ss)) {
           const name = (starter.num ? '#' + starter.num + ' ' : '') + (starter.name || 'Pos ' + (pos + 1));
@@ -5790,7 +5866,7 @@ function showGameSummary() {
       }
       subRowOffsets().forEach(r => {
         const sub = players[sp + r];
-        const us = tallyAtBats(team, sp, allABs, ab => subRowOf(ab) === r);
+        const us = tallyAtBats(team, sp, allABs, r);
         if (!came(us)) return;
         const name = (sub.num ? '#' + sub.num + ' ' : '') + (sub.name || 'Sub ' + (pos + 1));
         addRow(name, sub.pos || '', us, true);
@@ -5818,15 +5894,19 @@ function showGameSummary() {
   // Player of the game: highest combined (H + RBI + R) weighted
   function findPlayerOfGame() {
     let best = null, bestScore = -1;
-    function consider(pl, tName, atBats, filterFn) {
+    // `row` is which row of the slot, split batting from running the same way
+    // `tallyAtBats` does — a pinch runner's run is his, not the batter's (H2).
+    function consider(pl, tName, atBats, row) {
       if (!pl.name) return;
       let h = 0, rbi = 0, r = 0, hr = 0, ab = 0, k = 0;
       for (const atBat of atBats) {
-        if (!atBat.play || !filterFn(atBat)) continue;
+        if (!atBat.play) continue;
+        const scored = atBat.bases[0] && atBat.bases[1] && atBat.bases[2] && atBat.bases[3] && atBat.outOnBase == null;
+        if (scored && runRowOf(atBat) === row) r++;
+        if (subRowOf(atBat) !== row) continue;
         if (isHitPlay(atBat.play)) h++;
         if (atBat.play === 'HR') hr++;
         rbi += (atBat.rbi || 0);
-        if (atBat.bases[0] && atBat.bases[1] && atBat.bases[2] && atBat.bases[3] && atBat.outOnBase == null) r++;
         const noAB = ['BB','HBP','IBB','SAC','SF','SH','CI'].includes(atBat.play);
         if (!noAB) ab++;
         if (atBat.play === 'K' || atBat.play === 'ꓘ' || atBat.play === 'K+WP') k++;
@@ -5845,9 +5925,9 @@ function showGameSummary() {
         const starter = players[sp];
         // Every row of the slot is a candidate on its own at-bats, so a second
         // substitute can win it too (H3). `consider` skips unnamed rows itself.
-        consider(starter, tName, starter.atBats, ab => subRowOf(ab) === 0);
+        consider(starter, tName, starter.atBats, 0);
         subRowOffsets().forEach(r => {
-          consider(players[sp + r], tName, starter.atBats, ab => subRowOf(ab) === r);
+          consider(players[sp + r], tName, starter.atBats, r);
         });
       }
     });
