@@ -1937,6 +1937,13 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
   // the fielder chose which one is the whole play — so two outs on it is a double
   // play wearing an FC's label, and the popup used to accept three (M4). Capping FC
   // at 1 puts all three plays under one rule: FC 1, DP 2, TP 3.
+  //
+  // The cap bounds FC without requiring it, and that asymmetry is deliberate (m7):
+  // a fielder's choice that retires nobody is a real play and a real entry. The
+  // fielder elects to throw somewhere other than first, the runner beats it, and the
+  // batter is on with a time at bat and no hit. Requiring an out here would make
+  // that unenterable, so `requiredOuts` stays 0 for FC and only DP and TP are held
+  // to their labels on Confirm below.
   const maxOuts = /^TP/.test(play) ? 3 : /^DP/.test(play) ? 2 : /^FC/.test(play) ? 1 : 3;
   const playLabel = /^TP/.test(play) ? 'triple play'
     : /^DP/.test(play) ? 'double play'
@@ -2357,7 +2364,11 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     document.body.appendChild(popup);
   }
 
-  let html = '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;color:#333">Advance Runners</div>';
+  // The play's own name when the caller has one to give: a popup opened by a wild
+  // pitch or a passed ball is asking a narrower question than "advance runners", and
+  // a scorer answering it should be able to see which event he is answering for (m1).
+  const title = (opts && opts.title) || 'Advance Runners';
+  let html = '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;color:#333">' + escapeHtml(title) + '</div>';
   const choices = {};
 
   runners.forEach(r => {
@@ -3207,7 +3218,10 @@ function promptSBBase() {
   if (inn.bases[2] !== null) {
     options.push({from: 2, label: 'SBH (3rd→Home)'});
   }
-  if (options.length === 0) return;
+  // Nobody on is a different thing from nobody who can go, and only the first has a
+  // sentence written for it (m2). A blocked steal already explains itself through
+  // applySBAtBase; a press with the bases empty used to do nothing and say nothing.
+  if (options.length === 0) { showPlayReject(NOTHING_TO_MOVE.SB); return; }
   if (options.length === 1) { applySBAtBase(team, innIdx, options[0].from, false); return; }
   showBasePickerPopup('Stolen Base', options, function(from, extra) { applySBAtBase(team, innIdx, from, extra === 'error'); });
 }
@@ -3253,7 +3267,8 @@ function promptCSBase() {
   if (inn.bases[2] !== null) options.push({from: 2, label: 'CS Home'});
   if (inn.bases[1] !== null) options.push({from: 1, label: 'CS 3rd'});
   if (inn.bases[0] !== null) options.push({from: 0, label: 'CS 2nd'});
-  if (options.length === 0) return;
+  // Empty only when the bases are — every runner is somebody to catch stealing (m2).
+  if (options.length === 0) { showPlayReject(NOTHING_TO_MOVE.CS); return; }
   if (options.length === 1) { applyCSAtBase(team, innIdx, options[0].from); return; }
   showBasePickerPopup('Caught Stealing', options, function(from) { applyCSAtBase(team, innIdx, from); });
 }
@@ -3302,7 +3317,8 @@ function promptPickoff() {
       }
     }
   }
-  if (options.length === 0) return;
+  // Likewise: every runner can be picked off, so an empty list means an empty diamond.
+  if (options.length === 0) { showPlayReject(NOTHING_TO_MOVE.PO); return; }
   showBasePickerPopup('Pickoff', options, function(from, extra) { applyPickoff(team, innIdx, from, extra === 'error'); });
 }
 
@@ -3375,15 +3391,44 @@ function showBasePickerPopup(title, options, callback) {
 /* Why each of these needs somebody on base, in the words a scorer would use. Rule
    9.13 charges a wild pitch or a passed ball only when a runner advances on it, and
    6.02(a) makes a balk with the bases empty a ball to the batter — so with nobody on
-   there is no runner event to write, and the card has nowhere to write one. */
+   there is no runner event to write, and the card has nowhere to write one. The
+   steal and pickoff entries belong to promptSBBase / promptCSBase / promptPickoff,
+   which own those paths (m2) and used to answer an empty set of bases with silence. */
 const NOTHING_TO_MOVE = {
   WP: 'Nobody on — a wild pitch is only charged when a runner advances.',
   PB: 'Nobody on — a passed ball is only charged when a runner advances.',
   BK: 'Nobody on — a balk with the bases empty is a ball to the batter.',
   SB: 'Nobody on — no runner to steal a base.',
-  CS: 'Nobody on — no runner to catch stealing.'
+  CS: 'Nobody on — no runner to catch stealing.',
+  PO: 'Nobody on — no runner to pick off.'
 };
 
+// Rule 9.13 from the other side: the event is charged *for* the advance, so a set
+// of choices in which every runner held his base is not a wild pitch or a passed
+// ball at all.
+const NOTHING_MOVED = {
+  WP: 'Nobody moved — a wild pitch is only charged when a runner advances.',
+  PB: 'Nobody moved — a passed ball is only charged when a runner advances.'
+};
+
+const RUNNER_EVENT_TITLE = {
+  WP: 'Wild Pitch — Who Moved',
+  PB: 'Passed Ball — Who Moved'
+};
+
+/* A wild pitch, a passed ball or a balk, and who it moved.
+
+   m1: with more than one man on, this decided that for the scorer — everybody up
+   exactly one base, no choice offered. A ball to the backstop that only the runner
+   on 3rd could score on was enterable one way, and it was the wrong one. A wild
+   pitch or a passed ball now asks, through the same advancement popup every other
+   multi-runner play uses; its "Out at" options also cover the man thrown out trying
+   for the extra base, which the bulk advance had no way to write.
+
+   A balk is not a judgement call — rule 6.02(a) awards every runner one base — so BK
+   keeps the forced advance and asks nothing. One runner on is likewise applied
+   straight, the way promptSBBase applies its single option: he is the runner the
+   event is charged for, and one base is where he goes. */
 function applyRunnerEvent(type) {
   if (!selectedCell) return;
   const team = selectedCell.dataset.team;
@@ -3399,65 +3444,46 @@ function applyRunnerEvent(type) {
     showPlayReject(NOTHING_TO_MOVE[type] || 'Nobody is on base.');
     return;
   }
-  pushUndo(team, pIdx, innIdx);
-
-  if (type === 'WP' || type === 'PB') {
-    // Rule 9.16: a run that scores as a result of a passed ball is unearned (a wild
-    // pitch is the pitcher's own doing, so the WP side is right to do nothing).
-    // This used to flag only the runner on 3rd, so a man moved up from 1st or 2nd
-    // by the same passed ball scored as an earned run later (#14). Flag whoever the
-    // ball actually moved — a runner it couldn't advance keeps his own reckoning.
-    const before = type === 'PB' ? inn.bases.slice() : null;
+  // One man on, or a balk: nothing to ask, so nothing is asked.
+  const onBase = inn.bases.filter(b => b !== null).length;
+  if (onBase === 1 || type === 'BK') {
+    pushUndo(team, pIdx, innIdx);
+    const before = inn.bases.slice();
     advanceRunners(team, innIdx, 1, type);
-    if (before) {
-      for (let b = 0; b < 3; b++) {
-        const rn = before[b];
-        if (!rn || sameRunner(inn.bases[b], rn)) continue;
-        const rab = runnerAtBat(team, rn);
-        if (rab) rab.reachedOnError = true;
-      }
-    }
-  } else if (type === 'SB') {
-    // Lead runner first, so 2nd is free for the man behind him. A blocked steal is
-    // refused, not converted into an extra base: this used to send the runner from
-    // 2nd all the way home when 3rd was occupied, inventing a run (#4).
-    if (inn.bases[1] !== null) {
-      const rn = inn.bases[1]; const rab = runnerAtBat(team, rn);
-      if (rab && moveRunnerTo(inn, 1, 2, rn)) {
-        rab.bases[2] = true; setAdvReason(rab, 2, 'SB');
-        renderDiamond(team, rn.p, rn.col);
-      }
-    }
-    if (inn.bases[0] !== null && inn.bases[1] === null) {
-      const rn = inn.bases[0]; const rab = runnerAtBat(team, rn);
-      if (rab && moveRunnerTo(inn, 0, 1, rn)) {
-        rab.bases[1] = true; setAdvReason(rab, 1, 'SB');
-        renderDiamond(team, rn.p, rn.col);
-      }
-    }
-  } else if (type === 'CS') {
-    let removed = false;
-    for (let b = 2; b >= 0; b--) {
-      if (inn.bases[b] !== null && !removed) {
-        const rn = inn.bases[b];
-        const rab = runnerAtBat(team, rn);
-        if (!rab) continue;
-        const n = recordOut(team, innIdx, { kind: 'runner', pIdx: rn.p, col: rn.col });
-        if (!n) break;
-        rab.out = n;
-        rab.outOnBase = b + 1;
-        setAdvReason(rab, b + 1, 'CS');
-        renderDiamond(team, rn.p, rn.col);
-        renderOut(team, rn.p, rn.col);
-        clearRunner(inn, b);
-        removed = true;
-      }
-    }
-  } else if (type === 'BK') {
-    // Balk: all runners advance 1 base, like WP
-    advanceRunners(team, innIdx, 1, 'BK');
+    flagRunnersMovedByPassedBall(team, innIdx, type, before);
+    afterStateChange(team, innIdx);
+    return;
   }
-  afterStateChange(team, innIdx);
+  showRunnerPopup(team, innIdx, 0, function (choices) {
+    // Nothing is written until the choices are in, so both the refusal below and a
+    // popup the scorer walks away from leave the card and the undo stack alone.
+    const moved = [0, 1, 2].some(b => inn.bases[b] !== null &&
+      choices[b] !== undefined && choices[b] !== b);
+    if (!moved) { showPlayReject(NOTHING_MOVED[type] || 'Nobody was moved.'); return; }
+    pushUndo(team, pIdx, innIdx);
+    const before = inn.bases.slice();
+    applyChosenAdvancements(team, innIdx, choices, type);
+    flagRunnersMovedByPassedBall(team, innIdx, type, before);
+    afterStateChange(team, innIdx);
+  }, { title: RUNNER_EVENT_TITLE[type] });
+}
+
+// Rule 9.16: a run that scores as a result of a passed ball is unearned (a wild
+// pitch is the pitcher's own doing, and so is a balk, so both are right to do
+// nothing here). This used to flag only the runner on 3rd, so a man moved up from
+// 1st or 2nd by the same passed ball scored as an earned run later (#14). Flag
+// whoever the ball actually moved, `before` against the bases now — a runner it
+// couldn't advance keeps his own reckoning, and one thrown out on it has no run to
+// reckon with.
+function flagRunnersMovedByPassedBall(team, innIdx, type, before) {
+  if (type !== 'PB') return;
+  const inn = getInnState(team, innIdx);
+  for (let b = 0; b < 3; b++) {
+    const rn = before[b];
+    if (!rn || sameRunner(inn.bases[b], rn)) continue;
+    const rab = runnerAtBat(team, rn);
+    if (rab && rab.outOnBase == null) rab.reachedOnError = true;
+  }
 }
 
 /* Undo / Redo */
@@ -3757,7 +3783,8 @@ function moveRunner() {
       if (d < 3 && inn.bases[d] !== null) continue;
       html += '<button class="mr-btn" data-from="' + r.base + '" data-to="' + d + '" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid #ccc;border-radius:3px;background:#fff;color:#555;cursor:pointer;font-family:var(--mono)">→ ' + baseNames[d] + '</button>';
     }
-    html += '<button class="mr-btn mr-remove" data-from="' + r.base + '" data-to="off" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid var(--accent);border-radius:3px;background:#fff;color:var(--accent);cursor:pointer;font-family:var(--mono)">Remove</button>';
+    // Was "Remove" — see the handler below (m3). It records the out it always was.
+    html += '<button class="mr-btn mr-out" data-from="' + r.base + '" data-to="out" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid var(--accent);border-radius:3px;background:#fff;color:var(--accent);cursor:pointer;font-family:var(--mono)">Out ' + baseNames[r.base] + '</button>';
     html += '</div></div>';
   });
   html += '<button data-act="hidePopupById" data-arg="move-runner-popup" style="margin-top:4px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Close</button>';
@@ -3769,19 +3796,32 @@ function moveRunner() {
       const to = this.dataset.to;
       const rn = inn.bases[from];
       if (rn === null) return;
-      const toBase = to === 'off' ? null : parseInt(to);
+      const isOut = to === 'out';
+      const toBase = isOut ? null : parseInt(to);
       if (toBase !== null && !baseFreeFor(inn, toBase, rn)) {
         reportRunnerCollision(toBase, inn.bases[toBase], rn);
         return;
       }
+      // A man off the bases with no out to his name is the one thing this popup
+      // could produce that the rest of the app cannot (m3): "Remove" wiped his
+      // advancement, his out and his out-on-base and left the play, the hit and the
+      // at-bat on the card with the runner accounted for nowhere — no out, not in
+      // LOB, invisible to the linescore. The three ways off a base are to score, to
+      // be put out, or to be left there when the half ends, and this is the second:
+      // the out is recorded against his own cell, standing on the base he was on,
+      // the way a pickoff records one. What the out *was* goes in the play text; an
+      // entry made in error is undo's to take back, not this button's.
+      if (isOut && inn.outs >= 3) { showPlayReject(INNING_OVER); return; }
       pushUndo(team, pIdx, innIdx);
       const rab = runnerAtBat(team, rn);
       if (!rab) return;
-      if (to === 'off') {
+      if (isOut) {
+        const n = recordOut(team, innIdx, { kind: 'runner', pIdx: rn.p, col: rn.col });
+        if (!n) return;
+        rab.out = n;
+        rab.outOnBase = from;
+        setAdvReason(rab, from, 'OUT');
         clearRunner(inn, from);
-        for (let b = 0; b < 4; b++) { rab.bases[b] = false; }
-        rab.advReason = ['','','',''];
-        rab.out = 0; rab.outsRecorded = 0; rab.outOnBase = null;
       } else {
         if (!moveRunnerTo(inn, from, toBase, rn)) return;
         for (let step = from + 1; step <= toBase; step++) {
@@ -3862,6 +3902,17 @@ function editSprayChart() {
 }
 
 /* Feature 7: Manual RBI adjustment */
+
+// Every RBI charged to a team in one inning, across every column the inning spans.
+function rbiInInning(team, realInn) {
+  const players = gameState.teams[team].players;
+  let total = 0;
+  for (const col of getColumnsForInning(team, realInn)) {
+    for (const player of players) total += (player.atBats[col].rbi || 0);
+  }
+  return total;
+}
+
 function adjustRBI(delta) {
   if (!selectedCell) return;
   const team = selectedCell.dataset.team;
@@ -3869,6 +3920,22 @@ function adjustRBI(delta) {
   const innIdx = parseInt(selectedCell.dataset.inn);
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   if (!ab.play) return;
+  // An RBI is credited for a run, so a side can never be charged more of them than
+  // it scored — and every run the inning produced is already on the card, which is
+  // where the count comes from. The override used to take any number of presses (m4)
+  // and the box score then read more RBI than R with nothing to say which was wrong.
+  // Only the increment is checked: taking one off can't invent anything.
+  if (delta > 0) {
+    const realInn = getRealInning(team, innIdx);
+    const runs = collectScoredRuns(team, realInn).length;
+    const rbi = rbiInInning(team, realInn);
+    if (rbi + delta > runs) {
+      showPlayReject(runs === 0
+        ? 'No runs scored this inning — an RBI needs a run to drive in.'
+        : `This inning scored ${runs} run${runs === 1 ? '' : 's'} and ${rbi} of them are already driven in.`);
+      return;
+    }
+  }
   pushUndo(team, pIdx, innIdx);
   ab.rbi = Math.max(0, (ab.rbi || 0) + delta);
   renderPlayText(team, pIdx, innIdx);
@@ -4808,6 +4875,11 @@ function tallyAtBats(team, pIdx, atBats, row) {
   return { ab, h, r, rbi, bb, k, hbp };
 }
 
+// `k` and `hbp` are not for the card: the stat block beside the lineup has five
+// columns (AB H R RBI BB) and writeStats fills those. The game summary's box score
+// is the consumer — `k` is its K column, and `hbp` is part of deciding whether a row
+// appeared in the game at all, which is how a pinch runner who never batted still
+// gets a line (m5). Both live; neither is dead.
 function writeStats(team, pIdx, s) {
   const fields = ['ab','h','r','rbi','bb'];
   fields.forEach(f => {
@@ -5478,7 +5550,11 @@ function setPitcher(idx) {
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   ab.pitcherChangeNum = pitcherNum;
   renderPitcherChange(team, pIdx, innIdx);
-  document.getElementById('pitcher-popup').style.display = 'none';
+  // changePitcher builds #pitcher-popup lazily, so it exists only because the popup
+  // is this function's only caller. Guarded rather than relying on that (m6) — every
+  // other popup in the file is dismissed through a null check or hidePopupById.
+  const popup = document.getElementById('pitcher-popup');
+  if (popup) popup.style.display = 'none';
   autoSave();
 }
 

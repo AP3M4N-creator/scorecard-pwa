@@ -1383,6 +1383,11 @@
   // With 2nd and 3rd occupied the only legal steal is home: 2nd→3rd is blocked and
   // so is 2nd→home on the error, which would run straight through the man on 3rd.
   // One option left, so the picker applies it directly instead of opening.
+  //
+  // This state is also what the deleted 'a blocked bulk steal does not invent a run'
+  // case drove: applyRunnerEvent's own SB branch, which the UI never reached and
+  // which is gone (m2). The invariant it guarded — a blocked steal invents no run —
+  // is the three assertions below, on the path the scorer actually presses.
   test('a steal through an occupied base is not offered', () => {
     sel('visiting', 0, 0);
     play('3B');                                    // p0 on 3rd
@@ -1392,20 +1397,6 @@
     eq('the runner on 2nd stayed put', onB('visiting', 0, 1), 3);
     eq('the runner on 2nd did not advance', ab('visiting', 3, 0).bases[2], false);
     basesConsistent('visiting', 0);
-  });
-
-  // #4 — with 3rd occupied this used to send the runner on 2nd all the way home,
-  // inventing a run out of a stolen base that never happened.
-  test('a blocked bulk steal does not invent a run', () => {
-    sel('visiting', 0, 0);
-    play('3B');                                    // p0 on 3rd
-    play('2B'); runnerPopup({ 2: 2, batter: 1 });   // p0 holds 3rd, p2 on 2nd
-    sel('visiting', 6, 0);
-    applyRunnerEvent('SB');
-    eq('R total', rTotal('visiting'), '');
-    eq('the runner did not reach home', ab('visiting', 3, 0).bases[3], false);
-    eq('runner still on 2nd', onB('visiting', 0, 1), 3);
-    eq('runner still on 3rd', onB('visiting', 0, 2), 0);
   });
 
   test('a pickoff error into an occupied base is not offered', () => {
@@ -1424,8 +1415,8 @@
     play('1B');
     play('1B'); runnerPopup({ 0: 1, batter: 0 });   // p0 on 2nd, p2 on 1st
     moveRunner();
-    eq('the runner on 1st is offered 3rd, home and remove', mrDests(0).join(','), '2,3,off');
-    eq('the runner on 2nd is offered 3rd, home and remove', mrDests(1).join(','), '2,3,off');
+    eq('the runner on 1st is offered 3rd, home and out', mrDests(0).join(','), '2,3,out');
+    eq('the runner on 2nd is offered 3rd, home and out', mrDests(1).join(','), '2,3,out');
     ok('neither is offered the base the other is on', mrDests(0).indexOf('1') === -1 && mrDests(1).indexOf('0') === -1);
     basesConsistent('visiting', 0);
   });
@@ -1461,11 +1452,14 @@
   /* The rewritten advanceRunners / advanceForcedRunners have to move everyone the
      old chain of hand-written cases did. */
 
-  test('a wild pitch advances every runner one base and scores from 3rd', () => {
+  // A balk is the forced-advance case now: rule 6.02(a) awards every runner a base,
+  // so BK is what still goes through advanceRunners in bulk. A wild pitch with more
+  // than one man on asks which of them moved (m1), and its cases are at the end.
+  test('a balk advances every runner one base and scores from 3rd', () => {
     sel('visiting', 0, 0);
     play('3B');                                    // p0 on 3rd
-    play('1B'); runnerPopup({ 2: 2, batter: 0 });   // p0 holds 3rd, p2 on 1st
-    key('n');                                      // wild pitch
+    play('1B'); runnerPopup({ 2: 2, batter: 0 });   // p0 holds 3rd, p3 on 1st
+    applyRunnerEvent('BK');
     eq('run scored', lsInput('visiting', 0).value, '1');
     eq('trailing runner on 2nd', onB('visiting', 0, 1), 3);
     eq('3rd empty', onB('visiting', 0, 2), null);
@@ -1532,12 +1526,14 @@
     eq('the half-inning did not switch', selectedCell.dataset.team, 'visiting');
   });
 
-  // #20 — the bulk CS branch used a bare setTimeout that undo could not reach.
-  test('the bulk caught-stealing path routes its transition through the same handle', () => {
+  // #20's second case was the same assertion against applyRunnerEvent's own CS
+  // branch, which no button or key ever reached and which is gone (m2) — the case
+  // above drives the path the scorer has, through undoLastPlay's sibling.
+  test('undoLastPlay cancels a base out\'s transition the same way the key does', () => {
     sel('visiting', 0, 0);
     play('K'); play('K');
     play('1B');
-    applyRunnerEvent('CS');
+    promptCSBase();                                // single option, applies directly
     eq('outs', inn('visiting', 0).outs, 3);
     ok('a transition is pending', pendingTransitionTimer !== null);
     ok('the handle points at a live timer', timerQueued(pendingTransitionTimer));
@@ -2568,7 +2564,11 @@
     touch(0);
     document.querySelector('[data-act="addPitch"][data-arg="S"]').click();
     eq('the string arg arrived as a strike', ab('visiting', 0, 0).pitches.join(''), 'S');
-    play('1B');
+    // The RBI+ press needs a run in the inning to attach to (m4), so he triples and
+    // scores on a wild pitch — a run the app credits to nobody, which is the case
+    // the manual override exists for.
+    play('3B');
+    key('n');
     sel('visiting', 0, 0);
     document.querySelector('[data-act="adjustRBI"][data-argnum="1"]').click();
     eq('the numeric arg arrived as a number', ab('visiting', 0, 0).rbi, 1);
@@ -3953,5 +3953,231 @@
     removePitch();
     ok('the refusal is shown', visible('play-reject'));
     eq('the walk is untouched', ab('visiting', 0, 0).play, 'BB');
+  });
+
+  /* =====================================================================
+     2026-07-31 audit — the minors.
+
+     m1  a wild pitch or passed ball moved every runner one base, no choice
+     m2  applyRunnerEvent's SB and CS branches were unreachable duplicates
+     m3  the move-runner popup's "Remove" accounted for the runner nowhere
+     m4  the manual RBI override could pass the runs the inning scored
+
+     m5 and m6 have no cases. m5's premise was wrong — tallyAtBats' `k` and `hbp`
+     both feed the game summary's box score, so nothing there is dead, and the
+     card's five-column stat block omitting them is a design choice (a comment in
+     app.js now says so). m6 is a null guard on a dereference only the popup that
+     is its sole caller can reach, so there is no state a case could set up. m7 is
+     closed as correct: a fielder's choice that retires nobody is a real play, and
+     requiring an out would make it unenterable.
+     ===================================================================== */
+
+  /* ---- m1: who the ball moved ---------------------------------------- */
+
+  // Rule 9.13 charges the event for an advance, but which runners advanced is the
+  // scorer's to say. This used to advance all of them exactly one base, so a ball
+  // to the backstop that only the man on 3rd could score on had one entry, and it
+  // was the wrong one.
+  test('a wild pitch with two men on asks which of them moved', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                      // p0 on 3rd
+    play('1B'); runnerPopup({ 2: 2, batter: 0 });     // p0 holds 3rd, p3 on 1st
+    key('n');
+    ok('the popup opened', visible('runner-popup'));
+    runnerPopup({ 2: 3, 0: 0 });                      // only the man on 3rd came home
+    eq('the run scored', lsInput('visiting', 0).value, '1');
+    eq('the man on 1st held', onB('visiting', 0, 0), 3);
+    eq('and took no base', ab('visiting', 3, 0).bases[1], false);
+    basesConsistent('visiting', 0);
+  });
+
+  // One man on is the case with nothing to ask: he is the runner the event is
+  // charged for and one base is where he goes, so it applies straight, the way
+  // promptSBBase applies its single option.
+  test('a wild pitch with one man on still applies without asking', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    key('n');
+    ok('no popup', !visible('runner-popup'));
+    eq('he took 2nd', onB('visiting', 0, 1), 0);
+  });
+
+  // Rule 6.02(a) awards every runner a base on a balk — not a judgement call, so
+  // BK keeps the forced advance whatever the popup would have offered.
+  test('a balk with two men on advances both without asking', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });      // p0 on 2nd, p3 on 1st
+    applyRunnerEvent('BK');
+    ok('no popup', !visible('runner-popup'));
+    eq('the lead runner took 3rd', onB('visiting', 0, 2), 0);
+    eq('the trailing runner took 2nd', onB('visiting', 0, 1), 3);
+  });
+
+  test('a wild pitch nobody moved on is refused, and writes nothing', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });      // p0 on 2nd, p3 on 1st
+    const undos = playHistory.length;
+    key('n');
+    runnerPopup({ 1: 1, 0: 0 });                       // both hold
+    ok('the press is answered', visible('play-reject'));
+    ok('and it names the rule\'s condition',
+      document.getElementById('play-reject').textContent.indexOf('when a runner advances') >= 0);
+    eq('nothing pushed to undo', playHistory.length, undos);
+    eq('runner still on 2nd', onB('visiting', 0, 1), 0);
+    eq('runner still on 1st', onB('visiting', 0, 0), 3);
+  });
+
+  // #14 through the popup: the unearned-run flag follows the ball, not the base.
+  test('a passed ball marks the runner it moved and leaves the one it did not', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                       // p0 on 3rd
+    play('1B'); runnerPopup({ 2: 2, batter: 0 });      // p0 holds 3rd, p3 on 1st
+    applyRunnerEvent('PB');
+    runnerPopup({ 2: 3, 0: 0 });                       // the man on 3rd scores, the other holds
+    ok('the run came in on the passed ball', ab('visiting', 0, 0).reachedOnError);
+    ok('the man who held keeps his own reckoning', !ab('visiting', 3, 0).reachedOnError);
+  });
+
+  // The popup's "Out at" options come with it, so the runner thrown out trying for
+  // the extra base is now enterable at all — the bulk advance had no way to say it.
+  test('a runner thrown out trying to score on a wild pitch is out on the card', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                       // p0 on 3rd
+    play('1B'); runnerPopup({ 2: 2, batter: 0 });      // p0 holds 3rd, p3 on 1st
+    key('n');
+    runnerPopup({ 2: -3, 0: 1 });                      // out at home; the other takes 2nd
+    eq('the out is recorded', inn('visiting', 0).outs, 1);
+    eq('and shown on his own cell', ab('visiting', 0, 0).out, 1);
+    eq('out at home', ab('visiting', 0, 0).outOnBase, 3);
+    eq('the trailing runner took 2nd', onB('visiting', 0, 1), 3);
+    eq('no run', rTotal('visiting'), '');
+  });
+
+  // The snapshot is pushed inside the callback, once the choices are in, so it has
+  // to cover runners on rows the selected cell isn't on. captureInning does.
+  test('undo takes back a wild pitch entered through the popup', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                       // p0 on 3rd
+    play('1B'); runnerPopup({ 2: 2, batter: 0 });      // p0 holds 3rd, p3 on 1st
+    key('n'); runnerPopup({ 2: 3, 0: 1 });             // both move: run in, p3 to 2nd
+    eq('the run is on the line', rTotal('visiting'), '1');
+    undoLastPlay();
+    eq('the run came off', rTotal('visiting'), '');
+    eq('the man is back on 3rd', onB('visiting', 0, 2), 0);
+    eq('and the other back on 1st', onB('visiting', 0, 0), 3);
+    eq('with no base marked on the wild pitch', ab('visiting', 3, 0).bases[1], false);
+  });
+
+  /* ---- m2: the steal paths answer for themselves --------------------- */
+
+  // The sentences for an empty diamond existed, but only applyRunnerEvent's
+  // unreachable SB and CS branches could reach them: pressing either key with
+  // nobody on did nothing, and said nothing.
+  test('a steal with the bases empty says why there is nothing to enter', () => {
+    sel('visiting', 0, 0);
+    key('r');
+    eq('nothing to undo', playHistory.length, 0);
+    ok('the press is answered', visible('play-reject'));
+    ok('and it names what is missing',
+      document.getElementById('play-reject').textContent.indexOf('no runner to steal') >= 0);
+  });
+
+  test('a caught stealing with the bases empty is answered too', () => {
+    sel('visiting', 0, 0);
+    key('j');
+    ok('the press is answered', visible('play-reject'));
+    ok('and it names what is missing',
+      document.getElementById('play-reject').textContent.indexOf('catch stealing') >= 0);
+  });
+
+  test('a pickoff with the bases empty is answered too', () => {
+    sel('visiting', 0, 0);
+    promptPickoff();
+    ok('the press is answered', visible('play-reject'));
+    ok('and it names what is missing',
+      document.getElementById('play-reject').textContent.indexOf('pick off') >= 0);
+  });
+
+  /* ---- m3: a runner leaves the bases for a reason -------------------- */
+
+  // "Remove" took him off with nothing recorded against him: no out, not left on
+  // base, and the play, the hit and the at-bat still on the card with the man
+  // accounted for nowhere.
+  test('taking a runner off the bases records the out', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                       // p0 on 1st
+    sel('visiting', 0, 0);
+    moveRunner(); mrClick(0, 'out');
+    eq('the out is recorded', inn('visiting', 0).outs, 1);
+    eq('and shown on his own cell', ab('visiting', 0, 0).out, 1);
+    eq('out on the base he was standing on', ab('visiting', 0, 0).outOnBase, 0);
+    eq('nobody on 1st', onB('visiting', 0, 0), null);
+    eq('the single is still on the card', ab('visiting', 0, 0).play, '1B');
+    eq('and still counts as a hit', bStat('visiting', 0, 'h'), '1');
+  });
+
+  test('the runner that out came off is not also left on base', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                       // p0 on 1st
+    play('K');                                        // one out
+    sel('visiting', 0, 0);
+    moveRunner(); mrClick(0, 'out');                   // two out
+    sel('visiting', 6, 0);
+    play('K');                                        // three
+    eq('three outs', inn('visiting', 0).outs, 3);
+    eq('nobody stranded', inn('visiting', 0).lob, 0);
+  });
+
+  test('undo puts the runner back on the base that out took him off', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    sel('visiting', 0, 0);
+    moveRunner(); mrClick(0, 'out');
+    undoLastPlay();
+    eq('the out is given back', inn('visiting', 0).outs, 0);
+    eq('he is on 1st again', onB('visiting', 0, 0), 0);
+    eq('with no out on his cell', ab('visiting', 0, 0).out, 0);
+    eq('and no out-on-base mark', ab('visiting', 0, 0).outOnBase, null);
+  });
+
+  /* ---- m4: an RBI needs a run --------------------------------------- */
+
+  test('an RBI with no run to drive in is refused', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    sel('visiting', 0, 0);
+    adjustRBI(1);
+    eq('no RBI credited', ab('visiting', 0, 0).rbi, 0);
+    ok('the press is answered', visible('play-reject'));
+    ok('and it says what is missing',
+      document.getElementById('play-reject').textContent.indexOf('needs a run') >= 0);
+    eq('nothing pushed to undo but the single', playHistory.length, 1);
+  });
+
+  test('an RBI past the runs the inning scored is refused', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                       // p0 on 3rd
+    key('n');                                         // scores on a wild pitch: 1 run, no RBI
+    sel('visiting', 0, 0);
+    adjustRBI(1);
+    eq('the run can be driven in once', ab('visiting', 0, 0).rbi, 1);
+    adjustRBI(1);
+    eq('but not twice', ab('visiting', 0, 0).rbi, 1);
+    ok('the second press is answered', visible('play-reject'));
+    ok('and it names the count',
+      document.getElementById('play-reject').textContent.indexOf('1 run') >= 0);
+  });
+
+  // Taking one off can't invent anything, so the check leaves the decrement alone.
+  test('an RBI can always be taken back off', () => {
+    sel('visiting', 0, 0);
+    play('HR');
+    eq('the home run drove himself in', ab('visiting', 0, 0).rbi, 1);
+    sel('visiting', 0, 0);
+    adjustRBI(-1);
+    eq('and the scorer can take it off', ab('visiting', 0, 0).rbi, 0);
+    ok('with no refusal', !visible('play-reject'));
   });
 })();
