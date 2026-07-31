@@ -3783,9 +3783,9 @@
      correct behaviour and fails until it does, and the runner errors if a
      marker starts passing, so none can be left behind.
 
-       Family A (C3, M1, M5)  editRunners / moveRunner skip the common tail
+       Family A (C3, M1, M5)  editRunners / moveRunner skipped the common tail
                               `afterStateChange`, and applyChosenAdvancements
-                              clears a runner whose out was refused.
+                              cleared a runner whose out was refused.  FIXED.
        Family B (C1, M3, M4)  columnMap is edited as a side effect of moving
                               the selection: an overflow relabels an inning
                               that is already recorded, the next half-inning
@@ -3807,10 +3807,10 @@
 
   /* ---- Family A ---------------------------------------------------- */
 
-  // C3 — `editRunners` ends at `updateInningRuns` and never reaches
-  // `afterStateChange`, so an out it records leaves the half-inning open: no
-  // side flip, no leadoff, and every later entry refused as "3 outs".
-  xfail('C3', 'an out recorded through edit runners ends the half-inning', () => {
+  // C3 — `editRunners` ended at `updateInningRuns` and never reached
+  // `afterStateChange`, so an out it recorded left the half-inning open: no side
+  // flip, no leadoff, and every later entry refused as "3 outs".
+  test('an out recorded through edit runners ends the half-inning', () => {
     sel('visiting', 0, 0);
     play('1B');                                     // p0 on 1st
     play('K'); play('K');                           // two out
@@ -3821,9 +3821,9 @@
     eq('the home side is up', selectedCell.dataset.team, 'home');
   });
 
-  // C3 — and it passes no `src`, so the advancement is stamped to no play:
-  // nothing credits the RBI, and taking the play back leaves the run standing.
-  xfail('C3', 'a run edit runners drives in is credited, and reverts with the play', () => {
+  // C3 — and it passed no `src`, so the advancement was stamped to no play:
+  // nothing credited the RBI, and taking the play back left the run standing.
+  test('a run edit runners drives in is credited, and reverts with the play', () => {
     sel('visiting', 0, 0);
     play('3B');                                     // p0 on 3rd
     play('1B'); runnerPopup({ 2: 2, batter: 0 });    // he holds — no run yet
@@ -3836,10 +3836,10 @@
     eq('taking the single back takes the run with it', rTotal('visiting'), '');
   });
 
-  // M1 — `moveRunner` skips the tail too: no updatePitcherStats, so a run it
-  // sends home never reaches the pitcher's line, and no recomputeInning, so a
-  // settled LOB goes on counting a man who has scored.
-  xfail('M1', 'a runner moved home is charged to the pitcher and leaves LOB', () => {
+  // M1 — `moveRunner` skipped the tail too: no updatePitcherStats, so a run it
+  // sent home never reached the pitcher's line, and no recomputeInning, so a
+  // settled LOB went on counting a man who had scored.
+  test('a runner moved home is charged to the pitcher and leaves LOB', () => {
     sel('visiting', 0, 0);
     play('1B');
     play('K'); play('K'); play('K');
@@ -3852,10 +3852,10 @@
     eq('and nobody is left on any more', lobTotal('visiting'), '');
   });
 
-  // M5 — `applyChosenAdvancements` clears the runner off the base whether or not
-  // `recordOut` accepted the out, so with the inning already at three he comes
-  // off the bases with nothing to show for it.
-  xfail('M5', 'a runner is not taken off the bases without an out to show for it', () => {
+  // M5 — `applyChosenAdvancements` cleared the runner off the base whether or not
+  // `recordOut` accepted the out, so with the inning already at three he came off
+  // the bases with nothing to show for it: no out, not left on, gone.
+  test('a runner is not taken off the bases without an out to show for it', () => {
     sel('visiting', 0, 0);
     play('1B');
     play('1B'); runnerPopup({ 0: 1, batter: 0 });    // p0 on 2nd, p3 on 1st

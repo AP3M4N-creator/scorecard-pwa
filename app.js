@@ -1808,16 +1808,21 @@ function applyChosenAdvancements(team, innIdx, choices, reason, src) {
     if (!rab) return;
     if (dest < 0) {
       const outAt = Math.abs(dest);
-      for (let step = fromBase + 1; step < outAt; step++) markAdvance(rab, step, rsn, src);
-      setAdvReason(rab, outAt, rsn);
+      // The out first: with the inning already at three there is none to be had,
+      // and a runner taken off the bases with nothing recorded against him is
+      // simply gone — no out, not left on base, unaccounted for anywhere (M5).
+      // `applyRunnerOutcomes` has always bailed here; this cleared him regardless,
+      // which the applyPlay path then papered over with a recompute and
+      // `editRunners`, having no recompute of its own, did not.
       const n = recordOut(team, innIdx, {
         kind: 'runner', pIdx: rn.p, col: rn.col,
         srcP: src ? src.pIdx : rn.p, srcCol: src ? src.col : rn.col
       });
-      if (n) {
-        rab.out = n;
-        rab.outOnBase = outAt;
-      }
+      if (!n) { showPlayReject(INNING_OVER); return; }
+      for (let step = fromBase + 1; step < outAt; step++) markAdvance(rab, step, rsn, src);
+      setAdvReason(rab, outAt, rsn);
+      rab.out = n;
+      rab.outOnBase = outAt;
       clearRunner(inn, fromBase);
       renderDiamond(team, rn.p, rn.col);
       renderOut(team, rn.p, rn.col);
@@ -3523,7 +3528,27 @@ function editPlayType() {
   };
 }
 
-/* Feature 3: Re-open runner popup to fix advancements */
+/* Feature 3: Re-open runner popup to fix advancements.
+
+   This is a correction to a plate appearance already on the card, so it is the
+   same act `applyPlayEffects` performs on entry and it ends the same way (C3).
+   It used to end at `updateInningRuns` and its own three updates, which left
+   three holes:
+
+   - `afterStateChange` never ran, so an out recorded here didn't end the
+     half-inning. The card sat on a dead inning with three outs on it, refusing
+     every further entry, and a run that put the home team ahead in the bottom of
+     the last inning never ended the game.
+   - no `src` was passed, so the advancement was stamped to no play. Nothing
+     credited the RBI for a run the correction drove in, and — worse —
+     `revertAdvancesFrom` had nothing to take back, so clearing the play the run
+     was scored on left the run standing on the linescore.
+   - `countRunnersScored` was never consulted, which is what the RBI comes from.
+
+   `prev` is captured before the popup opens, the way `applyPlay` does it, so the
+   RBI counts the runs this correction added rather than every run in the inning.
+   An RBI the scorer has overridden with `adjustRBI` is left alone: the count only
+   replaces it when the correction actually moved somebody home. */
 function editRunners() {
   if (!selectedCell) return;
   const team = selectedCell.dataset.team;
@@ -3532,14 +3557,19 @@ function editRunners() {
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   if (!ab.play) return;
   const batterLbl = getBatterLabel(team, pIdx, innIdx);
+  const src = { pIdx, col: innIdx };
   pushUndo(team, pIdx, innIdx);
+  const prev = captureInning(team, innIdx);
   showRunnerPopup(team, innIdx, 0, function(choices) {
-    applyChosenAdvancements(team, innIdx, choices, batterLbl);
-    updateInningRuns(team, innIdx);
-    updatePlayerStats(team);
-    updatePitcherStats(team);
-    updateSituation();
-    autoSave();
+    applyChosenAdvancements(team, innIdx, choices, batterLbl, src);
+    // Rule 9.04(b) still applies to what the play was: a double play and a
+    // K+WP drive in nobody however the runners moved.
+    const scored = countRunnersScored(team, prev);
+    const suppressed = ab.play === 'DP' || /^DP /.test(ab.play) || ab.play === 'K+WP' ||
+      isErrorPlay(ab.play);
+    if (scored && !suppressed) ab.rbi = (ab.rbi || 0) + scored;
+    renderRBI(team, pIdx, innIdx);
+    afterStateChange(team, innIdx);
   });
 }
 
@@ -3613,11 +3643,16 @@ function moveRunner() {
       }
       renderDiamond(team, rn.p, rn.col);
       renderOut(team, rn.p, rn.col);
-      updateInningRuns(team, innIdx);
-      updatePlayerStats(team);
-      updateSituation();
-      autoSave();
       popup.style.display = 'none';
+      // The same tail every other mutator ends in (M1). This used to run
+      // `updateInningRuns` and two of the updates by hand, and so a runner moved
+      // home reached the linescore and the batter's own R without ever reaching
+      // the pitcher who is charged with him; `inn.lob`, settled when the half
+      // ended, went on counting a man who had scored; a move that put the home
+      // team ahead in the bottom of the last inning didn't end the game; and the
+      // backup prompt never re-armed. No `advanceBatter` — moving a runner is not
+      // a plate appearance.
+      afterStateChange(team, innIdx);
     };
   });
 }
