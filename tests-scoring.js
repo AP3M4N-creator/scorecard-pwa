@@ -3776,11 +3776,12 @@
   });
 
   /* =====================================================================
-     2026-07-31 audit — findings not yet fixed.
+     2026-07-31 audit.
 
-     Each of these asserts the CORRECT behaviour, so it fails until the fix
-     lands and then the runner tells you to drop the marker. Three families,
-     one commit each:
+     Eight findings in three families, one commit each. A case still carrying an
+     `xfail` marker is one whose family hasn't landed yet — it asserts the
+     correct behaviour and fails until it does, and the runner errors if a
+     marker starts passing, so none can be left behind.
 
        Family A (C3, M1, M5)  editRunners / moveRunner skip the common tail
                               `afterStateChange`, and applyChosenAdvancements
@@ -3790,9 +3791,9 @@
                               that is already recorded, the next half-inning
                               is chosen by scanning for an empty column, and
                               undo can't take an inserted column back.
-       Family C (C2, M2)      the DP/FC/TP popup advances runners the scorer
-                              never moved, and removePitch can't take back an
-                              auto-triggered walk or strikeout.
+       Family C (C2, M2)      the DP/FC/TP popup advanced runners the scorer
+                              never moved, and removePitch could not take back
+                              an auto-triggered walk or strikeout.  FIXED.
      ===================================================================== */
 
   // The move-runner popup's destination buttons. `mrDests` above lists them;
@@ -3914,11 +3915,12 @@
 
   /* ---- Family C ---------------------------------------------------- */
 
-  // C2 — every runner the DP/FC/TP popup lists starts on "safe, one base up",
-  // so a scorer who accepts the defaults on a ground-ball double play scores the
+  // C2 — every runner the DP/FC/TP popup listed started on "safe, one base up",
+  // so a scorer who accepted the defaults on a ground-ball double play scored the
   // man on 3rd. `showRunnerPopup` won't confirm until every runner is chosen;
-  // this one silently advances the ones nobody touched.
-  xfail('C2', 'a double play does not advance a runner the scorer never moved', () => {
+  // this one silently advanced the ones nobody touched. A runner nobody has
+  // spoken for now holds his base.
+  test('a double play does not advance a runner the scorer never moved', () => {
     sel('visiting', 0, 0);
     play('3B');                                     // p0 on 3rd
     play('1B'); runnerPopup({ 2: 2, batter: 0 });    // p0 holds 3rd, p3 on 1st
@@ -3929,11 +3931,12 @@
     eq('two outs', inn('visiting', 0).outs, 2);
   });
 
-  // M2 — the auto-play recovery branch reads `playHistory[length - 2]` and hopes
-  // that is the snapshot the walk was applied over. It only ever is if
+  // M2 — the auto-play recovery branch read `playHistory[length - 2]` and hoped
+  // that was the snapshot the walk had been applied over. It only ever is if
   // removePitch is the very next action, and it never is: entering the walk moves
-  // the selection to the next batter, so the press lands on an empty cell.
-  xfail('M2', 'removing a pitch takes back the walk the 4th ball forced', () => {
+  // the selection to the next batter. Pressed on the right cell it restored the
+  // snapshot over the pitch it had just popped, so the ball never came off.
+  test('removing a pitch takes back the walk the 4th ball forced', () => {
     sel('visiting', 0, 0);
     pitch('B'); pitch('B'); pitch('B'); pitch('B');
     eq('walked', ab('visiting', 0, 0).play, 'BB');
@@ -3946,7 +3949,7 @@
   });
 
   // M2 — and pressed with nothing to remove it did nothing at all, silently.
-  xfail('M2', 'removing a pitch with nothing to remove says so', () => {
+  test('removing a pitch with nothing to remove says so', () => {
     sel('visiting', 0, 0);
     pitch('B'); pitch('B'); pitch('B'); pitch('B');  // walk; selection is on p3 now
     removePitch();

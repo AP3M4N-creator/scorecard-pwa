@@ -1941,19 +1941,42 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
     if (inn.bases[b] === null) break;
     forcedBases.push(b);
   }
-  // One of the required outs is the batter's; the rest come off the force chain.
-  // If the chain is short (nobody on 1st), no runner gets a default out and the
-  // scorer has to name the tag out himself — Confirm won't take it otherwise.
-  const defaultOutBases = requiredOuts ? forcedBases.slice(0, requiredOuts - 1) : [];
+  // How many outs the label leads with. DP and TP require theirs; a fielder's
+  // choice requires nothing but does retire one man — that is the play — so it
+  // opens on one as well rather than on a set of choices recording none.
+  const openingOuts = requiredOuts || (/^FC/.test(play) ? 1 : 0);
+  // On a DP or a TP the batter is one of them, so the rest come off the force
+  // chain; on a fielder's choice he is safe by default and the whole out does.
+  // If the chain is short (nobody on 1st) no runner gets a default out and the
+  // scorer has to name the tag out himself — Confirm won't take a DP or a TP
+  // otherwise.
+  const defaultOutBases = forcedBases.slice(0, Math.max(0, openingOuts - (isDP ? 1 : 0)));
 
   const outcomes = {};
   runners.forEach(r => {
+    const isOut = defaultOutBases.includes(r.base);
     outcomes[r.base] = {
-      action: defaultOutBases.includes(r.base) ? 'out' : 'safe',
-      dest: Math.min(r.base + 1, 3)
+      action: isOut ? 'out' : 'safe',
+      // A runner nobody has spoken for holds his base. This used to open on the
+      // base in front of him, so accepting the defaults on a ground-ball double
+      // play scored the man on 3rd — a run the play never produced, in the one
+      // popup that doesn't make you answer for every runner (C2).
+      // `showRunnerPopup` refuses to confirm until each one is chosen; this one
+      // keeps the out defaults its label asserts and stands still on the rest.
+      dest: isOut ? Math.min(r.base + 1, 3) : r.base
     };
   });
   outcomes.batter = { action: isDP ? 'out' : 'safe', dest: 0 };
+
+  // Which button a row opens on — asked of `outcomes` rather than re-derived per
+  // row, so the highlight can't drift from the choice Confirm will actually use.
+  // It did: the Hold button was never painted as the default even when holding
+  // was what the row meant, and the cap's auto-revert below painted Hold while
+  // storing an advance.
+  const opensOn = (base, action, dest) => {
+    const oc = outcomes[base];
+    return !!oc && oc.action === action && oc.dest === dest;
+  };
 
   let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:12px;font-family:var(--heading)">' + play + ' — Runner Outcomes</div>';
 
@@ -1962,15 +1985,18 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
     html += `<div style="font-size:11px;font-weight:600;margin-bottom:4px">${escapeHtml(r.name)} <span style="color:var(--text-light)">(on ${r.fromLabel})</span></div>`;
     html += `<div style="display:flex;gap:4px;flex-wrap:wrap">`;
     // Hold option — keep the runner on their current base (e.g. runner on 3rd during a DP)
-    html += `<button class="oc-btn" data-base="${r.base}" data-action="safe" data-dest="${r.base}" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid #ccc;border-radius:3px;background:#fff;color:#555;cursor:pointer;font-family:var(--mono)">Hold ${r.fromLabel}</button>`;
+    {
+      const isDefault = opensOn(r.base, 'safe', r.base);
+      html += `<button class="oc-btn" data-base="${r.base}" data-action="safe" data-dest="${r.base}" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid ${isDefault ? '#2e7d32' : '#ccc'};border-radius:3px;background:${isDefault ? '#e8f5e9' : '#fff'};color:${isDefault ? '#2e7d32' : '#555'};cursor:pointer;font-family:var(--mono)">Hold ${r.fromLabel}</button>`;
+    }
     // Safe options
     for (let d = r.base + 1; d <= 3; d++) {
-      const isDefault = d === r.base + 1 && outcomes[r.base].action === 'safe';
+      const isDefault = opensOn(r.base, 'safe', d);
       html += `<button class="oc-btn" data-base="${r.base}" data-action="safe" data-dest="${d}" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid ${isDefault ? '#2e7d32' : '#ccc'};border-radius:3px;background:${isDefault ? '#e8f5e9' : '#fff'};color:${isDefault ? '#2e7d32' : '#555'};cursor:pointer;font-family:var(--mono)">Safe ${baseNames[d]}</button>`;
     }
     // Out options
     for (let d = r.base + 1; d <= 3; d++) {
-      const isDefault = outcomes[r.base].action === 'out' && d === outcomes[r.base].dest;
+      const isDefault = opensOn(r.base, 'out', d);
       html += `<button class="oc-btn" data-base="${r.base}" data-action="out" data-dest="${d}" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid ${isDefault ? 'var(--accent)' : '#ccc'};border-radius:3px;background:${isDefault ? '#fce4ec' : '#fff'};color:${isDefault ? 'var(--accent)' : '#555'};cursor:pointer;font-family:var(--mono)">Out at ${baseNames[d]}</button>`;
     }
     html += `</div></div>`;
@@ -2061,7 +2087,9 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
           if (revertKey === 'batter') {
             outcomes.batter = { action: 'safe', dest: 0 };
           } else {
-            outcomes[revertKey] = { action: 'safe', dest: Math.min(revertKey + 1, 3) };
+            // Hold, which is what the repaint below highlights — this used to
+            // store an advance and paint the Hold button (C2).
+            outcomes[revertKey] = { action: 'safe', dest: revertKey };
           }
           const row = popup.querySelector('.oc-row[data-base="' + revertKey + '"]');
           if (row) {
@@ -2710,42 +2738,64 @@ function addPitch(type) {
   autoSave();
 }
 
+/* Take the last pitch back off the at-bat under the cursor.
+
+   A pitch that produced a play takes the play with it: four balls is a walk and
+   three strikes a strikeout, so removing the pitch that got there has to remove
+   what it triggered, or the cell keeps a walk on a 3-ball count.
+
+   That recovery used to hunt for "the snapshot the auto-play was applied over" at
+   `playHistory[length - 2]`, and it was wrong three ways (M2). That entry is only
+   the right one when removePitch is the very next action after the play — which
+   it never is, because entering the play moves the selection to the next batter,
+   so the first press landed on an empty cell and did nothing at all, silently.
+   Pressed on the right cell it restored the snapshot *over the pitch it had just
+   popped*, so the ball never came off. And with anything in between it restored
+   whatever happened to be two from the top, putting the walk back.
+
+   So nothing is restored. The play comes off the way every other mutator takes
+   one off — `takeBackPlay` for its effects on everybody else, the batter's own
+   record cleared here — and `recomputeInning` derives the rest. */
 function removePitch() {
   if (!selectedCell) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
-  if (!ab.pitches || !ab.pitches.length) return;
+  // L2's rule: a press that changes nothing has to say why. This is the commonest
+  // press there is — the selection has already moved on to the next batter by the
+  // time a scorer reaches for it — and it used to return bare.
+  if (!ab.pitches || !ab.pitches.length) {
+    showPlayReject('No pitches on this cell — select the at-bat you meant first.');
+    return;
+  }
   pushUndo(team, pIdx, innIdx);
   const wasAutoPlay = ab.play === 'BB' || ab.play === 'K' || ab.play === 'ꓘ';
   ab.pitches.pop();
   if (wasAutoPlay) {
-    // Find the snapshot from when the auto-play was applied (entry before this removePitch's pushUndo)
-    const autoSnapIdx = playHistory.length - 2;
-    if (autoSnapIdx >= 0 && playHistory[autoSnapIdx].prev) {
-      const snap = playHistory[autoSnapIdx];
-      restoreInning(team, snap.prev);
-      renderInning(team, snap.prev);
-      playHistory.splice(autoSnapIdx, 1);
-    } else {
-      removeOutsFromPlay(team, innIdx, pIdx, innIdx, ab.out > 0 ? 1 : 0);
-      const inn = getInnState(team, innIdx);
-      removeRunnerFromBases(inn, pIdx);
-      ab.play = '';
-      ab.bases = [false, false, false, false];
-      ab.out = 0; ab.outsRecorded = 0; ab.seq = 0;
-      renumberOuts(team, innIdx);
-      renderDiamond(team, pIdx, innIdx);
-      renderOut(team, pIdx, innIdx);
-      renderPlayText(team, pIdx, innIdx);
-    }
-    updateInningRuns(team, innIdx);
-    updatePlayerStats(team);
-    updatePitcherStats(team);
+    takeBackPlay(team, innIdx, pIdx, ab.outsRecorded || (ab.out ? 1 : 0));
+    removeRunnerFromBases(getInnState(team, innIdx), pIdx);
+    ab.play = '';
+    ab.bases = [false, false, false, false];
+    ab.advReason = ['','','','']; ab.advSrc = null;
+    ab.out = 0; ab.outsRecorded = 0; ab.dpOuts = null; ab.outOnBase = null;
+    ab.rbi = 0; ab.reachedOnError = false; ab.seq = 0;
+    renderDiamond(team, pIdx, innIdx);
+    renderOut(team, pIdx, innIdx);
+    renderPlayText(team, pIdx, innIdx);
+    renderRBI(team, pIdx, innIdx);
   }
   renderPitches(team, pIdx, innIdx);
   renderPitchCount(team, pIdx, innIdx);
+  if (wasAutoPlay) {
+    // A removal can't end a half-inning, so this is `clearPlayKeepPitches`'s tail
+    // rather than the full `afterStateChange` — no transition to schedule, and the
+    // same batter is still at the plate.
+    recomputeInning(team, getRealInning(team, innIdx));
+    updatePlayerStats(team);
+    updatePitcherStats(team);
+    noteCardChanged();
+  }
   updateSituation();
   autoSave();
 }
