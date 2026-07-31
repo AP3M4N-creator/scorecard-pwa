@@ -3774,4 +3774,183 @@
     p.name = 'Reliever';
     eq('state carries it for the summary', p.era, '9.00');
   });
+
+  /* =====================================================================
+     2026-07-31 audit — findings not yet fixed.
+
+     Each of these asserts the CORRECT behaviour, so it fails until the fix
+     lands and then the runner tells you to drop the marker. Three families,
+     one commit each:
+
+       Family A (C3, M1, M5)  editRunners / moveRunner skip the common tail
+                              `afterStateChange`, and applyChosenAdvancements
+                              clears a runner whose out was refused.
+       Family B (C1, M3, M4)  columnMap is edited as a side effect of moving
+                              the selection: an overflow relabels an inning
+                              that is already recorded, the next half-inning
+                              is chosen by scanning for an empty column, and
+                              undo can't take an inserted column back.
+       Family C (C2, M2)      the DP/FC/TP popup advances runners the scorer
+                              never moved, and removePitch can't take back an
+                              auto-triggered walk or strikeout.
+     ===================================================================== */
+
+  // The move-runner popup's destination buttons. `mrDests` above lists them;
+  // this presses one.
+  function mrClick(fromBase, to) {
+    const btn = document.getElementById('move-runner-popup')
+      .querySelector(`.mr-btn[data-from="${fromBase}"][data-to="${to}"]`);
+    if (!btn) fail(`move-runner popup has no option from=${fromBase} to=${to}`);
+    btn.onclick();
+  }
+
+  /* ---- Family A ---------------------------------------------------- */
+
+  // C3 — `editRunners` ends at `updateInningRuns` and never reaches
+  // `afterStateChange`, so an out it records leaves the half-inning open: no
+  // side flip, no leadoff, and every later entry refused as "3 outs".
+  xfail('C3', 'an out recorded through edit runners ends the half-inning', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                     // p0 on 1st
+    play('K'); play('K');                           // two out
+    sel('visiting', 0, 0);
+    editRunners(); runnerPopup({ 0: -1 });          // thrown out at 2nd
+    eq('three outs', inn('visiting', 0).outs, 3);
+    flushTimers();
+    eq('the home side is up', selectedCell.dataset.team, 'home');
+  });
+
+  // C3 — and it passes no `src`, so the advancement is stamped to no play:
+  // nothing credits the RBI, and taking the play back leaves the run standing.
+  xfail('C3', 'a run edit runners drives in is credited, and reverts with the play', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                     // p0 on 3rd
+    play('1B'); runnerPopup({ 2: 2, batter: 0 });    // he holds — no run yet
+    eq('no run yet', rTotal('visiting'), '');
+    sel('visiting', 3, 0);
+    editRunners(); runnerPopup({ 2: 3, 0: 0 });      // the single did drive him in
+    eq('the run is on the line', rTotal('visiting'), '1');
+    eq('the single is credited the RBI', ab('visiting', 3, 0).rbi, 1);
+    clearSelectedCell();
+    eq('taking the single back takes the run with it', rTotal('visiting'), '');
+  });
+
+  // M1 — `moveRunner` skips the tail too: no updatePitcherStats, so a run it
+  // sends home never reaches the pitcher's line, and no recomputeInning, so a
+  // settled LOB goes on counting a man who has scored.
+  xfail('M1', 'a runner moved home is charged to the pitcher and leaves LOB', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('K'); play('K'); play('K');
+    flushTimers();
+    eq('one man left on', lobTotal('visiting'), '1');
+    sel('visiting', 0, 0);
+    moveRunner(); mrClick(0, 3);
+    eq('the run is on the line', rTotal('visiting'), '1');
+    eq('the pitcher is charged with it', pStat('visiting', 0, 'r'), '1');
+    eq('and nobody is left on any more', lobTotal('visiting'), '');
+  });
+
+  // M5 — `applyChosenAdvancements` clears the runner off the base whether or not
+  // `recordOut` accepted the out, so with the inning already at three he comes
+  // off the bases with nothing to show for it.
+  xfail('M5', 'a runner is not taken off the bases without an out to show for it', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });    // p0 on 2nd, p3 on 1st
+    play('K'); play('K'); play('K');
+    flushTimers();
+    eq('two left on', lobTotal('visiting'), '2');
+    sel('visiting', 0, 0);
+    editRunners(); runnerPopup({ 1: -2, 0: 0 });     // no out left to record
+    eq('still three outs', inn('visiting', 0).outs, 3);
+    eq('the runner is still on 2nd', onB('visiting', 0, 1), 0);
+    basesConsistent('visiting', 0);
+  });
+
+  /* ---- Family B ---------------------------------------------------- */
+
+  // C1 — `overflowToNextColumn` shifts `columnMap` right to make room for the
+  // batting-around column but leaves the at-bats where they are, so an inning
+  // already recorded in that column is silently relabelled as this one.
+  xfail('C1', 'batting around does not relabel an inning already recorded', () => {
+    sel('visiting', 0, 0);
+    for (let i = 0; i < 8; i++) play('BB');          // eight on; the 9th spot still open
+    sel('visiting', 0, 1);
+    play('K'); play('K'); play('K');                 // the 2nd inning, recorded
+    eq('the 2nd inning has its three outs', inningOutsLog('visiting', 1).length, 3);
+    sel('visiting', 24, 0);
+    play('BB');                                      // the 9th man forces an overflow
+    eq('the 1st inning still made no outs', inningOutsLog('visiting', 0).length, 0);
+    eq('the 2nd inning still has its three outs', inningOutsLog('visiting', 1).length, 3);
+  });
+
+  // M3 — `switchToNextHalf` asks `getNextFreeColumn` for the next column, which
+  // is the first one with no plays in it. One half-inning nobody recorded and
+  // every later transition lands back in it, scoring the wrong inning.
+  xfail('M3', 'a half nobody recorded does not derail the next transition', () => {
+    sel('visiting', 0, 0); play('K'); play('K'); play('K'); flushTimers();
+    sel('home', 0, 0); play('K'); play('K'); play('K'); flushTimers();
+    sel('visiting', 0, 1); play('K'); play('K'); play('K'); flushTimers();
+    // the bottom of the 2nd never gets recorded
+    sel('visiting', 0, 2); play('K'); play('K'); play('K'); flushTimers();
+    eq('the home side is up', selectedCell.dataset.team, 'home');
+    eq('in the half that follows the top of the 3rd',
+       getRealInning('home', parseInt(selectedCell.dataset.inn)), 2);
+  });
+
+  // M4 — the column insertion happens after the undo snapshot is taken, so undo
+  // gives the runs and the bases back but leaves a phantom continuation column
+  // behind — which then feeds M3.
+  xfail('M4', 'undoing the play that batted around removes the column it inserted', () => {
+    sel('visiting', 0, 0);
+    for (let i = 0; i < 9; i++) play('BB');          // the 9th forces an overflow
+    eq('the overflow column continues the 1st', getRealInning('visiting', 1), 0);
+    undoLastPlay();
+    eq('the 9th walk came off', ab('visiting', 24, 0).play, '');
+    eq('and the column it inserted went with it', getRealInning('visiting', 1), 1);
+    eq('the 2nd inning is column 1 again', getColumnsForInning('visiting', 1).join(','), '1');
+  });
+
+  /* ---- Family C ---------------------------------------------------- */
+
+  // C2 — every runner the DP/FC/TP popup lists starts on "safe, one base up",
+  // so a scorer who accepts the defaults on a ground-ball double play scores the
+  // man on 3rd. `showRunnerPopup` won't confirm until every runner is chosen;
+  // this one silently advances the ones nobody touched.
+  xfail('C2', 'a double play does not advance a runner the scorer never moved', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                     // p0 on 3rd
+    play('1B'); runnerPopup({ 2: 2, batter: 0 });    // p0 holds 3rd, p3 on 1st
+    play('DP 6-4-3');
+    clickId('oc-confirm');                           // the scorer accepts the defaults
+    eq('no run scored', rTotal('visiting'), '');
+    eq('the runner is still on 3rd', onB('visiting', 0, 2), 0);
+    eq('two outs', inn('visiting', 0).outs, 2);
+  });
+
+  // M2 — the auto-play recovery branch reads `playHistory[length - 2]` and hopes
+  // that is the snapshot the walk was applied over. It only ever is if
+  // removePitch is the very next action, and it never is: entering the walk moves
+  // the selection to the next batter, so the press lands on an empty cell.
+  xfail('M2', 'removing a pitch takes back the walk the 4th ball forced', () => {
+    sel('visiting', 0, 0);
+    pitch('B'); pitch('B'); pitch('B'); pitch('B');
+    eq('walked', ab('visiting', 0, 0).play, 'BB');
+    eq('and the selection moved on', curP(), 3);
+    sel('visiting', 0, 0);                           // back to the cell it happened on
+    removePitch();
+    eq('the walk came off', ab('visiting', 0, 0).play, '');
+    eq('and so did the ball', getPitchCount(ab('visiting', 0, 0).pitches).balls, 3);
+    eq('nobody on 1st', onB('visiting', 0, 0), null);
+  });
+
+  // M2 — and pressed with nothing to remove it did nothing at all, silently.
+  xfail('M2', 'removing a pitch with nothing to remove says so', () => {
+    sel('visiting', 0, 0);
+    pitch('B'); pitch('B'); pitch('B'); pitch('B');  // walk; selection is on p3 now
+    removePitch();
+    ok('the refusal is shown', visible('play-reject'));
+    eq('the walk is untouched', ab('visiting', 0, 0).play, 'BB');
+  });
 })();
