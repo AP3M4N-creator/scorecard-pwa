@@ -3778,22 +3778,20 @@
   /* =====================================================================
      2026-07-31 audit.
 
-     Eight findings in three families, one commit each. A case still carrying an
-     `xfail` marker is one whose family hasn't landed yet — it asserts the
-     correct behaviour and fails until it does, and the runner errors if a
-     marker starts passing, so none can be left behind.
+     Eight findings in three families, one commit each — all landed. These are
+     the regression cases; each one failed before its family's fix.
 
        Family A (C3, M1, M5)  editRunners / moveRunner skipped the common tail
                               `afterStateChange`, and applyChosenAdvancements
-                              cleared a runner whose out was refused.  FIXED.
-       Family B (C1, M3, M4)  columnMap is edited as a side effect of moving
-                              the selection: an overflow relabels an inning
-                              that is already recorded, the next half-inning
-                              is chosen by scanning for an empty column, and
-                              undo can't take an inserted column back.
+                              cleared a runner whose out was refused.
+       Family B (C1, M3, M4)  columnMap was edited as a side effect of moving
+                              the selection: an overflow relabelled an inning
+                              already recorded, the next half-inning was chosen
+                              by scanning for an empty column, and undo could
+                              not take an inserted column back.
        Family C (C2, M2)      the DP/FC/TP popup advanced runners the scorer
                               never moved, and removePitch could not take back
-                              an auto-triggered walk or strikeout.  FIXED.
+                              an auto-triggered walk or strikeout.
      ===================================================================== */
 
   // The move-runner popup's destination buttons. `mrDests` above lists them;
@@ -3871,10 +3869,10 @@
 
   /* ---- Family B ---------------------------------------------------- */
 
-  // C1 — `overflowToNextColumn` shifts `columnMap` right to make room for the
-  // batting-around column but leaves the at-bats where they are, so an inning
-  // already recorded in that column is silently relabelled as this one.
-  xfail('C1', 'batting around does not relabel an inning already recorded', () => {
+  // C1 — `overflowToNextColumn` shifted `columnMap` right to make room for the
+  // batting-around column but left the at-bats where they were, so an inning
+  // already recorded in that column was silently relabelled as this one.
+  test('batting around does not relabel an inning already recorded', () => {
     sel('visiting', 0, 0);
     for (let i = 0; i < 8; i++) play('BB');          // eight on; the 9th spot still open
     sel('visiting', 0, 1);
@@ -3886,10 +3884,10 @@
     eq('the 2nd inning still has its three outs', inningOutsLog('visiting', 1).length, 3);
   });
 
-  // M3 — `switchToNextHalf` asks `getNextFreeColumn` for the next column, which
+  // M3 — `switchToNextHalf` asked `getNextFreeColumn` for the next column, which
   // is the first one with no plays in it. One half-inning nobody recorded and
-  // every later transition lands back in it, scoring the wrong inning.
-  xfail('M3', 'a half nobody recorded does not derail the next transition', () => {
+  // every later transition landed back in it, scoring the wrong inning.
+  test('a half nobody recorded does not derail the next transition', () => {
     sel('visiting', 0, 0); play('K'); play('K'); play('K'); flushTimers();
     sel('home', 0, 0); play('K'); play('K'); play('K'); flushTimers();
     sel('visiting', 0, 1); play('K'); play('K'); play('K'); flushTimers();
@@ -3901,9 +3899,9 @@
   });
 
   // M4 — the column insertion happens after the undo snapshot is taken, so undo
-  // gives the runs and the bases back but leaves a phantom continuation column
-  // behind — which then feeds M3.
-  xfail('M4', 'undoing the play that batted around removes the column it inserted', () => {
+  // gave the runs and the bases back but left a phantom continuation column
+  // behind — which then fed M3.
+  test('undoing the play that batted around removes the column it inserted', () => {
     sel('visiting', 0, 0);
     for (let i = 0; i < 9; i++) play('BB');          // the 9th forces an overflow
     eq('the overflow column continues the 1st', getRealInning('visiting', 1), 0);

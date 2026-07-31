@@ -2584,6 +2584,114 @@ function selectNextBatter(team, innIdx) {
   }
 }
 
+/* ------------------------------------------ moving a side's columns over ---
+   Batting around needs a column to spill into, and it has to sit immediately
+   right of the one that filled up or the card stops reading left to right. So
+   everything from there rightwards moves over one.
+
+   `columnMap` was the only thing that moved (C1). The at-bats stayed where they
+   were, so an inning already recorded in the next column was silently relabelled
+   as this one: three strikeouts entered as the top of the 2nd became the top of
+   the 1st, out log and all. That is reachable from an ordinary correction — go
+   back to an earlier inning, add the batter you missed, and the inning you have
+   already scored slides under it.
+
+   Everything column-indexed moves together now, and every pointer that names a
+   column moves with it. Those pointers are the reason this can't be done in
+   pieces: `bases[].col`, the out log's `col`/`srcCol`, `lastPA.col`, the
+   advancement stamps' `advSrc[].col`, the stored leadoff (keyed by column) and
+   any recorded re-entry all name columns, and a card whose base entries point at
+   the wrong plate appearance is worse than one that refused the insertion. */
+function remapColumnRefs(team, remap) {
+  const players = gameState.teams[team].players;
+  for (const inn of gameState.innings[team]) {
+    if (!inn) continue;
+    if (Array.isArray(inn.bases)) inn.bases.forEach(r => { if (r) r.col = remap(r.col); });
+    if (Array.isArray(inn.outsLog)) inn.outsLog.forEach(o => {
+      if (!o) return;
+      o.col = remap(o.col);
+      o.srcCol = remap(o.srcCol);
+    });
+    if (inn.lastPA) inn.lastPA.col = remap(inn.lastPA.col);
+  }
+  for (const player of players) {
+    for (const ab of player.atBats) {
+      if (ab && Array.isArray(ab.advSrc)) ab.advSrc.forEach(s => { if (s) s.col = remap(s.col); });
+    }
+  }
+  const leadoff = gameState.nextLeadoff && gameState.nextLeadoff[team];
+  if (leadoff) {
+    const moved = {};
+    Object.keys(leadoff).forEach(k => { moved[remap(parseInt(k))] = leadoff[k]; });
+    gameState.nextLeadoff[team] = moved;
+  }
+  if (Array.isArray(gameState.reentries)) {
+    gameState.reentries.forEach(r => { if (r && r.team === team) r.col = remap(r.col); });
+  }
+}
+
+function emptyInningRecord() {
+  return { outs:0, bases:[null,null,null], currentPitcher:0, lob:0, outsLog:[], lastPA:null };
+}
+
+// Open a fresh column at `at`, mapped to `realInning`. Returns false when the
+// last column holds a play and there is therefore nothing to move into.
+function shiftColumnsRight(team, at, realInning) {
+  const players = gameState.teams[team].players;
+  const innings = gameState.innings[team];
+  for (let pos = 0; pos < POSITIONS; pos++) {
+    if (players[pos * ROWS_PER_POS].atBats[INNINGS - 1].play) return false;
+  }
+  for (let c = INNINGS - 1; c > at; c--) {
+    gameState.columnMap[team][c] = gameState.columnMap[team][c - 1];
+    innings[c] = innings[c - 1];
+    for (const player of players) player.atBats[c] = player.atBats[c - 1];
+  }
+  gameState.columnMap[team][at] = realInning;
+  innings[at] = emptyInningRecord();
+  for (const player of players) {
+    const fresh = makeEmptyAtBat();
+    // The overflow continues the same half-inning, so the same man is in the
+    // slot: carry the sub line across or a substitution's run of columns is split
+    // in two by a blank one, and the column reads as the starter's.
+    if (at > 0) fresh.subChange = subRowOf(player.atBats[at - 1]);
+    player.atBats[at] = fresh;
+  }
+  remapColumnRefs(team, c => (typeof c === 'number' && c >= at ? c + 1 : c));
+  return true;
+}
+
+// The exact inverse, for undo (M4). The column is empty again by the time this
+// runs: history is a stack, so anything entered into it has been taken back
+// first.
+function shiftColumnsLeft(team, at) {
+  const players = gameState.teams[team].players;
+  const innings = gameState.innings[team];
+  for (let c = at; c < INNINGS - 1; c++) {
+    gameState.columnMap[team][c] = gameState.columnMap[team][c + 1];
+    innings[c] = innings[c + 1];
+    for (const player of players) player.atBats[c] = player.atBats[c + 1];
+  }
+  const prevMapped = gameState.columnMap[team][INNINGS - 2];
+  gameState.columnMap[team][INNINGS - 1] =
+    Math.min(INNINGS - 1, (typeof prevMapped === 'number' ? prevMapped : INNINGS - 2) + 1);
+  innings[INNINGS - 1] = emptyInningRecord();
+  for (const player of players) player.atBats[INNINGS - 1] = makeEmptyAtBat();
+  remapColumnRefs(team, c => (typeof c === 'number' && c > at ? c - 1 : c));
+}
+
+/* Stamp the insertion onto the undo entry for the play that caused it (M4).
+
+   The column is inserted from inside `selectNextBatter`, by which time
+   `finishPlay` has already pushed the snapshot — and that snapshot was taken
+   before the play, so it knows nothing about a column that did not exist yet.
+   Undo gave the runs and the bases back and left the column standing, and the
+   phantom continuation then made every later half-inning transition pick it. */
+function noteInsertedColumn(team, col) {
+  const top = playHistory[playHistory.length - 1];
+  if (top && top.team === team && top.insertedCol === undefined) top.insertedCol = col;
+}
+
 function overflowToNextColumn(team, innIdx) {
   const nextCol = innIdx + 1;
   // L4: an inning that bats around needs a column to spill into, and the card has
@@ -2591,19 +2699,12 @@ function overflowToNextColumn(team, innIdx) {
   // filled cell it came from — where every further batter was refused, silently until
   // L2 gave that cell a voice. Say which wall was hit, since the two refusals a scorer
   // then meets ("this cell is full", "no column left") have different answers.
-  if (nextCol >= INNINGS) {
+  if (!gameState.columnMap) gameState.columnMap = { visiting:defaultColumnMap(), home:defaultColumnMap() };
+  const realInning = getRealInning(team, innIdx);
+  if (nextCol >= INNINGS || !shiftColumnsRight(team, nextCol, realInning)) {
     showPlayReject('The card is full — no column left for this inning.');
     return;
   }
-
-  // Mark the next column as a continuation of the same real inning
-  if (!gameState.columnMap) gameState.columnMap = { visiting:defaultColumnMap(), home:defaultColumnMap() };
-  const realInning = getRealInning(team, innIdx);
-  // Shift all subsequent column mappings right by 1 (insert overflow)
-  for (let c = INNINGS - 1; c > nextCol; c--) {
-    gameState.columnMap[team][c] = gameState.columnMap[team][c - 1];
-  }
-  gameState.columnMap[team][nextCol] = realInning; // same inning continues
 
   // Copy inning state (outs, bases) to the new column
   const srcInn = getInnState(team, innIdx);
@@ -2612,6 +2713,8 @@ function overflowToNextColumn(team, innIdx) {
   dstInn.bases = [...srcInn.bases];
   dstInn.currentPitcher = srcInn.currentPitcher;
   dstInn.pitcherSet = srcInn.pitcherSet;
+
+  noteInsertedColumn(team, nextCol);
 
   // Update column headers
   updateColumnHeaders(team);
@@ -2625,6 +2728,34 @@ function overflowToNextColumn(team, innIdx) {
   const nextP = nextPos * ROWS_PER_POS;
   const cell = document.querySelector(`.at-bat-cell[data-team="${team}"][data-p="${nextP}"][data-inn="${nextCol}"]`);
   if (cell) selectCell(cell);
+}
+
+// Are all nine spots in this column taken?
+function columnIsFull(team, col) {
+  const players = gameState.teams[team].players;
+  for (let pos = 0; pos < POSITIONS; pos++) {
+    if (!players[pos * ROWS_PER_POS].atBats[col].play) return false;
+  }
+  return true;
+}
+
+/* The column a side bats its `realInn`th inning in (M3).
+
+   This used to be `getNextFreeColumn` — "the first column with no plays in it" —
+   which is only the same question while every half-inning before this one has been
+   recorded. One that nobody recorded (a half missed at a live game, or the phantom
+   column M4 used to leave behind) and every later transition landed back in the
+   hole: the bottom of the 3rd was selected in the column labelled the 2nd, and its
+   runs went onto the line against the wrong inning.
+
+   The column map is the record, so ask it. A batted-around inning has more than one
+   column; the one to bat in is the first with a spot still open. */
+function columnForInning(team, realInn) {
+  if (realInn >= INNINGS) return INNINGS - 1;
+  const cols = getColumnsForInning(team, realInn);
+  if (!cols.length) return Math.min(realInn, INNINGS - 1);
+  for (const col of cols) if (!columnIsFull(team, col)) return col;
+  return cols[cols.length - 1];
 }
 
 function getNextFreeColumn(team) {
@@ -2643,16 +2774,15 @@ function getNextFreeColumn(team) {
 function switchToNextHalf(team, innIdx) {
   markNextInningLeadoff(team, innIdx);
 
+  // The visitor's half of an inning is followed by the home team's half of the
+  // same one; the home team's by the visitor's half of the next.
+  const realInn = getRealInning(team, innIdx);
   if (team === 'visiting') {
-    // Find the correct column for the home team in this real inning
     switchTab('home');
-    const homeCol = getNextFreeColumn('home');
-    selectNextBatterForInning('home', homeCol);
+    selectNextBatterForInning('home', columnForInning('home', realInn));
   } else {
-    // Find the correct next column for the visiting team
     switchTab('visiting');
-    const visCol = getNextFreeColumn('visiting');
-    selectNextBatterForInning('visiting', visCol);
+    selectNextBatterForInning('visiting', columnForInning('visiting', realInn + 1));
   }
 }
 
@@ -2685,7 +2815,10 @@ function markNextInningLeadoff(team, innIdx) {
 
   const nextPos = (lastPos + 1) % POSITIONS;
   const nextP = nextPos * ROWS_PER_POS;
-  const nextCol = getNextFreeColumn(team);
+  // This side's *next* inning, by the map — not `getNextFreeColumn`, which parks
+  // the order against whichever column happens to be blank and so filed the
+  // leadoff under an inning nobody had reached yet (M3).
+  const nextCol = columnForInning(team, realInning + 1);
 
   if (!gameState.nextLeadoff) gameState.nextLeadoff = {};
   if (!gameState.nextLeadoff[team]) gameState.nextLeadoff[team] = {};
@@ -3364,6 +3497,13 @@ function restorePlayerRow(team, pIdx, prevAbs) {
 
 function restoreSnapshot(snap) {
   const { team, pIdx, innIdx } = snap;
+  // First, before anything reads a column: take back the column the play
+  // inserted. The snapshot's own `cols` were worked out before it existed (M4).
+  if (snap.insertedCol !== undefined) {
+    shiftColumnsLeft(team, snap.insertedCol);
+    updateColumnHeaders(team);
+    refreshCellAria(team);
+  }
   restoreInning(team, snap.prev);
   // Restore the batter's full row so multi-column mutations (sub lines) revert.
   if (snap.prevPlayerAbs) restorePlayerRow(team, pIdx, snap.prevPlayerAbs);
@@ -3394,8 +3534,16 @@ function undoLastPlay() {
     return;
   }
   const last = playHistory[playHistory.length - 1];
-  const redo = snapshotForRedo(last.team, last.pIdx, last.innIdx);
-  redoHistory.push(redo);
+  // A play that inserted a column can't be redone. The redo snapshot is taken with
+  // the column still in place, so putting those at-bats back after the undo has
+  // removed it would write them into whatever now occupies that column — which,
+  // when a later inning had been recorded there, is that inning. Undo is the
+  // direction that has to be right; redo gives up rather than guess (M4).
+  if (last.insertedCol === undefined) {
+    redoHistory.push(snapshotForRedo(last.team, last.pIdx, last.innIdx));
+  } else {
+    redoHistory.length = 0;
+  }
   playHistory.pop();
   restoreSnapshot(last);
 }
