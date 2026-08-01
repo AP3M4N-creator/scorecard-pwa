@@ -4680,7 +4680,7 @@
 
   // The fallback is the row index + 1, and rows are `spot * ROWS_PER_POS`, so the
   // 4th spot's starter reads "Batter 10".
-  xfail('L1', 'the earned-run review names the batting spot, not the row', () => {
+  test('the earned-run review names the batting spot, not the row', () => {
     sel('visiting', 9, 0); play('HR');
     sel('visiting', 9, 0);
     reviewEarnedRuns();
@@ -4692,7 +4692,7 @@
   // And it reads names from state rather than the inputs, and labels a run with
   // the man who BATTED — so a pinch runner's run goes to the man he ran for,
   // which is the distinction `runRowOf` exists for.
-  xfail('L1', 'the earned-run review reads the card and credits the man who ran', () => {
+  test('the earned-run review reads the card and credits the man who ran', () => {
     lineupDirty = true;
     setPlayer('visiting', 0, '7', 'Nunez');
     setPlayer('visiting', 1, '21', 'Ruiz');
@@ -4713,7 +4713,7 @@
   // `removePitch` refreshes the pitcher line only when it took back an auto-play
   // (app.js:2979), so PC stays one too high on screen and in the state until the
   // next play or a reload — and the wrong number is what gets saved in between.
-  xfail('L2', 'removing a pitch takes it off the pitcher line as well', () => {
+  test('removing a pitch takes it off the pitcher line as well', () => {
     sel('visiting', 0, 0);
     pitch('B'); pitch('F');
     play('1B');                                      // the play adds its result pitch
@@ -4728,12 +4728,12 @@
 
   /* ---- L3: the last two silent dead presses --------------------------- */
 
-  xfail('L3', 'redo with nothing to redo says so', () => {
+  test('redo with nothing to redo says so', () => {
     redoLastPlay();
     ok('it says why', visible('play-reject'));
   });
 
-  xfail('L3', 'the spray chart says why it will not open on a cell with no hit', () => {
+  test('the spray chart says why it will not open on a cell with no hit', () => {
     sel('visiting', 0, 0); play('K');
     sel('visiting', 0, 0);
     editSprayChart();
@@ -4746,7 +4746,7 @@
   // the line came from PR, so it reverts the whole thing with no popup and no
   // re-entry — while `prRow` on his own column survives, leaving the run with a
   // man the card no longer has in the game.
-  xfail('L4', 'SUB does not quietly undo a pinch runner\'s line', () => {
+  test('SUB does not quietly undo a pinch runner\'s line', () => {
     lineupDirty = true;
     setPlayer('visiting', 0, '7', 'Nunez');
     setPlayer('visiting', 1, '21', 'Ruiz');
@@ -4759,13 +4759,26 @@
     eq('and he is still running in the 1st', ab('visiting', 0, 0).prRow, 1);
   });
 
+  // The refusal is the mis-press path's alone. Once the pinch runner has batted,
+  // taking him out is an ordinary substitution and gets the ordinary question.
+  test('SUB on a pinch runner who has since batted still asks', () => {
+    lineupDirty = true;
+    setPlayer('visiting', 0, '7', 'Nunez');
+    setPlayer('visiting', 1, '21', 'Ruiz');
+    sel('visiting', 0, 0); play('1B');
+    sel('visiting', 0, 0); markPinchRunner();
+    sel('visiting', 0, 1); play('K');                // Ruiz bats in the 2nd
+    sel('visiting', 0, 1); markSub();
+    ok('the question is put', visible('sub-popup'));
+  });
+
   /* ---- the re-stamped sequence number ---------------------------------- */
 
   // `ab.seq` orders the plays of a game for the pitcher decisions. `finishPlay`
   // only stamps it once — but clearing a play resets it to 0, so re-entering the
   // cell stamps it again and the play sorts after everything recorded since,
   // which can move the go-ahead run behind the wrong pitcher.
-  xfail('seq', 'a play cleared and re-entered keeps its place in the game', () => {
+  test('a play cleared and re-entered keeps its place in the game', () => {
     sel('visiting', 0, 0); play('1B');
     const first = ab('visiting', 0, 0).seq;
     sel('visiting', 3, 0); play('K');
@@ -4774,5 +4787,35 @@
     sel('visiting', 0, 0); clearSelectedCell();
     sel('visiting', 0, 0); play('2B');               // nobody on: no popup to answer
     ok('the re-entered play still sorts first', ab('visiting', 0, 0).seq < second);
+  });
+
+  // The other two places a play comes off a cell keep the stamp for the same
+  // reason: "Clear Play (Keep Pitches)", and `removePitch` taking back an
+  // auto-play — a strikeout undone one pitch at a time and struck out again is
+  // the same time at bat, in the same place in the game.
+  test('clearing a play but keeping its pitches keeps its place too', () => {
+    sel('visiting', 0, 0); play('1B');
+    const first = ab('visiting', 0, 0).seq;
+    sel('visiting', 3, 0); play('K');
+    const second = ab('visiting', 3, 0).seq;
+    sel('visiting', 0, 0); clearPlayKeepPitches();
+    play('K');
+    ok('it still sorts first', ab('visiting', 0, 0).seq < second);
+  });
+
+  test('a strikeout taken back one pitch at a time keeps its place', () => {
+    sel('visiting', 0, 0);
+    pitch('S'); pitch('S'); pitch('S');               // the third opens the K popup
+    clickId('k-swinging');
+    eq('the strikeout is on the card', ab('visiting', 0, 0).play, 'K');
+    const first = ab('visiting', 0, 0).seq;
+    sel('visiting', 3, 0); play('1B');
+    const second = ab('visiting', 3, 0).seq;
+    sel('visiting', 0, 0); removePitch();
+    eq('the strikeout came off', ab('visiting', 0, 0).play, '');
+    pitch('S');
+    clickId('k-swinging');
+    eq('and back on', ab('visiting', 0, 0).play, 'K');
+    ok('in the place it always had', ab('visiting', 0, 0).seq < second);
   });
 })();

@@ -2430,8 +2430,20 @@ function finishPlay(team, pIdx, innIdx, snapshot) {
   // isn't there when the inning ends on a double play, a caught stealing or a
   // pickoff.
   inn.lastPA = { pIdx, col: innIdx };
-  // Chronological order of plays, for pitcher decisions (Phase 8b). Only stamped
-  // once, so re-editing a play doesn't move it later in the game.
+  /* Chronological order of plays, for pitcher decisions (Phase 8b). Only stamped
+     once, so re-editing a play doesn't move it later in the game.
+
+     Which is why the three places that take a play off a cell — `clearSelectedCell`,
+     `clearPlayKeepPitches` and `removePitch`'s auto-play recovery — leave `seq`
+     alone rather than resetting it. They used to clear it, so a play cleared and
+     re-entered was stamped again and sorted after everything recorded in between:
+     within its own inning the go-ahead run could end up behind a later one, and the
+     win and the loss followed it to the wrong pitcher.
+
+     A stale stamp on an empty cell costs nothing — `runTimeline` and
+     `pitcherEntryState`, the only readers, both skip a cell with no play — and the
+     cell keeping its place is right: clearing and re-entering is how a scorer
+     corrects the plate appearance that already happened there. */
   if (!ab.seq) {
     gameState.playSeq = (gameState.playSeq || 0) + 1;
     ab.seq = gameState.playSeq;
@@ -3077,7 +3089,7 @@ function removePitch() {
     ab.bases = [false, false, false, false];
     ab.advReason = ['','','','']; ab.advSrc = null;
     ab.out = 0; ab.outsRecorded = 0; ab.dpOuts = null; ab.outOnBase = null;
-    ab.rbi = 0; ab.reachedOnError = false; ab.seq = 0;
+    ab.rbi = 0; ab.reachedOnError = false;   // `seq` stays — see `finishPlay`
     renderDiamond(team, pIdx, innIdx);
     renderOut(team, pIdx, innIdx);
     renderPlayText(team, pIdx, innIdx);
@@ -3091,9 +3103,14 @@ function removePitch() {
     // same batter is still at the plate.
     recomputeInning(team, getRealInning(team, innIdx));
     updatePlayerStats(team);
-    updatePitcherStats(team);
-    noteCardChanged();
   }
+  // Outside that branch, because a pitch always belongs to a pitcher (L2). The
+  // pitcher line was refreshed only when the removal took a play back with it, so
+  // removing a pitch from a cell that already had a play left PC one too high on
+  // screen and — `collectState` scrapes the input — one too high in what got
+  // saved, until the next play or a reload put it right.
+  updatePitcherStats(team);
+  noteCardChanged();
   updateSituation();
   autoSave();
 }
@@ -3730,7 +3747,12 @@ function undoLastPlay() {
 function redoLastPlay() {
   if (pendingEntryPopupOpen()) { showPlayReject('Finish or close the open entry first.'); return; }
   dismissSprayPopup();
-  if (!redoHistory.length) return;
+  // The app's own policy: a press that changes nothing says why (L3). Undo has had
+  // a sentence for exactly this case since audit 3; this one returned bare.
+  if (!redoHistory.length) {
+    showPlayReject('Nothing to redo — redo only follows an undo, and both cover this session only.');
+    return;
+  }
   const next = redoHistory[redoHistory.length - 1];
   const undo = snapshotForRedo(next.team, next.pIdx, next.innIdx);
   playHistory.push(undo);
@@ -4063,7 +4085,7 @@ function clearPlayKeepPitches() {
   ab.bases = [false, false, false, false];
   ab.out = 0; ab.outsRecorded = 0; ab.rbi = 0; ab.hitLoc = null;
   ab.dpOuts = null; ab.outOnBase = null;
-  ab.advReason = ['','','','']; ab.reachedOnError = false; ab.seq = 0;
+  ab.advReason = ['','','','']; ab.reachedOnError = false;   // `seq` stays — see `finishPlay`
   ab.advSrc = null;
   // Re-apply saved pitches on the batter's at-bat
   ab.pitches = savedPitches;
@@ -4088,7 +4110,12 @@ function editSprayChart() {
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
-  if (!ab.play || (!isHitPlay(ab.play) && !isErrorPlay(ab.play) && ab.play !== 'HR')) return;
+  // The other silent dead press (L3). The chart plots where the ball was hit, so
+  // there has to be one on the cell — say that rather than ignoring the button.
+  if (!ab.play || (!isHitPlay(ab.play) && !isErrorPlay(ab.play) && ab.play !== 'HR')) {
+    showPlayReject('No hit on this cell — the spray chart plots hits and errors.');
+    return;
+  }
   showSprayChart(team, pIdx, innIdx);
 }
 
@@ -4219,8 +4246,14 @@ function reviewEarnedRuns() {
       html += '<div style="font-size:11px;color:var(--accent,#c41e3a);margin-bottom:10px;line-height:1.4">This inning had an error, passed ball, or interference. Mark any run that would <b>not</b> have scored without it as <b>unearned</b>.</div>';
     }
     erReviewList.forEach((r, i) => {
-      const pl = gameState.teams[team].players[r.pIdx];
-      const label = (pl.num ? '#' + pl.num + ' ' : '') + (pl.name || `Batter ${r.pIdx + 1}`);
+      // Three things this got wrong (L1). The man is the one who *ran*, not the one
+      // who batted, which is the distinction `runRowOf` exists for — a pinch
+      // runner's run was credited to the man he came in for. The name comes off the
+      // inputs, so one typed inside the 400ms save debounce is not "Pos 1". And an
+      // unnamed row is numbered by batting spot: rows are `spot * ROWS_PER_POS`, so
+      // the old row-index fallback called the 4th spot's starter "Batter 10".
+      // `rowLabel` does all three.
+      const label = rowLabel(team, r.pIdx + runRowOf(r.ab));
       const unearned = !!r.ab.reachedOnError;
       html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--border-light,#ddd)">';
       html += `<div style="font-size:12px;line-height:1.3"><div style="font-weight:600">${escapeHtml(label)}</div><div style="font-size:10px;color:var(--text-light,#666)">${escapeHtml(describeReach(r.ab))}</div></div>`;
@@ -4323,7 +4356,8 @@ function clearSelectedCell() {
     } else {
       ab.subChange = 0;
     }
-    ab.seq = 0;
+    // `seq` stays — see `finishPlay`: the cell keeps its place in the game so a
+    // re-entered play does not sort after everything recorded since.
     renderDiamond(team, pIdx, innIdx);
     renderOut(team, pIdx, innIdx);
     renderPitches(team, pIdx, innIdx);
@@ -5390,6 +5424,23 @@ function promptSubRemoval(team, pIdx, innIdx) {
   // Nothing recorded under the sub anywhere in the run: this is a mis-press,
   // not a re-entry. Take the whole line back without ceremony.
   if (!run.before && !run.after) {
+    /* Unless the line came from PR (L4). A pinch runner's line starts at the column
+       *after* the one he came into, and the plate appearance he ran in — with the
+       run he scored on it — stays on that column under `prRow`. So the run reads as
+       "he never batted", and taking it back handed the whole line to the man he
+       replaced while `prRow` kept the run for the man now off the card: the starter
+       shown still in the game, and a run scored by somebody who is not.
+
+       Refused rather than unwound, because unwinding means moving a run that has
+       already been credited. Clearing his column is the act that takes a pinch
+       runner back, and it already does the whole job. Once he has batted this is a
+       real substitution and the prompt below handles it as one. */
+    const prevAb = run.start > 0 ? gameState.teams[team].players[pIdx].atBats[run.start - 1] : null;
+    if (prevAb && prevAb.prRow === run.row) {
+      showPlayReject(rowLabel(team, pIdx + run.row) + ' came in as a pinch runner at ' +
+        currentInningLabel(team, run.start - 1) + ' — clear that column instead.');
+      return;
+    }
     pushUndo(team, pIdx, innIdx);
     setSubLine(team, pIdx, run.start, run.end, run.row - 1);
     return;
