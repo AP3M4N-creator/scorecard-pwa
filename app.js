@@ -936,6 +936,16 @@ function livePlayerField(team, pIdx, field) {
   return (pl && pl[field]) || '';
 }
 
+// The same for a pitcher's row, which the table keys by `data-pitcher` rather than
+// `data-p`. The game summary needs it for the reason above (L3): a reliever written
+// in as he came out of the bullpen is on screen a good while before the debounce.
+function livePitcherField(team, idx, field) {
+  const inp = document.querySelector(`input[data-team="${team}"][data-pitcher="${idx}"][data-field="${field}"]`);
+  if (inp) return inp.value;
+  const p = gameState.teams[team] && gameState.teams[team].pitchers[idx];
+  return (p && p[field]) || '';
+}
+
 function getActivePlayerName(team, pIdx, innIdx) {
   const ap = getActivePlayerIndex(team, pIdx, innIdx);
   const pos = Math.floor(pIdx / ROWS_PER_POS) + 1;
@@ -2807,19 +2817,6 @@ function columnForInning(team, realInn) {
   return cols[cols.length - 1];
 }
 
-function getNextFreeColumn(team) {
-  // Find the next column that has no plays yet for this team
-  const players = gameState.teams[team].players;
-  for (let col = 0; col < INNINGS; col++) {
-    let hasPlay = false;
-    for (let pos = 0; pos < POSITIONS; pos++) {
-      if (players[pos * ROWS_PER_POS].atBats[col].play) { hasPlay = true; break; }
-    }
-    if (!hasPlay) return col;
-  }
-  return INNINGS - 1;
-}
-
 function switchToNextHalf(team, innIdx) {
   markNextInningLeadoff(team, innIdx);
 
@@ -3443,7 +3440,11 @@ const NOTHING_TO_MOVE = {
   BK: 'Nobody on — a balk with the bases empty is a ball to the batter.',
   SB: 'Nobody on — no runner to steal a base.',
   CS: 'Nobody on — no runner to catch stealing.',
-  PO: 'Nobody on — no runner to pick off.'
+  PO: 'Nobody on — no runner to pick off.',
+  // Move and Rnrs, the two manual paths. Both used to answer an empty diamond with
+  // silence: Move returned bare (L2) and Rnrs opened a popup that called straight
+  // back with nothing, having already pushed an undo snapshot (L1).
+  MV: 'Nobody on — no runner to move.'
 };
 
 // Rule 9.13 from the other side: the event is charged *for* the advance, so a set
@@ -3779,12 +3780,21 @@ function editRunners() {
   // where three runners went and only then turning the whole answer down is a worse
   // way to say the same no. `applyChosenAdvancements` still holds the line for
   // whoever calls it next.
-  if (getInnState(team, innIdx).outs >= 3) { showPlayReject(INNING_OVER); return; }
+  const inn = getInnState(team, innIdx);
+  if (inn.outs >= 3) { showPlayReject(INNING_OVER); return; }
+  // L1: with nobody on, `showRunnerPopup` has nothing to ask and calls straight back
+  // with `{}` — so this changed nothing, said nothing, and left an undo snapshot and
+  // a cleared redo stack behind it: a dead Undo press between the scorer and the last
+  // play that really happened. m1 fixed the same thing for `applyRunnerEvent`.
+  if (inn.bases.every(b => b === null)) { showPlayReject(NOTHING_TO_MOVE.MV); return; }
   const batterLbl = getBatterLabel(team, pIdx, innIdx);
   const src = { pIdx, col: innIdx };
-  pushUndo(team, pIdx, innIdx);
   const prev = captureInning(team, innIdx);
   showRunnerPopup(team, innIdx, 0, function(choices) {
+    // The snapshot goes in here, once the choices are in, so a popup the scorer walks
+    // away from leaves the undo stack alone (m1). Nothing can change the card while
+    // it is open, so it is the same snapshot it always was.
+    pushUndo(team, pIdx, innIdx);
     applyChosenAdvancements(team, innIdx, choices, batterLbl, src);
     // Rule 9.04(b) still applies to what the play was: a double play and a
     // K+WP drive in nobody however the runners moved.
@@ -3813,7 +3823,9 @@ function moveRunner() {
       runners.push({ base: b, pIdx: rn.p, name });
     }
   }
-  if (runners.length === 0) return;
+  // L2: the app's own policy — a press that changes nothing says why (NOTHING_TO_MOVE,
+  // removePitch). This returned bare, so Move on an empty diamond was a dead press.
+  if (runners.length === 0) { showPlayReject(NOTHING_TO_MOVE.MV); return; }
   let popup = document.getElementById('move-runner-popup');
   if (!popup) {
     popup = document.createElement('div');
@@ -5585,7 +5597,11 @@ function applyFieldPos(team, starterP, pos, innLabel) {
     if (prevEntry >= 0) existing.changes.splice(prevEntry, 1);
     existing.changes.push({ pIdx: starterP, fromPos: oldPos, toPos: pos, name: displayName });
   }
-  document.getElementById('pos-change-popup').style.display = 'none';
+  // L5: the popup that builds it lazily is this function's only caller, so the
+  // dereference is latent — but it is one line from a crash that would take the
+  // position change with it, and m6 guarded the identical shape in `setPitcher`.
+  const popup = document.getElementById('pos-change-popup');
+  if (popup) popup.style.display = 'none';
   autoSave();
   // After the popup is down, so a DH question doesn't open behind it.
   if (oldPos !== pos) checkDHRules(team, starterP, oldPos, pos, innLabel);
@@ -6435,6 +6451,16 @@ function showGameSummary() {
     return trail.join('-');
   }
 
+  /* L3: every name in the summary comes off the card, not out of the state.
+     `collectState` scrapes the lineup inputs on the 400ms debounce, so a name typed
+     just before the summary opened was not in the state yet and the box score printed
+     "Pos 1" for a man whose name was on screen. `livePlayerField` /
+     `livePitcherField` read the input and fall back to the state, so a loaded game
+     with no inputs on screen reads the same as it always did. */
+  const liveName = (team, pIdx) => livePlayerField(team, pIdx, 'name');
+  const liveNum = (team, pIdx) => livePlayerField(team, pIdx, 'num');
+  const labelled = (num, name, fallback) => (num ? '#' + num + ' ' : '') + (name || fallback);
+
   // Player stats for box score
   function playerBox(team, label) {
     const players = gameState.teams[team].players;
@@ -6458,18 +6484,16 @@ function showGameSummary() {
       const starter = players[sp];
       const allABs = starter.atBats;
       const ss = tallyAtBats(team, sp, allABs, 0);
-      if (came(ss) || starter.name || starter.num) {
-        if (came(ss)) {
-          const name = (starter.num ? '#' + starter.num + ' ' : '') + (starter.name || 'Pos ' + (pos + 1));
-          addRow(name, getPosTrail(team, sp), ss, false);
-        }
+      if (came(ss)) {
+        addRow(labelled(liveNum(team, sp), liveName(team, sp), 'Pos ' + (pos + 1)),
+               getPosTrail(team, sp), ss, false);
       }
       subRowOffsets().forEach(r => {
         const sub = players[sp + r];
         const us = tallyAtBats(team, sp, allABs, r);
         if (!came(us)) return;
-        const name = (sub.num ? '#' + sub.num + ' ' : '') + (sub.name || 'Sub ' + (pos + 1));
-        addRow(name, sub.pos || '', us, true);
+        addRow(labelled(liveNum(team, sp + r), liveName(team, sp + r), 'Sub ' + (pos + 1)),
+               sub.pos || '', us, true);
       });
     }
     rows += '<tr class="gs-totals"><td>Totals</td><td>' + totAB + '</td><td>' + totR + '</td><td>' + totH + '</td><td>' + totRBI + '</td><td>' + totBB + '</td><td></td><td></td></tr>';
@@ -6482,10 +6506,12 @@ function showGameSummary() {
     let rows = '';
     for (let i = 0; i < PITCHER_ROWS; i++) {
       const p = pitchers[i];
-      if (!p.name && !p.num) continue;
+      const pName = livePitcherField(team, i, 'name');
+      const pNum = livePitcherField(team, i, 'num');
+      if (!pName && !pNum) continue;
       const ip = p.ip || '0';
       if (ip === '0' && !p.h && !p.k) continue;
-      const name = (p.num ? '#' + p.num + ' ' : '') + (p.name || 'Pitcher ' + (i + 1));
+      const name = labelled(pNum, pName, 'Pitcher ' + (i + 1));
       rows += '<tr><td>' + escapeHtml(name) + '</td><td>' + (p.ip || '0') + '</td><td>' + (p.pc || '0') + '</td><td>' + (p.h || '0') + '</td><td>' + (p.r || '0') + '</td><td>' + (p.er || '0') + '</td><td>' + (p.k || '0') + '</td><td>' + (p.bb || '0') + '</td><td>' + escapeHtml(p.era || '—') + '</td></tr>';
     }
     return rows;
@@ -6496,25 +6522,36 @@ function showGameSummary() {
     let best = null, bestScore = -1;
     // `row` is which row of the slot, split batting from running the same way
     // `tallyAtBats` does — a pinch runner's run is his, not the batter's (H2).
-    function consider(pl, tName, atBats, row) {
-      if (!pl.name) return;
+    // `pIdx` is the row being considered and `sp` its slot's first row, which is
+    // whose at-bats these are.
+    function consider(team, sp, pIdx, tName, atBats, row) {
+      const name = liveName(team, pIdx);
+      if (!name) return;
+      const pl = gameState.teams[team].players[pIdx];
       let h = 0, rbi = 0, r = 0, hr = 0, ab = 0, k = 0;
-      for (const atBat of atBats) {
-        if (!atBat.play) continue;
+      atBats.forEach((atBat, col) => {
+        if (!atBat.play) return;
         const scored = atBat.bases[0] && atBat.bases[1] && atBat.bases[2] && atBat.bases[3] && atBat.outOnBase == null;
         if (scored && runRowOf(atBat) === row) r++;
-        if (subRowOf(atBat) !== row) continue;
+        if (subRowOf(atBat) !== row) return;
         if (isHitPlay(atBat.play)) h++;
         if (atBat.play === 'HR') hr++;
         rbi += (atBat.rbi || 0);
-        const noAB = ['BB','HBP','IBB','SAC','SF','SH','CI'].includes(atBat.play);
+        // L4: rule 9.02(a)(1) again — a sacrifice costs no at-bat only if it did its
+        // job, which is what `tallyAtBats` prints in the box score two panels up.
+        // This kept its own list with SAC/SF/SH flatly in it, so the "h-for-ab" line
+        // under the player's name could contradict the box score above it (#17).
+        const isSac = ['SAC','SF','SH'].includes(atBat.play);
+        const noAB = isSac
+          ? sacrificeExemptsAB(team, sp, col, atBat)
+          : ['BB','HBP','IBB','CI'].includes(atBat.play);
         if (!noAB) ab++;
         if (atBat.play === 'K' || atBat.play === 'ꓘ' || atBat.play === 'K+WP') k++;
-      }
+      });
       const score = h * 3 + rbi * 2 + r * 2 + hr * 3 - k;
       if (score > bestScore) {
         bestScore = score;
-        best = { name: (pl.num ? '#' + pl.num + ' ' : '') + pl.name, team: tName, h, ab, rbi, r, hr, pos: pl.pos || '' };
+        best = { name: labelled(liveNum(team, pIdx), name, ''), team: tName, h, ab, rbi, r, hr, pos: pl.pos || '' };
       }
     }
     ['visiting', 'home'].forEach(team => {
@@ -6525,9 +6562,9 @@ function showGameSummary() {
         const starter = players[sp];
         // Every row of the slot is a candidate on its own at-bats, so a second
         // substitute can win it too (H3). `consider` skips unnamed rows itself.
-        consider(starter, tName, starter.atBats, 0);
+        consider(team, sp, sp, tName, starter.atBats, 0);
         subRowOffsets().forEach(r => {
-          consider(players[sp + r], tName, starter.atBats, r);
+          consider(team, sp, sp + r, tName, starter.atBats, r);
         });
       }
     });
@@ -6537,14 +6574,15 @@ function showGameSummary() {
       const tName = team === 'visiting' ? vTeam : hTeam;
       for (let i = 0; i < PITCHER_ROWS; i++) {
         const p = pitchers[i];
-        if (!p.name) continue;
+        const pName = livePitcherField(team, i, 'name');
+        if (!pName) continue;
         const ip = parseFloat(p.ip) || 0;
         const k = parseInt(p.k) || 0;
         const er = parseInt(p.er) || 0;
         const score = ip * 2 + k * 2 - er * 4;
         if (score > bestScore && ip >= 5) {
           bestScore = score;
-          best = { name: (p.num ? '#' + p.num + ' ' : '') + p.name, team: tName, isPitcher: true, ip: p.ip, k, er, h: parseInt(p.h) || 0 };
+          best = { name: labelled(livePitcherField(team, i, 'num'), pName, ''), team: tName, isPitcher: true, ip: p.ip, k, er, h: parseInt(p.h) || 0 };
         }
       }
     });
@@ -6583,11 +6621,15 @@ function showGameSummary() {
         const sp = pos * ROWS_PER_POS;
         const starter = players[sp];
         // Per row, so a multi-hit game by the second substitute is still notable.
-        if (starter.name) scanNotable((starter.num ? '#' + starter.num + ' ' : '') + starter.name, tName, starter.atBats, ab => subRowOf(ab) === 0);
-        subRowOffsets().forEach(r => {
-          const sub = players[sp + r];
-          if (sub.name) scanNotable((sub.num ? '#' + sub.num + ' ' : '') + sub.name, tName, starter.atBats, ab => subRowOf(ab) === r);
-        });
+        // Named off the card like everything else here (L3).
+        const notableRow = (row) => {
+          const name = liveName(team, sp + row);
+          if (!name) return;
+          scanNotable(labelled(liveNum(team, sp + row), name, ''), tName, starter.atBats,
+                      ab => subRowOf(ab) === row);
+        };
+        notableRow(0);
+        subRowOffsets().forEach(notableRow);
       }
     });
     // DP plays

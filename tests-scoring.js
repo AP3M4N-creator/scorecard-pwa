@@ -4321,7 +4321,7 @@
   // `showRunnerPopup` calls straight back with `{}`, so nothing changed — but the
   // snapshot had already been pushed and the redo stack cleared, leaving a dead
   // Undo press between the scorer and the last play that really happened.
-  xfail('L1', 'pressing Rnrs with the bases empty does not burn an undo press', () => {
+  test('pressing Rnrs with the bases empty does not burn an undo press', () => {
     sel('visiting', 0, 0);
     play('K');
     sel('visiting', 0, 0);
@@ -4335,7 +4335,7 @@
 
   // The app's own policy, from NOTHING_TO_MOVE and removePitch: a press that
   // changes nothing says why. `moveRunner` returned bare.
-  xfail('L2', 'pressing Move with the bases empty says why', () => {
+  test('pressing Move with the bases empty says why', () => {
     sel('visiting', 0, 0);
     play('K');
     sel('visiting', 0, 0);
@@ -4352,7 +4352,7 @@
   // typed just before the summary opened was not in the state yet and the box
   // score printed "Pos 1". `livePlayerField` exists for this and every popup
   // already uses it.
-  xfail('L3', 'the summary prints a name typed a moment before it opened', () => {
+  test('the summary prints a name typed a moment before it opened', () => {
     setPlayer('visiting', 0, '7', 'Molina');         // typed, not yet scraped
     sel('visiting', 0, 0);
     play('1B');
@@ -4372,7 +4372,7 @@
   // what `tallyAtBats` / `sacrificeExemptsAB` say (#17). `findPlayerOfGame` kept
   // its own list with SAC/SF/SH in it, so the POG's "h-for-ab" line could
   // contradict the box score printed above it.
-  xfail('L4', 'the player of the game line agrees with the box score on a sacrifice', () => {
+  test('the player of the game line agrees with the box score on a sacrifice', () => {
     setPlayer('visiting', 0, '7', 'Nunez');
     sel('visiting', 0, 0);
     play('SF');                                      // nobody on: it drove nobody in
@@ -4393,7 +4393,7 @@
   // The same shape m6 guarded in `setPitcher`: the popup is the only caller today,
   // so the dereference is latent — but it is one line from a crash, and every other
   // popup in the file is dismissed through a null check or hidePopupById.
-  xfail('L5', 'a position change does not need its popup in the DOM', () => {
+  test('a position change does not need its popup in the DOM', () => {
     lineupDirty = true;
     const popup = document.getElementById('pos-change-popup');
     if (popup) popup.remove();
@@ -4403,7 +4403,7 @@
 
   // Superseded by `columnForInning` and left behind. Nothing calls it, and the
   // comment above `columnForInning` explains why nothing should.
-  xfail('L6', 'the column scan columnForInning replaced is gone', () => {
+  test('the column scan columnForInning replaced is gone', () => {
     eq('getNextFreeColumn is no longer defined', typeof getNextFreeColumn, 'undefined');
   });
 })();
