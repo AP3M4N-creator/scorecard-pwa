@@ -5,20 +5,20 @@
 //  - Fonts/icons are stale-while-revalidate: instant from cache, refreshed
 //    in the background.
 // Bump SHELL_VERSION only if you ever need to force-drop the whole cache.
-const SHELL_VERSION = 'v73';
+const SHELL_VERSION = 'v74';
 const CACHE = 'scorecard-' + SHELL_VERSION;
 
-// One file per family (per subset for Source Sans): they are variable fonts,
-// so a single file covers every weight the stylesheet asks for.
+// One file per family (per style for Source Serif): they are variable fonts,
+// so a single file covers every weight the stylesheet asks for. addAll() is
+// all-or-nothing, so only list files that are actually in the repo.
 const FONTS = [
-  'fonts/oswald-latin.woff2',
-  'fonts/source-sans-3-ext.woff2',
-  'fonts/source-sans-3-latin.woff2',
+  'fonts/source-serif-4-latin.woff2',
+  'fonts/source-serif-4-italic.woff2',
   'fonts/jetbrains-mono-latin.woff2'
 ];
 
 // Files treated as "app code": always try the network first when online.
-const SHELL = ['index.html', 'styles.css', 'app.js', 'manifest.json'];
+const SHELL = ['index.html', 'styles.css', 'app.js', 'ui.js', 'manifest.json'];
 
 self.addEventListener('install', e => {
   e.waitUntil(

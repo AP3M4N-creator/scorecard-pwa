@@ -2,338 +2,388 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<!-- Everything the app loads is its own, so the policy is 'self' throughout.
-     `script-src 'self'` is the point of it: there is no inline script left on
-     the page and no `on*` attribute anywhere, so an injected name can no longer
-     become an injected script. Inline *styles* are still allowed — this card is
-     built out of style attributes, and they can't run code.
-     The field diagram is a real file (field.png) rather than a base64 blob,
-     so `img-src` needs no `data:` escape hatch. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Baseball Scorecard</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Scorecard">
-<meta name="theme-color" content="#1a2744">
+<meta name="theme-color" content="#003278">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<noscript><div style="padding:40px 20px;text-align:center;font-family:-apple-system,sans-serif;font-size:18px;color:#1a2744"><b>JavaScript Required</b><br><br>Open this file in <b>Safari</b> to use the scorecard.<br><br>In the Files or Dropbox app, tap the Share button then choose <b>"Open in Safari"</b>.</div></noscript>
-<!-- Persistent warning shown when localStorage can't save (quota/blocked). -->
-<div id="storage-warning" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;z-index:1000;background:#8a1f1f;color:#fff;padding:10px 14px;font-family:-apple-system,sans-serif;font-size:13px;font-weight:600">
-  <span style="flex:1;min-width:200px">⚠ Changes are not being saved on this device. Download a backup to avoid losing this game.</span>
-  <button data-act="exportGameJSON" style="background:#fff;color:#8a1f1f;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer">Download backup</button>
+<noscript><div style="padding:40px 20px;text-align:center;font-family:Georgia,serif;font-size:18px;color:#003278"><b>JavaScript Required</b><br><br>Open this file in <b>Safari</b> to use the scorecard.<br><br>In the Files or Dropbox app, tap the Share button then choose <b>"Open in Safari"</b>.</div></noscript>
+<div id="storage-warning" class="banner" style="background:#8a1f1f">
+  <span>Changes are not being saved on this device. Download a backup to avoid losing this game.</span>
+  <button data-act="exportGameJSON" style="color:#8a1f1f">Download backup</button>
 </div>
-<!-- Shown when a stored game or the library could not be parsed. The raw text is
-     kept rather than overwritten, so it is still recoverable by hand. -->
-<div id="unreadable-warning" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;z-index:1000;background:#8a5a1f;color:#fff;padding:10px 14px;font-family:-apple-system,sans-serif;font-size:13px;font-weight:600">
-  <span style="flex:1;min-width:200px">⚠ Saved data on this device could not be read. It has been kept, not overwritten — download it if you want to recover that game.</span>
-  <button data-act="downloadUnreadableSaves" style="background:#fff;color:#8a5a1f;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer">Download unreadable save</button>
-  <button data-act="discardUnreadableSaves" style="background:transparent;color:#fff;border:2px solid #fff;border-radius:6px;padding:5px 11px;font-weight:700;cursor:pointer">Discard</button>
+<div id="unreadable-warning" class="banner" style="background:#8a5a1f">
+  <span>Saved data on this device could not be read. It has been kept, not overwritten — download it if you want to recover that game.</span>
+  <button data-act="downloadUnreadableSaves" style="color:#8a5a1f">Download unreadable save</button>
+  <button class="hollow" data-act="discardUnreadableSaves">Discard</button>
 </div>
-<!-- Shown once a game is final and no backup file has been taken of it: until it is
-     exported the finished card exists only in this browser's storage. Navy, not the
-     red and amber above — nothing has gone wrong, this is the last step of scoring a
-     game. `role="status"` so it is announced rather than only seen. -->
-<div id="backup-reminder" role="status" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;z-index:1000;background:#1a2744;color:#fff;padding:10px 14px;font-family:-apple-system,sans-serif;font-size:13px;font-weight:600">
-  <span style="flex:1;min-width:200px">Game final — this card exists only on this device. Download a backup to keep it.</span>
-  <button data-act="exportGameJSON" style="background:#fff;color:#1a2744;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer">Download backup</button>
-  <button data-act="dismissBackupReminder" style="background:transparent;color:#fff;border:2px solid #fff;border-radius:6px;padding:5px 11px;font-weight:700;cursor:pointer">Not now</button>
+<div id="backup-reminder" class="banner" role="status" style="background:#003278">
+  <span>Game final — this card exists only on this device. Download a backup to keep it.</span>
+  <button data-act="exportGameJSON" style="color:#003278">Download backup</button>
+  <button class="hollow" data-act="dismissBackupReminder">Not now</button>
 </div>
-<!-- Off-screen live region: selecting a cell changes nothing a screen reader
-     would otherwise notice, so selectCell() says what was selected here. -->
 <div id="a11y-live" role="status" aria-live="polite" style="position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0"></div>
+
 <div class="app">
-  <!-- Header -->
   <div class="header-bar">
-    <h1>Baseball <span>Scorecard</span></h1>
+    <div class="masthead">
+      <div class="kicker">Official Scorecard</div>
+      <h1>Baseball <span>Scorecard</span></h1>
+    </div>
     <div class="game-timer">
       <button id="timer-btn" data-act="toggleGameTimer">Start</button>
       <span class="timer-display" id="timer-display">0:00</span>
     </div>
     <div class="header-actions">
-      <button data-act="showGameSummary">Game Summary</button>
+      <button data-act="showGameSummary">Summary</button>
       <button data-act="openGameLibrary">Games</button>
-      <button id="save-btn" data-act="saveGame">Save</button>
+      <button id="save-btn" class="primary" data-act="saveGame">Save</button>
       <button class="danger" data-act="newGame">New Game</button>
     </div>
   </div>
 
-  <!-- Game Info -->
+  <div class="stitch" aria-hidden="true"></div>
+
   <div class="game-info-card">
-    <div class="info-group">
-      <div class="info-row"><label for="info-date">Date:</label><input type="text" id="info-date"></div>
-      <div class="info-row"><label for="info-start-time">Start Time:</label><input type="text" id="info-start-time"></div>
-      <div class="info-row"><label for="info-time-of-game">Time of Game:</label><input type="text" id="info-time-of-game"></div>
-      <!-- Regulation length. Drives the game-over checks and how many inning
-           columns show; +EI still extends past it for extra innings. -->
-      <div class="info-row"><label for="info-innings">Innings:</label><select id="info-innings">
-        <option value="9">9</option>
-        <option value="7">7</option>
-        <option value="6">6</option>
-        <option value="5">5</option>
-      </select></div>
-    </div>
-    <div class="info-group">
-      <div class="info-row"><label for="info-visiting-team">Visiting Team:</label><input type="text" id="info-visiting-team"></div>
-      <div class="info-row"><label for="info-home-team">Home Team:</label><input type="text" id="info-home-team"></div>
-      <div class="info-row"><label for="info-weather">Weather:</label><input type="text" id="info-weather"></div>
-      <div class="info-row"><label for="info-attendance">Attendance:</label><input type="text" id="info-attendance"></div>
-    </div>
-    <div class="umpires-box">
-      <h3>Umpires</h3>
-      <div class="ump-row"><label for="ump-hp">HP</label><input type="text" id="ump-hp"></div>
-      <div class="ump-row"><label for="ump-1b">1B</label><input type="text" id="ump-1b"></div>
-      <div class="ump-row"><label for="ump-2b">2B</label><input type="text" id="ump-2b"></div>
-      <div class="ump-row"><label for="ump-3b">3B</label><input type="text" id="ump-3b"></div>
-    </div>
+    <details class="info-details">
+      <summary>Game details — teams, umpires, conditions</summary>
+      <div class="info-body">
+        <div class="info-group">
+          <div class="info-row"><label for="info-visiting-team">Visiting Team</label><input type="text" id="info-visiting-team"></div>
+          <div class="info-row"><label for="info-home-team">Home Team</label><input type="text" id="info-home-team"></div>
+        </div>
+        <div class="info-group">
+          <div class="info-row"><label for="info-date">Date</label><input type="text" id="info-date"></div>
+          <div class="info-row"><label for="info-start-time">Start</label><input type="text" id="info-start-time"></div>
+          <div class="info-row"><label for="info-time-of-game">Time of Game</label><input type="text" id="info-time-of-game"></div>
+          <div class="info-row"><label for="info-innings">Innings</label><select id="info-innings">
+            <option value="9">9</option>
+            <option value="7">7</option>
+            <option value="6">6</option>
+            <option value="5">5</option>
+          </select></div>
+        </div>
+        <div class="info-group">
+          <div class="info-row"><label for="info-weather">Weather</label><input type="text" id="info-weather"></div>
+          <div class="info-row"><label for="info-attendance">Attendance</label><input type="text" id="info-attendance"></div>
+        </div>
+        <div class="umpires-box">
+          <h3>Umpires</h3>
+          <div class="ump-row"><label for="ump-hp">HP</label><input type="text" id="ump-hp"></div>
+          <div class="ump-row"><label for="ump-1b">1B</label><input type="text" id="ump-1b"></div>
+          <div class="ump-row"><label for="ump-2b">2B</label><input type="text" id="ump-2b"></div>
+          <div class="ump-row"><label for="ump-3b">3B</label><input type="text" id="ump-3b"></div>
+        </div>
+      </div>
+    </details>
   </div>
 
-  <!-- Linescore -->
-  <div class="linescore-wrap" style="display:flex;gap:16px;align-items:stretch">
+  <div class="linescore-wrap" style="display:flex;gap:18px;align-items:stretch">
     <div style="flex:0 0 auto">
-    <h3 style="display:flex;align-items:center;gap:6px">Linescore <button id="add-extra-inn-btn" class="ei-btn" data-act="addExtraInning" style="display:none">+EI</button></h3>
-    <table class="linescore">
-      <thead>
-        <!-- Inning header cells are generated from the INNINGS constant in buildLinescore() -->
-        <tr id="ls-header-row">
-          <th class="team-col"></th>
-          <th>R</th><th>H</th><th>E</th><th>LOB</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr id="ls-visiting">
-          <td class="team-col" id="ls-visiting-name">Visiting</td>
-        </tr>
-        <tr id="ls-home">
-          <td class="team-col"><span id="ls-h-label">Home</span></td>
-        </tr>
-      </tbody>
-    </table>
+      <h3 style="display:flex;align-items:center;gap:8px">Score by Innings <button id="add-extra-inn-btn" class="ei-btn" data-act="addExtraInning" style="display:none">+EI</button></h3>
+      <table class="linescore">
+        <thead>
+          <tr id="ls-header-row">
+            <th class="team-col"></th>
+            <th>R</th><th>H</th><th>E</th><th>LOB</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr id="ls-visiting"><td class="team-col" id="ls-visiting-name">Visiting</td></tr>
+          <tr id="ls-home"><td class="team-col"><span id="ls-h-label">Home</span></td></tr>
+        </tbody>
+      </table>
     </div>
-    <div id="live-stats" style="flex:1;display:flex;gap:10px;min-width:0">
-      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:0 12px;border-left:2px solid rgba(255,255,255,0.15)">
-        <div style="font-size:8px;color:var(--gold);font-family:var(--heading);text-transform:uppercase;letter-spacing:1px">Inning</div>
-        <div id="ls-inning" style="font-size:22px;font-weight:700;color:#fff;font-family:var(--heading)">▲ 1</div>
-        <div style="display:flex;gap:4px;margin-top:2px">
+    <div id="live-stats" style="flex:1;display:flex;gap:0;min-width:0">
+      <div class="live-cell">
+        <div class="live-label">Inning</div>
+        <div id="ls-inning" style="font-size:24px;font-weight:600;color:#fff;font-family:var(--heading);line-height:1.1">▲ 1</div>
+      </div>
+      <div class="live-cell">
+        <div class="live-label">Outs</div>
+        <div style="display:flex;gap:6px;padding:6px 0 2px">
           <span class="ls-out-dot" id="ls-out-1"></span>
           <span class="ls-out-dot" id="ls-out-2"></span>
           <span class="ls-out-dot" id="ls-out-3"></span>
         </div>
       </div>
-      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:0 12px;border-left:2px solid rgba(255,255,255,0.15)">
-        <div style="font-size:8px;color:var(--gold);font-family:var(--heading);text-transform:uppercase;letter-spacing:1px">Count</div>
-        <div id="ls-count" style="font-size:22px;font-weight:700;color:#fff;font-family:var(--mono)">0-0</div>
+      <div class="live-cell">
+        <div class="live-label">Ball — Strike</div>
+        <div id="ls-count" style="font-size:24px;font-weight:600;color:#fff;font-family:var(--mono);line-height:1.1">0-0</div>
       </div>
-      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:0 12px;border-left:2px solid rgba(255,255,255,0.15)">
-        <div style="font-size:8px;color:var(--gold);font-family:var(--heading);text-transform:uppercase;letter-spacing:1px">On Base</div>
-        <svg viewBox="0 0 50 50" width="36" height="36">
-          <polygon points="25,8 42,25 25,42 8,25" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
-          <rect class="ls-base" id="ls-b1" x="39" y="22" width="6" height="6" rx="1" fill="rgba(255,255,255,0.2)" transform="rotate(45,42,25)"/>
-          <rect class="ls-base" id="ls-b2" x="22" y="5" width="6" height="6" rx="1" fill="rgba(255,255,255,0.2)" transform="rotate(45,25,8)"/>
-          <rect class="ls-base" id="ls-b3" x="5" y="22" width="6" height="6" rx="1" fill="rgba(255,255,255,0.2)" transform="rotate(45,8,25)"/>
+      <div class="live-cell">
+        <div class="live-label">On Base</div>
+        <svg viewBox="0 0 50 50" width="40" height="40">
+          <polygon points="25,8 42,25 25,42 8,25" fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="1.5"></polygon>
+          <rect class="ls-base" id="ls-b1" x="39" y="22" width="6" height="6" rx="1" fill="rgba(255,255,255,0.2)" transform="rotate(45,42,25)"></rect>
+          <rect class="ls-base" id="ls-b2" x="22" y="5" width="6" height="6" rx="1" fill="rgba(255,255,255,0.2)" transform="rotate(45,25,8)"></rect>
+          <rect class="ls-base" id="ls-b3" x="5" y="22" width="6" height="6" rx="1" fill="rgba(255,255,255,0.2)" transform="rotate(45,8,25)"></rect>
         </svg>
       </div>
-      <div style="display:flex;flex-direction:column;justify-content:center;gap:1px;padding:0 12px;border-left:2px solid rgba(255,255,255,0.15);min-width:120px">
-        <div style="font-size:8px;color:var(--gold);font-family:var(--heading);text-transform:uppercase;letter-spacing:1px">At Bat</div>
-        <div id="ls-batter" style="font-size:13px;font-weight:600;color:#fff;font-family:var(--font);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">—</div>
-        <div id="ls-pitches" style="font-size:10px;color:rgba(255,255,255,0.5);font-family:var(--mono)"></div>
+      <div class="live-cell" style="align-items:flex-start;min-width:150px">
+        <div class="live-label">At Bat</div>
+        <div id="ls-batter" style="font-size:15px;font-weight:600;color:#fff;font-family:var(--font);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">—</div>
+        <div id="ls-pitches" style="font-size:11px;color:rgba(255,255,255,0.6);font-family:var(--mono)"></div>
       </div>
     </div>
   </div>
 
-  <!-- Tabs -->
   <div class="tab-bar">
     <button class="tab-btn active" data-tab="visiting" data-act="switchTab" data-arg="visiting">Visiting Team</button>
     <button class="tab-btn" data-tab="home" data-act="switchTab" data-arg="home">Home Team</button>
   </div>
 
-  <!-- Visiting Team -->
   <div class="tab-content active" id="tab-visiting">
     <div class="main-area">
       <div class="quick-bar" id="qb-visiting">
         <div class="qb-core">
-          <span class="qb-label">Pitch:</span>
-          <button class="quick-btn" data-act="addPitch" data-arg="S" style="color:var(--accent)">S<small>(s)</small></button>
-          <button class="quick-btn" data-act="addPitch" data-arg="F">F<small>(f)</small></button>
-          <button class="quick-btn" data-act="addPitch" data-arg="B" style="color:var(--blue)">B<small>(b)</small></button>
+          <span class="qb-label">Pitch</span>
+          <button class="quick-btn" data-act="addPitch" data-arg="S" style="color:var(--accent)">S<small>s</small></button>
+          <button class="quick-btn" data-act="addPitch" data-arg="F">F<small>f</small></button>
+          <button class="quick-btn" data-act="addPitch" data-arg="B" style="color:var(--navy)">B<small>b</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="1B">1B<small>(1)</small></button>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="2B">2B<small>(2)</small></button>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="3B">3B<small>(3)</small></button>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="HR">HR<small>(4)</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="1B">1B<small>1</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="2B">2B<small>2</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="3B">3B<small>3</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="HR">HR<small>4</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn out" data-act="applyPlay" data-arg="K">K<small>(k)</small></button>
-          <button class="quick-btn out" data-act="promptGroundout">GO<small>(g)</small></button>
+          <button class="quick-btn out" data-act="applyPlay" data-arg="K">K<small>k</small></button>
+          <button class="quick-btn out" data-act="promptGroundout">GO<small>g</small></button>
+          <button class="quick-btn walk" data-act="applyPlay" data-arg="BB">BB<small>w</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn walk" data-act="applyPlay" data-arg="BB">BB<small>(w)</small></button>
-          <span class="qb-sep"></span>
-          <button class="quick-btn undo-play" data-act="undoLastPlay">Undo<small>(u)</small></button>
-          <button class="qb-more-btn" data-act="toggleQBDrawer">···</button>
+          <button class="quick-btn undo-play" data-act="undoLastPlay">Undo<small>u</small></button>
+          <button class="qb-more-btn" data-act="toggleQBDrawer">More plays</button>
         </div>
         <div class="qb-drawer">
-          <span class="qb-label">Out:</span>
-          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="F">FO<small>(x)</small></button>
-          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="P">PO<small>(p)</small></button>
-          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="L">LO<small>(l)</small></button>
-          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="DP ">DP<small>(d)</small></button>
-          <span class="qb-sep"></span>
-          <button class="quick-btn walk" data-act="applyPlay" data-arg="HBP">HBP<small>(h)</small></button>
-          <button class="quick-btn walk" data-act="applyPlay" data-arg="IBB">IBB<small>(i)</small></button>
-          <button class="quick-btn" data-act="applyPlay" data-arg="SF">SF<small>(q)</small></button>
-          <button class="quick-btn" data-act="applyPlay" data-arg="SH">SH</button>
-          <button class="quick-btn" data-act="promptPositionPlay" data-arg="FC ">FC</button>
-          <button class="quick-btn" data-act="promptErrorPlay">E<small>(e)</small></button>
-          <button class="quick-btn walk" data-act="applyPlay" data-arg="CI">CI</button>
-          <button class="quick-btn" data-act="applyPlay" data-arg="IF">IF</button>
-          <span class="qb-sep"></span>
-          <span class="qb-label">Run:</span>
-          <button class="quick-btn runner" data-act="promptSBBase">SB<small>(r)</small></button>
-          <button class="quick-btn runner" data-act="promptCSBase">CS<small>(j)</small></button>
-          <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="WP">WP<small>(n)</small></button>
-          <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="PB">PB</button>
-          <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="BK">BK</button>
-          <button class="quick-btn runner" data-act="promptPickoff">PO<small>(o)</small></button>
-          <span class="qb-sep"></span>
-          <button class="quick-btn" data-act="applyPlay" data-arg="K+WP">K+WP</button>
-          <button class="quick-btn" data-act="promptPositionPlay" data-arg="TP ">TP</button>
-          <button class="quick-btn pitcher-change" data-act="changePitcher">P.Chg</button>
-          <button class="quick-btn" data-act="markSub" style="color:var(--accent)">SUB</button>
-          <button class="quick-btn" data-act="markPinchRunner" style="color:var(--accent)">PR</button>
-          <button class="quick-btn" data-act="changeFieldPos">Pos</button>
-          <span class="qb-sep"></span>
-          <button class="quick-btn undo-play" data-act="redoLastPlay">Redo<small>(y)</small></button>
-          <button class="quick-btn" style="color:var(--accent)" data-act="clearPlayKeepPitches">CLR Play</button>
-          <button class="quick-btn" style="color:var(--accent)" data-act="clearSelectedCell">CLR All<small>(c)</small></button>
-          <span class="qb-sep"></span>
-          <span class="qb-label">Fix:</span>
-          <button class="quick-btn" data-act="editPlayType">Edit<small>(t)</small></button>
-          <button class="quick-btn" data-act="editRunners">Rnrs<small>(m)</small></button>
-          <button class="quick-btn" data-act="moveRunner">Move</button>
-          <button class="quick-btn" data-act="editSprayChart">Spray</button>
-          <button class="quick-btn" data-act="adjustRBI" data-argnum="1">RBI+</button>
-          <button class="quick-btn" data-act="adjustRBI" data-argnum="-1">RBI-</button>
-          <button class="quick-btn" data-act="reviewEarnedRuns" title="Review earned/unearned runs for this inning">E/UE</button>
+          <div class="qbg-tabs">
+            <button class="qbg-tab active" data-ui-act="qbg" data-group="out">Outs</button>
+            <button class="qbg-tab" data-ui-act="qbg" data-group="reach">Reach</button>
+            <button class="qbg-tab" data-ui-act="qbg" data-group="run">Runners</button>
+            <button class="qbg-tab" data-ui-act="qbg" data-group="subs">Subs</button>
+            <button class="qbg-tab" data-ui-act="qbg" data-group="fix">Fix</button>
+          </div>
+          <div class="qbg-panel active" data-group="out">
+            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="F">FO<small>x</small></button>
+            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="P">PO<small>p</small></button>
+            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="L">LO<small>l</small></button>
+            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="DP ">DP<small>d</small></button>
+            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="TP ">TP</button>
+            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="FC ">FC</button>
+            <button class="quick-btn out" data-act="applyPlay" data-arg="IF">IF</button>
+          </div>
+          <div class="qbg-panel" data-group="reach">
+            <button class="quick-btn walk" data-act="applyPlay" data-arg="HBP">HBP<small>h</small></button>
+            <button class="quick-btn walk" data-act="applyPlay" data-arg="IBB">IBB<small>i</small></button>
+            <button class="quick-btn walk" data-act="applyPlay" data-arg="CI">CI</button>
+            <button class="quick-btn" data-act="promptErrorPlay">E<small>e</small></button>
+            <button class="quick-btn" data-act="applyPlay" data-arg="SF">SF<small>q</small></button>
+            <button class="quick-btn" data-act="applyPlay" data-arg="SH">SH</button>
+            <button class="quick-btn" data-act="applyPlay" data-arg="K+WP">K+WP</button>
+          </div>
+          <div class="qbg-panel" data-group="run">
+            <button class="quick-btn runner" data-act="promptSBBase">SB<small>r</small></button>
+            <button class="quick-btn runner" data-act="promptCSBase">CS<small>j</small></button>
+            <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="WP">WP<small>n</small></button>
+            <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="PB">PB</button>
+            <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="BK">BK</button>
+            <button class="quick-btn runner" data-act="promptPickoff">PO<small>o</small></button>
+            <button class="quick-btn runner" data-act="moveRunner">Move</button>
+          </div>
+          <div class="qbg-panel" data-group="subs">
+            <button class="quick-btn pitcher-change" data-act="changePitcher">P.Chg</button>
+            <button class="quick-btn" data-act="markSub" style="color:var(--navy)">SUB</button>
+            <button class="quick-btn" data-act="markPinchRunner" style="color:var(--navy)">PR</button>
+            <button class="quick-btn" data-act="changeFieldPos">Pos</button>
+          </div>
+          <div class="qbg-panel" data-group="fix">
+            <button class="quick-btn undo-play" data-act="redoLastPlay">Redo<small>y</small></button>
+            <button class="quick-btn" data-act="editPlayType">Edit<small>t</small></button>
+            <button class="quick-btn" data-act="editRunners">Rnrs<small>m</small></button>
+            <button class="quick-btn" data-act="editSprayChart">Spray</button>
+            <button class="quick-btn" data-act="adjustRBI" data-argnum="1">RBI+</button>
+            <button class="quick-btn" data-act="adjustRBI" data-argnum="-1">RBI−</button>
+            <button class="quick-btn" data-act="reviewEarnedRuns" title="Review earned/unearned runs for this inning">E/UE</button>
+            <span class="qb-sep"></span>
+            <button class="quick-btn" style="color:var(--accent)" data-act="clearPlayKeepPitches">CLR Play</button>
+            <button class="quick-btn" style="color:var(--accent)" data-act="clearSelectedCell">CLR All<small>c</small></button>
+          </div>
         </div>
       </div>
-      <div class="grid-wrap" id="grid-visiting"></div>
-      <div class="visiting-bottom" style="display:flex;gap:12px;align-items:flex-start;margin-top:4px">
-        <div class="pitcher-section" id="pitchers-visiting" style="flex:0 0 auto"></div>
-        <div class="spray-mini" id="spray-visiting">
+
+      <div class="sec-bar">
+        <button class="sec-btn active" data-ui-act="sec" data-panel="bat">Batting Order</button>
+        <button class="sec-btn" data-ui-act="sec" data-panel="pitch">Pitching Record</button>
+        <button class="sec-btn" data-ui-act="sec" data-panel="spray">Spray Chart</button>
+        <button class="ghost-btn" data-ui-act="subs" style="margin-left:auto">Show sub rows</button>
+      </div>
+
+      <div class="sec-panel active" data-panel="bat">
+        <div class="grid-wrap" id="grid-visiting"></div>
+        <div class="scoring-key">
+          <span class="key-title">Scoring key</span>
+          <span><b>1B 2B 3B HR</b> hits</span>
+          <span><b>K ꓘ</b> strikeout swinging · looking</span>
+          <span><b>BB HBP IBB</b> free pass</span>
+          <span><b>6-3</b> putout by position</span>
+          <span><b>E6</b> error</span>
+          <span><b>●</b> RBI</span>
+          <span><b>◆</b> filled diamond = run scored</span>
+        </div>
+      </div>
+      <div class="sec-panel" data-panel="pitch">
+        <div class="pitcher-section" id="pitchers-visiting"></div>
+      </div>
+      <div class="sec-panel" data-panel="spray">
+        <div class="spray-mini" id="spray-visiting" style="width:300px">
           <h4>Visiting Spray Chart</h4>
-          <svg class="spray-mini-svg" data-team="visiting" viewBox="0 0 300 300" width="260" height="260">
-            <image href="field.png" x="0" y="0" width="300" height="300" preserveAspectRatio="xMidYMid meet"/>
+          <svg class="spray-mini-svg" data-team="visiting" viewBox="0 0 300 300" width="290" height="290">
+            <image href="field.png" x="0" y="0" width="300" height="300" preserveAspectRatio="xMidYMid meet"></image>
           </svg>
         </div>
       </div>
     </div>
-    </div>
   </div>
 
-  <!-- Home Team -->
   <div class="tab-content" id="tab-home">
     <div class="main-area">
       <div class="quick-bar" id="qb-home">
         <div class="qb-core">
-          <span class="qb-label">Pitch:</span>
-          <button class="quick-btn" data-act="addPitch" data-arg="S" style="color:var(--accent)">S<small>(s)</small></button>
-          <button class="quick-btn" data-act="addPitch" data-arg="F">F<small>(f)</small></button>
-          <button class="quick-btn" data-act="addPitch" data-arg="B" style="color:var(--blue)">B<small>(b)</small></button>
+          <span class="qb-label">Pitch</span>
+          <button class="quick-btn" data-act="addPitch" data-arg="S" style="color:var(--accent)">S<small>s</small></button>
+          <button class="quick-btn" data-act="addPitch" data-arg="F">F<small>f</small></button>
+          <button class="quick-btn" data-act="addPitch" data-arg="B" style="color:var(--navy)">B<small>b</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="1B">1B<small>(1)</small></button>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="2B">2B<small>(2)</small></button>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="3B">3B<small>(3)</small></button>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="HR">HR<small>(4)</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="1B">1B<small>1</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="2B">2B<small>2</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="3B">3B<small>3</small></button>
+          <button class="quick-btn hit" data-act="applyPlay" data-arg="HR">HR<small>4</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn out" data-act="applyPlay" data-arg="K">K<small>(k)</small></button>
-          <button class="quick-btn out" data-act="promptGroundout">GO<small>(g)</small></button>
+          <button class="quick-btn out" data-act="applyPlay" data-arg="K">K<small>k</small></button>
+          <button class="quick-btn out" data-act="promptGroundout">GO<small>g</small></button>
+          <button class="quick-btn walk" data-act="applyPlay" data-arg="BB">BB<small>w</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn walk" data-act="applyPlay" data-arg="BB">BB<small>(w)</small></button>
-          <span class="qb-sep"></span>
-          <button class="quick-btn undo-play" data-act="undoLastPlay">Undo<small>(u)</small></button>
-          <button class="qb-more-btn" data-act="toggleQBDrawer">···</button>
+          <button class="quick-btn undo-play" data-act="undoLastPlay">Undo<small>u</small></button>
+          <button class="qb-more-btn" data-act="toggleQBDrawer">More plays</button>
         </div>
         <div class="qb-drawer">
-          <span class="qb-label">Out:</span>
-          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="F">FO<small>(x)</small></button>
-          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="P">PO<small>(p)</small></button>
-          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="L">LO<small>(l)</small></button>
-          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="DP ">DP<small>(d)</small></button>
-          <span class="qb-sep"></span>
-          <button class="quick-btn walk" data-act="applyPlay" data-arg="HBP">HBP<small>(h)</small></button>
-          <button class="quick-btn walk" data-act="applyPlay" data-arg="IBB">IBB<small>(i)</small></button>
-          <button class="quick-btn" data-act="applyPlay" data-arg="SF">SF<small>(q)</small></button>
-          <button class="quick-btn" data-act="applyPlay" data-arg="SH">SH</button>
-          <button class="quick-btn" data-act="promptPositionPlay" data-arg="FC ">FC</button>
-          <button class="quick-btn" data-act="promptErrorPlay">E<small>(e)</small></button>
-          <button class="quick-btn walk" data-act="applyPlay" data-arg="CI">CI</button>
-          <button class="quick-btn" data-act="applyPlay" data-arg="IF">IF</button>
-          <span class="qb-sep"></span>
-          <span class="qb-label">Run:</span>
-          <button class="quick-btn runner" data-act="promptSBBase">SB<small>(r)</small></button>
-          <button class="quick-btn runner" data-act="promptCSBase">CS<small>(j)</small></button>
-          <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="WP">WP<small>(n)</small></button>
-          <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="PB">PB</button>
-          <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="BK">BK</button>
-          <button class="quick-btn runner" data-act="promptPickoff">PO<small>(o)</small></button>
-          <span class="qb-sep"></span>
-          <button class="quick-btn" data-act="applyPlay" data-arg="K+WP">K+WP</button>
-          <button class="quick-btn" data-act="promptPositionPlay" data-arg="TP ">TP</button>
-          <button class="quick-btn pitcher-change" data-act="changePitcher">P.Chg</button>
-          <button class="quick-btn" data-act="markSub" style="color:var(--accent)">SUB</button>
-          <button class="quick-btn" data-act="markPinchRunner" style="color:var(--accent)">PR</button>
-          <button class="quick-btn" data-act="changeFieldPos">Pos</button>
-          <span class="qb-sep"></span>
-          <button class="quick-btn undo-play" data-act="redoLastPlay">Redo<small>(y)</small></button>
-          <button class="quick-btn" style="color:var(--accent)" data-act="clearPlayKeepPitches">CLR Play</button>
-          <button class="quick-btn" style="color:var(--accent)" data-act="clearSelectedCell">CLR All<small>(c)</small></button>
-          <span class="qb-sep"></span>
-          <span class="qb-label">Fix:</span>
-          <button class="quick-btn" data-act="editPlayType">Edit<small>(t)</small></button>
-          <button class="quick-btn" data-act="editRunners">Rnrs<small>(m)</small></button>
-          <button class="quick-btn" data-act="moveRunner">Move</button>
-          <button class="quick-btn" data-act="editSprayChart">Spray</button>
-          <button class="quick-btn" data-act="adjustRBI" data-argnum="1">RBI+</button>
-          <button class="quick-btn" data-act="adjustRBI" data-argnum="-1">RBI-</button>
-          <button class="quick-btn" data-act="reviewEarnedRuns" title="Review earned/unearned runs for this inning">E/UE</button>
+          <div class="qbg-tabs">
+            <button class="qbg-tab active" data-ui-act="qbg" data-group="out">Outs</button>
+            <button class="qbg-tab" data-ui-act="qbg" data-group="reach">Reach</button>
+            <button class="qbg-tab" data-ui-act="qbg" data-group="run">Runners</button>
+            <button class="qbg-tab" data-ui-act="qbg" data-group="subs">Subs</button>
+            <button class="qbg-tab" data-ui-act="qbg" data-group="fix">Fix</button>
+          </div>
+          <div class="qbg-panel active" data-group="out">
+            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="F">FO<small>x</small></button>
+            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="P">PO<small>p</small></button>
+            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="L">LO<small>l</small></button>
+            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="DP ">DP<small>d</small></button>
+            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="TP ">TP</button>
+            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="FC ">FC</button>
+            <button class="quick-btn out" data-act="applyPlay" data-arg="IF">IF</button>
+          </div>
+          <div class="qbg-panel" data-group="reach">
+            <button class="quick-btn walk" data-act="applyPlay" data-arg="HBP">HBP<small>h</small></button>
+            <button class="quick-btn walk" data-act="applyPlay" data-arg="IBB">IBB<small>i</small></button>
+            <button class="quick-btn walk" data-act="applyPlay" data-arg="CI">CI</button>
+            <button class="quick-btn" data-act="promptErrorPlay">E<small>e</small></button>
+            <button class="quick-btn" data-act="applyPlay" data-arg="SF">SF<small>q</small></button>
+            <button class="quick-btn" data-act="applyPlay" data-arg="SH">SH</button>
+            <button class="quick-btn" data-act="applyPlay" data-arg="K+WP">K+WP</button>
+          </div>
+          <div class="qbg-panel" data-group="run">
+            <button class="quick-btn runner" data-act="promptSBBase">SB<small>r</small></button>
+            <button class="quick-btn runner" data-act="promptCSBase">CS<small>j</small></button>
+            <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="WP">WP<small>n</small></button>
+            <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="PB">PB</button>
+            <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="BK">BK</button>
+            <button class="quick-btn runner" data-act="promptPickoff">PO<small>o</small></button>
+            <button class="quick-btn runner" data-act="moveRunner">Move</button>
+          </div>
+          <div class="qbg-panel" data-group="subs">
+            <button class="quick-btn pitcher-change" data-act="changePitcher">P.Chg</button>
+            <button class="quick-btn" data-act="markSub" style="color:var(--navy)">SUB</button>
+            <button class="quick-btn" data-act="markPinchRunner" style="color:var(--navy)">PR</button>
+            <button class="quick-btn" data-act="changeFieldPos">Pos</button>
+          </div>
+          <div class="qbg-panel" data-group="fix">
+            <button class="quick-btn undo-play" data-act="redoLastPlay">Redo<small>y</small></button>
+            <button class="quick-btn" data-act="editPlayType">Edit<small>t</small></button>
+            <button class="quick-btn" data-act="editRunners">Rnrs<small>m</small></button>
+            <button class="quick-btn" data-act="editSprayChart">Spray</button>
+            <button class="quick-btn" data-act="adjustRBI" data-argnum="1">RBI+</button>
+            <button class="quick-btn" data-act="adjustRBI" data-argnum="-1">RBI−</button>
+            <button class="quick-btn" data-act="reviewEarnedRuns" title="Review earned/unearned runs for this inning">E/UE</button>
+            <span class="qb-sep"></span>
+            <button class="quick-btn" style="color:var(--accent)" data-act="clearPlayKeepPitches">CLR Play</button>
+            <button class="quick-btn" style="color:var(--accent)" data-act="clearSelectedCell">CLR All<small>c</small></button>
+          </div>
         </div>
       </div>
-      <div class="grid-wrap" id="grid-home"></div>
-      <div class="home-bottom" style="display:flex;gap:12px;align-items:flex-start;margin-top:4px">
-        <div class="pitcher-section" id="pitchers-home" style="flex:0 0 auto"></div>
-        <div class="spray-mini" id="spray-home">
-          <h4>Home Spray Chart</h4>
-          <svg class="spray-mini-svg" data-team="home" viewBox="0 0 300 300" width="260" height="260">
-            <image href="field.png" x="0" y="0" width="300" height="300" preserveAspectRatio="xMidYMid meet"/>
-          </svg>
+
+      <div class="sec-bar">
+        <button class="sec-btn active" data-ui-act="sec" data-panel="bat">Batting Order</button>
+        <button class="sec-btn" data-ui-act="sec" data-panel="pitch">Pitching Record</button>
+        <button class="sec-btn" data-ui-act="sec" data-panel="spray">Spray &amp; Notes</button>
+        <button class="ghost-btn" data-ui-act="subs" style="margin-left:auto">Show sub rows</button>
+      </div>
+
+      <div class="sec-panel active" data-panel="bat">
+        <div class="grid-wrap" id="grid-home"></div>
+        <div class="scoring-key">
+          <span class="key-title">Scoring key</span>
+          <span><b>1B 2B 3B HR</b> hits</span>
+          <span><b>K ꓘ</b> strikeout swinging · looking</span>
+          <span><b>BB HBP IBB</b> free pass</span>
+          <span><b>6-3</b> putout by position</span>
+          <span><b>E6</b> error</span>
+          <span><b>●</b> RBI</span>
+          <span><b>◆</b> filled diamond = run scored</span>
         </div>
-        <div class="notes-box" style="flex:1;min-width:160px;margin-bottom:0;display:flex;flex-direction:column">
-          <label for="game-notes">Notes</label>
-          <textarea id="game-notes" placeholder="Game notes..." style="flex:1;height:auto;min-height:200px"></textarea>
+      </div>
+      <div class="sec-panel" data-panel="pitch">
+        <div class="pitcher-section" id="pitchers-home"></div>
+      </div>
+      <div class="sec-panel" data-panel="spray">
+        <div style="display:flex;gap:30px;align-items:flex-start;flex-wrap:wrap">
+          <div class="spray-mini" id="spray-home" style="width:300px">
+            <h4>Home Spray Chart</h4>
+            <svg class="spray-mini-svg" data-team="home" viewBox="0 0 300 300" width="290" height="290">
+              <image href="field.png" x="0" y="0" width="300" height="300" preserveAspectRatio="xMidYMid meet"></image>
+            </svg>
+          </div>
+          <div class="notes-box" style="flex:1;min-width:280px">
+            <label for="game-notes">Notes</label>
+            <textarea id="game-notes" placeholder="Game notes..."></textarea>
+          </div>
         </div>
       </div>
     </div>
   </div>
+</div>
 
 <div class="spray-popup" id="spray-popup">
   <h3>Where was it hit?</h3>
   <svg id="spray-field" viewBox="0 0 300 300" width="300" height="300">
-    <image href="field.png" x="0" y="0" width="300" height="300" preserveAspectRatio="xMidYMid meet"/>
-    <circle id="spray-marker" cx="0" cy="0" r="8" fill="red" stroke="#fff" stroke-width="2" display="none"/>
+    <image href="field.png" x="0" y="0" width="300" height="300" preserveAspectRatio="xMidYMid meet"></image>
+    <circle id="spray-marker" cx="0" cy="0" r="8" fill="#c0111f" stroke="#fff" stroke-width="2" display="none"></circle>
   </svg>
-  <div class="spray-hint">Click where the ball was hit</div>
+  <div class="spray-hint">Tap where the ball was hit</div>
   <button class="spray-skip" id="spray-skip">Skip</button>
 </div>
 
-<!-- Game Library Modal -->
 <div class="modal-overlay" id="game-library-modal">
   <div class="modal-box">
     <h2>Game Library</h2>
     <div id="game-library-list"></div>
-    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
       <button class="modal-close" data-act="exportGameJSON">Export Game (JSON)</button>
       <button class="modal-close" data-act="openImportPicker">Import Game (JSON)</button>
       <input type="file" id="import-game-file" accept="application/json,.json" style="display:none" data-act="importGameJSON" data-arg="this" data-act-on="change">
@@ -346,13 +396,10 @@
   </div>
 </div>
 
-<script src="app.js"></script>
-
 <div class="hotkey-modal" id="hotkey-modal" data-act="closeModalOnBackdrop">
   <div class="hotkey-modal-inner" style="position:relative">
     <button class="hotkey-close" data-act="closeHotkeyModal">&times;</button>
     <h2>Keyboard Shortcuts</h2>
-    
     <h3>Pitch Tracking</h3>
     <table class="hk-table">
       <tr><td>S</td><td>Strike (swinging/called)</td><td>Red ✕ marker</td></tr>
@@ -360,25 +407,22 @@
       <tr><td>B</td><td>Ball</td><td>Blue ● marker</td></tr>
       <tr><td>Z</td><td>Undo last pitch</td><td>Removes last pitch</td></tr>
     </table>
-    
     <h3>Hits</h3>
     <table class="hk-table">
-      <tr><td>1</td><td>Single (1B)</td><td>Runner on 1st, green cell</td></tr>
-      <tr><td>2</td><td>Double (2B)</td><td>Runner on 2nd, green cell</td></tr>
-      <tr><td>3</td><td>Triple (3B)</td><td>Runner on 3rd, green cell</td></tr>
-      <tr><td>4</td><td>Home Run (HR)</td><td>All score, yellow cell</td></tr>
+      <tr><td>1</td><td>Single (1B)</td><td>Runner on 1st</td></tr>
+      <tr><td>2</td><td>Double (2B)</td><td>Runner on 2nd</td></tr>
+      <tr><td>3</td><td>Triple (3B)</td><td>Runner on 3rd</td></tr>
+      <tr><td>4</td><td>Home Run (HR)</td><td>All score</td></tr>
     </table>
-    
     <h3>Outs</h3>
     <table class="hk-table">
-      <tr><td>K</td><td>Strikeout</td><td>Swinging K, red cell</td></tr>
+      <tr><td>K</td><td>Strikeout</td><td>Swinging or looking</td></tr>
       <tr><td>G</td><td>Ground out</td><td>Popup: multi-position OK (6-3, 5-4-3)</td></tr>
       <tr><td>X</td><td>Fly out</td><td>Popup: position (7, 8, 9)</td></tr>
       <tr><td>P</td><td>Pop out</td><td>Popup: position (4, 6)</td></tr>
       <tr><td>L</td><td>Line out</td><td>Popup: position (3, 6)</td></tr>
       <tr><td>D</td><td>Double play</td><td>Popup: multi-position (6-4-3) + runner outcomes</td></tr>
     </table>
-    
     <h3>Walks &amp; Other</h3>
     <table class="hk-table">
       <tr><td>W</td><td>Walk (BB)</td><td>4 balls auto-triggers too</td></tr>
@@ -387,52 +431,49 @@
       <tr><td>E</td><td>Error</td><td>Popup: fielder position (E6)</td></tr>
       <tr><td>Q</td><td>Sacrifice fly (SF)</td><td>Out + runners advance</td></tr>
     </table>
-    
     <h3>Runner Events (mid at-bat)</h3>
     <table class="hk-table">
-      <tr><td>R</td><td>Stolen base (SB)</td><td>Pick runner — includes SB+E (error on throw, extra base)</td></tr>
+      <tr><td>R</td><td>Stolen base (SB)</td><td>Pick runner — includes SB+E</td></tr>
       <tr><td>J</td><td>Caught stealing (CS)</td><td>Pick which runner, out recorded</td></tr>
-      <tr><td>O</td><td>Pickoff (PO)</td><td>Pick base — Out or Error (runner advances)</td></tr>
+      <tr><td>O</td><td>Pickoff (PO)</td><td>Pick base — Out or Error</td></tr>
       <tr><td>N</td><td>Wild pitch / Passed ball</td><td>All runners advance 1</td></tr>
     </table>
-    
     <h3>Game Management</h3>
     <table class="hk-table">
-      <tr><td>U</td><td>Undo</td><td>Pitches, plays, SB, CS, WP, PB, PO, subs — all undoable</td></tr>
+      <tr><td>U</td><td>Undo</td><td>Pitches, plays, SB, CS, WP, PB, PO, subs</td></tr>
       <tr><td>Y</td><td>Redo</td><td>Unlimited redo depth</td></tr>
-      <tr><td>C</td><td>Clear all</td><td>Wipes entire cell (pitches + play + runners)</td></tr>
+      <tr><td>C</td><td>Clear all</td><td>Wipes entire cell</td></tr>
       <tr><td>?</td><td>Show this guide</td><td></td></tr>
       <tr><td>↑↓←→</td><td>Navigate cells</td><td>Arrow keys move selection</td></tr>
       <tr><td>Esc</td><td>Close popups</td><td></td></tr>
     </table>
-
-    <h3>Corrections (fix mistakes)</h3>
+    <h3>Corrections</h3>
     <table class="hk-table">
       <tr><td>T</td><td>Edit play type</td><td>Change 1B→2B etc. — keeps pitches</td></tr>
-      <tr><td>M</td><td>Edit runners</td><td>Re-open runner popup to fix advancements</td></tr>
+      <tr><td>M</td><td>Edit runners</td><td>Re-open runner popup</td></tr>
       <tr><td>BTN</td><td>CLR Play</td><td>Clear play result only, keep pitch count</td></tr>
       <tr><td>BTN</td><td>Move</td><td>Manually move a runner to any base</td></tr>
       <tr><td>BTN</td><td>Spray</td><td>Re-open spray chart to reposition hit</td></tr>
-      <tr><td>BTN</td><td>RBI+ / RBI-</td><td>Manually adjust RBI count</td></tr>
-      <tr><td>BTN</td><td>E/UE</td><td>Toggle earned/unearned run on scored runner</td></tr>
+      <tr><td>BTN</td><td>RBI+ / RBI−</td><td>Manually adjust RBI count</td></tr>
+      <tr><td>BTN</td><td>E/UE</td><td>Toggle earned/unearned run</td></tr>
     </table>
-
-    <h3>Quick Bar Buttons (no hotkey)</h3>
+    <h3>Buttons with no hotkey</h3>
     <table class="hk-table">
-      <tr><td>BTN</td><td>K+WP — Dropped third strike</td><td>Batter reaches 1st</td></tr>
-      <tr><td>BTN</td><td>TP — Triple play</td><td>Position + runner outcomes</td></tr>
-      <tr><td>BTN</td><td>SH — Sacrifice bunt</td><td>Out + runners advance</td></tr>
-      <tr><td>BTN</td><td>FC — Fielder's choice</td><td>Position + runner outcomes</td></tr>
-      <tr><td>BTN</td><td>CI — Catcher's interference</td><td>Batter to 1st</td></tr>
-      <tr><td>BTN</td><td>IF — Infield fly</td><td>Automatic out</td></tr>
-      <tr><td>BTN</td><td>BK — Balk</td><td>All runners advance 1</td></tr>
-      <tr><td>BTN</td><td>PB — Passed ball</td><td>Runners advance (unearned)</td></tr>
-      <tr><td>BTN</td><td>P.Chg — Pitcher change</td><td>Red line on cell</td></tr>
-      <tr><td>BTN</td><td>SUB — Substitution</td><td>Vertical red line on cell</td></tr>
+      <tr><td>BTN</td><td>K+WP — dropped third strike</td><td>Batter reaches 1st</td></tr>
+      <tr><td>BTN</td><td>TP — triple play</td><td>Position + runner outcomes</td></tr>
+      <tr><td>BTN</td><td>SH — sacrifice bunt</td><td>Out + runners advance</td></tr>
+      <tr><td>BTN</td><td>FC — fielder's choice</td><td>Position + runner outcomes</td></tr>
+      <tr><td>BTN</td><td>CI — catcher's interference</td><td>Batter to 1st</td></tr>
+      <tr><td>BTN</td><td>IF — infield fly</td><td>Automatic out</td></tr>
+      <tr><td>BTN</td><td>BK — balk</td><td>All runners advance 1</td></tr>
+      <tr><td>BTN</td><td>PB — passed ball</td><td>Runners advance (unearned)</td></tr>
+      <tr><td>BTN</td><td>P.Chg — pitcher change</td><td>Red line on cell</td></tr>
+      <tr><td>BTN</td><td>SUB — substitution</td><td>Vertical red line on cell</td></tr>
     </table>
-    
     <div class="hotkey-hint">Press ? or Esc to close</div>
   </div>
 </div>
+<script src="ui.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
