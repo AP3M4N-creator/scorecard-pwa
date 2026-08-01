@@ -4594,7 +4594,7 @@
   // `clearSelectedCell` blanks `ab.pitcherChangeNum` (app.js:4180) and leaves
   // `inn.currentPitcher` on the reliever, so the card no longer records when he
   // came in while the state still says he is out there.
-  xfail('M1', 'clearing a play takes its pitching change off the mound with it', () => {
+  test('clearing a play takes its pitching change off the mound with it', () => {
     sel('visiting', 0, 0); play('K');
     sel('visiting', 3, 0); usePitcher(1); play('K');   // the reliever comes in here
     sel('visiting', 6, 0); play('K');                  // and this is the latest play
@@ -4607,13 +4607,24 @@
     eq('and not to the reliever', pStat('visiting', 1, 'h'), '');
   });
 
+  // The markers are the record, so the last one left in the column is the one the
+  // mound goes back to — a column can hand the ball over twice.
+  test('clearing the second change in a column leaves the first standing', () => {
+    sel('visiting', 0, 0); usePitcher(1); play('K');
+    sel('visiting', 3, 0); usePitcher(2); play('K');
+    sel('visiting', 6, 0); play('1B');                 // the latest play, so p3 is not
+    sel('visiting', 3, 0); clearSelectedCell();
+    eq('the first change still stands', getEffectivePitcher('visiting', 0), 1);
+    ok('and the column still claims a pitcher', inn('visiting', 0).pitcherSet);
+  });
+
   /* ---- M2: redo skips the tail --------------------------------------- */
 
   // `restoreSnapshot` puts the data back and stops there, so a redone third out
   // leaves the half-inning open — no side change, no leadoff, and every further
   // entry refused as "3 outs". Audit 3's Family A fixed this same hole for
   // `editRunners` and `moveRunner`.
-  xfail('M2', 'a redone third out ends the half-inning', () => {
+  test('a redone third out ends the half-inning', () => {
     sel('visiting', 0, 0);
     play('K'); play('K'); play('K');
     eq('three outs', inn('visiting', 0).outs, 3);
@@ -4627,12 +4638,36 @@
     eq('the home half is up', selectedCell.dataset.team, 'home');
   });
 
+  test('a redone walk-off ends the game', () => {
+    sel('home', 0, 8);
+    play('HR');
+    ok('the game is over', gameOverShown);
+    undoLastPlay();
+    ok('and not over after the undo', !gameOverShown);
+    redoLastPlay();
+    eq('the run is back on the line', lsInput('home', 8).value, '1');
+    ok('and so is the result', gameOverShown);
+  });
+
+  // The tail's `advanceBatter` is the caller's to decide, and a runner event is not
+  // a plate appearance: the same man is still at bat, before and after a redo.
+  test('a redone stolen base leaves the same batter at the plate', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st, p3 up
+    promptSBBase(); basePicker(0);
+    eq('he is on 2nd', onB('visiting', 0, 1), 0);
+    undoLastPlay();
+    redoLastPlay();
+    eq('he is on 2nd again', onB('visiting', 0, 1), 0);
+    eq('and the same batter is up', curP(), 3);
+  });
+
   /* ---- M3: the defensive-change log ----------------------------------- */
 
   // `applyFieldPos` builds the label from state (app.js:5588) and *stores* it, so
   // a change recorded within the 400ms debounce is logged permanently as "Pos 1".
   // Audit 3's L3 was the display version of this one.
-  xfail('M3', 'a defensive change logs the name the scorer has typed', () => {
+  test('a defensive change logs the name the scorer has typed', () => {
     lineupDirty = true;
     setPos('visiting', 0, 'CF');
     setPlayer('visiting', 0, '9', 'Ortiz');          // typed, not yet collected

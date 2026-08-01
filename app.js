@@ -3736,6 +3736,20 @@ function redoLastPlay() {
   playHistory.push(undo);
   redoHistory.pop();
   restoreSnapshot(next);
+  /* The tail every other mutator ends in (M2). `restoreSnapshot` puts the data
+     back correctly — outs, bases, runs, LOB and both stat tables — and stops
+     there, so a redone third out left the half-inning open: no side change, no
+     leadoff, and every further entry refused as "3 outs". A redone walk-off left
+     `gameOverShown` false while the card read FINAL. Audit 3's Family A closed
+     this same hole for `editRunners` and `moveRunner`.
+
+     The selection moves on only if what was redone was a completed plate
+     appearance, which is exactly what `inn.lastPA` records. A redone steal or
+     runner edit leaves the same batter standing at the plate, as it does the
+     first time round. */
+  const inn = getInnState(next.team, next.innIdx);
+  const wasPA = !!(inn.lastPA && inn.lastPA.pIdx === next.pIdx && inn.lastPA.col === next.innIdx);
+  afterStateChange(next.team, next.innIdx, { advanceBatter: wasPA });
 }
 
 /* Feature 2: Edit play type — swap play on completed cell, re-prompt runners */
@@ -4286,7 +4300,12 @@ function clearSelectedCell() {
     ab.advReason = ['','','',''];
     ab.advSrc = null;
     ab.reachedOnError = false;
+    // The marker and the mound go together (M1) — see `resyncInningPitcher`. The
+    // `isLatest` branch above needs none of this: it puts the inning records back
+    // wholesale, `currentPitcher` and `pitcherSet` with them.
+    const hadPitcherChange = !!ab.pitcherChangeNum;
     ab.pitcherChangeNum = '';
+    if (hadPitcherChange) resyncInningPitcher(team, innIdx);
     // The pinch runner went with the plate appearance he was running in (H2).
     ab.prRow = 0;
     // A sub line spans from here to the end of the game; clear the whole contiguous
@@ -5691,12 +5710,13 @@ function applyFieldPos(team, starterP, pos, innLabel) {
   if (posPlayer) posPlayer.pos = pos;
   if (oldPos && oldPos !== pos && innLabel) {
     if (!gameState.defChanges) gameState.defChanges = [];
-    const player = gameState.teams[team].players[starterP];
-    // Whoever is in the slot now, which may be the second sub (H3).
-    const active = gameState.teams[team].players[starterP + currentSlotRow(team, starterP)];
-    const activeName = active.name || player.name;
-    const activeNum = active.name ? active.num : player.num;
-    const displayName = (activeNum ? '#' + activeNum + ' ' : '') + (activeName || 'Pos ' + (Math.floor(starterP / ROWS_PER_POS) + 1));
+    // Whoever is in the slot now, which may be the second sub (H3) — named through
+    // `rowLabel`, which reads the inputs (M3). This built the name out of state and
+    // then *stored* it, so a change recorded inside the 400ms save debounce was
+    // logged permanently as "Pos 1". Audit 3's L3 was the same bug in a place that
+    // only displayed it; here it goes onto the card. `rowLabel` also numbers an
+    // unnamed row the way the row's own placeholder does.
+    const displayName = rowLabel(team, starterP + currentSlotRow(team, starterP));
     let existing = gameState.defChanges.find(d => d.inning === innLabel && d.team === team);
     if (!existing) {
       existing = { inning: innLabel, team, changes: [] };
@@ -5737,6 +5757,43 @@ function setPitcher(idx) {
   const popup = document.getElementById('pitcher-popup');
   if (popup) popup.style.display = 'none';
   autoSave();
+}
+
+/* Put a column's mound state back to what its change markers say (M1).
+
+   `setPitcher` writes two things: the marker on the cell, and `currentPitcher` /
+   `pitcherSet` on the inning. Clearing the cell took back the marker and left the
+   inning pointing at the reliever, so the card no longer recorded when he came in
+   while the state still had him out there — `getEffectivePitcher` said reliever,
+   `computePitcherPlan`, which walks the markers, said starter, and "Fix Stats"
+   offered to move at-bats to a man it disagreed with itself about.
+
+   The markers are the record, so they are what this reads. The last one in the
+   column wins — a column can hand the ball over twice — and with none left the
+   column stops claiming a pitcher of its own and inherits again, which is what
+   `getEffectivePitcher` does with `pitcherSet` false. Every row is walked, not
+   just the starters: a change can be marked on a substitute's cell. */
+function resyncInningPitcher(team, innIdx) {
+  const inn = getInnState(team, innIdx);
+  const pitchers = gameState.teams[team === 'visiting' ? 'home' : 'visiting'].pitchers;
+  const players = gameState.teams[team].players;
+  let found = null;
+  for (let p = 0; p < players.length; p++) {
+    const ab = players[p].atBats[innIdx];
+    if (!ab || !ab.pitcherChangeNum) continue;
+    const idx = resolvePitcherIndex(pitchers, ab.pitcherChangeNum);
+    if (idx != null) found = idx;
+  }
+  if (found != null) {
+    inn.currentPitcher = found;
+    inn.pitcherSet = true;
+  } else {
+    inn.pitcherSet = false;
+    // Left agreeing with what the column now inherits: the outs-log backfill
+    // (app.js:4752) reads `currentPitcher` directly rather than asking, and a
+    // column that says one thing and inherits another is the bug over again.
+    inn.currentPitcher = innIdx > 0 ? getEffectivePitcher(team, innIdx - 1) : 0;
+  }
 }
 
 function renderPitcherChange(team, pIdx, innIdx) {
