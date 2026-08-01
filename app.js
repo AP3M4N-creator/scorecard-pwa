@@ -1392,6 +1392,13 @@ function showPlayNotice(msg) { showPlayToast(msg, 'notice'); }
 // the same thing about it (L2). One constant, because six copies of a sentence drift.
 const INNING_OVER = 'The inning already has 3 outs — clear a play first.';
 
+// The other wall, and a different answer: this one cannot be cleared by hand. The
+// card is fifteen columns wide and an inning that bats around takes more than one
+// of them, so a side can run out of card — at the end of the 15th, or earlier if
+// enough innings batted around. `overflowToNextColumn` has said this since L4; the
+// half-inning transition used to meet the same wall and blame the 3 outs (M1).
+const CARD_FULL = 'The card is full — no column left for this inning.';
+
 // Popups that own the current entry get a backdrop, so a tap meant for the popup
 // can't land on the grid and move the selection underneath it (#1, #29).
 const BACKDROP_GUARDED = ['k-popup', 'pos-popup', 'runner-popup', 'outcome-popup'];
@@ -2677,7 +2684,15 @@ function shiftColumnsRight(team, at, realInning) {
     // The overflow continues the same half-inning, so the same man is in the
     // slot: carry the sub line across or a substitution's run of columns is split
     // in two by a blank one, and the column reads as the starter's.
-    if (at > 0) fresh.subChange = subRowOf(player.atBats[at - 1]);
+    //
+    // `runRowOf`, not `subRowOf` (M2): who is in the slot going forward is who was
+    // *running* the column before, and a pinch runner lives in `prRow` — his own
+    // column still reports the row that batted it, which is the man he came in for.
+    // Seeded from `subChange` alone, the inserted column was handed back to that
+    // man, the runner's own sub line resumed one column late, and the rows down the
+    // slot read 0, 0, 1, 1. A pinch hitter has no `prRow`, so his columns are
+    // unaffected — `runRowOf` falls through to `subRowOf` for him.
+    if (at > 0) fresh.subChange = runRowOf(player.atBats[at - 1]);
     player.atBats[at] = fresh;
   }
   remapColumnRefs(team, c => (typeof c === 'number' && c >= at ? c + 1 : c));
@@ -2725,7 +2740,7 @@ function overflowToNextColumn(team, innIdx) {
   if (!gameState.columnMap) gameState.columnMap = { visiting:defaultColumnMap(), home:defaultColumnMap() };
   const realInning = getRealInning(team, innIdx);
   if (nextCol >= INNINGS || !shiftColumnsRight(team, nextCol, realInning)) {
-    showPlayReject('The card is full — no column left for this inning.');
+    showPlayReject(CARD_FULL);
     return;
   }
 
@@ -2772,11 +2787,22 @@ function columnIsFull(team, col) {
    runs went onto the line against the wrong inning.
 
    The column map is the record, so ask it. A batted-around inning has more than one
-   column; the one to bat in is the first with a spot still open. */
+   column; the one to bat in is the first with a spot still open.
+
+   Returns -1 when the card has no column for this inning at all (M1) — past the
+   fifteenth, or an inning whose column an earlier bat-around has since consumed.
+   It used to answer `INNINGS - 1` for the first of those and `realInn` for the
+   second, both of which name a column belonging to some *other* inning: the
+   selection was parked on a half-inning already spent, and every entry there was
+   refused as "the inning already has 3 outs" — a wall the scorer can clear by hand,
+   which is not the one he had hit. Callers say CARD_FULL instead. */
 function columnForInning(team, realInn) {
-  if (realInn >= INNINGS) return INNINGS - 1;
+  if (realInn >= INNINGS) return -1;
   const cols = getColumnsForInning(team, realInn);
-  if (!cols.length) return Math.min(realInn, INNINGS - 1);
+  // Every column is mapped to some inning, so an inning with none of them has been
+  // squeezed off the end of the card by a bat-around — there is no free one to fall
+  // back to.
+  if (!cols.length) return -1;
   for (const col of cols) if (!columnIsFull(team, col)) return col;
   return cols[cols.length - 1];
 }
@@ -2800,13 +2826,16 @@ function switchToNextHalf(team, innIdx) {
   // The visitor's half of an inning is followed by the home team's half of the
   // same one; the home team's by the visitor's half of the next.
   const realInn = getRealInning(team, innIdx);
-  if (team === 'visiting') {
-    switchTab('home');
-    selectNextBatterForInning('home', columnForInning('home', realInn));
-  } else {
-    switchTab('visiting');
-    selectNextBatterForInning('visiting', columnForInning('visiting', realInn + 1));
-  }
+  const nextTeam = team === 'visiting' ? 'home' : 'visiting';
+  const nextInn = team === 'visiting' ? realInn : realInn + 1;
+  const nextCol = columnForInning(nextTeam, nextInn);
+  // M1: the card has run out. Say which wall this is and leave the selection on the
+  // half-inning that just ended — there is no cell that stands for the inning being
+  // asked for, so any cell this moved to would be some other inning's, and the one
+  // it used to move to was a half-inning with three outs already on it.
+  if (nextCol < 0) { showPlayReject(CARD_FULL); return; }
+  switchTab(nextTeam);
+  selectNextBatterForInning(nextTeam, nextCol);
 }
 
 // The next inning leads off with the batter after the last completed plate
@@ -2838,10 +2867,12 @@ function markNextInningLeadoff(team, innIdx) {
 
   const nextPos = (lastPos + 1) % POSITIONS;
   const nextP = nextPos * ROWS_PER_POS;
-  // This side's *next* inning, by the map — not `getNextFreeColumn`, which parks
-  // the order against whichever column happens to be blank and so filed the
-  // leadoff under an inning nobody had reached yet (M3).
+  // This side's *next* inning, by the map — not the column scan this used to use,
+  // which parked the order against whichever column happened to be blank and so
+  // filed the leadoff under an inning nobody had reached yet (M3). There may be no
+  // column for it at all, in which case there is nothing to file (M1).
   const nextCol = columnForInning(team, realInning + 1);
+  if (nextCol < 0) return;
 
   if (!gameState.nextLeadoff) gameState.nextLeadoff = {};
   if (!gameState.nextLeadoff[team]) gameState.nextLeadoff[team] = {};
@@ -5644,6 +5675,44 @@ function computePitcherPlan() {
   return plan;
 }
 
+/* The outs that go with the at-bats a repair moves (M3).
+
+   IP is not derived from `ab.pitcher`: it counts `inn.outsLog[]` entries, each
+   stamped with the pitcher who was on the mound when that out was made. So moving
+   the at-bats alone moved a strikeout and left the out that made it behind — starter
+   0.2 IP with 1 K, reliever 0.0 IP with 1 K — while the popup promised it updates
+   IP.
+
+   An out belongs to the play that caused it, and `srcP`/`srcCol` point at that plate
+   appearance, so the outs to move are the ones whose source at-bat the plan moves.
+   Only those still stamped with that at-bat's *old* pitcher, though: a caught
+   stealing or a pickoff is logged against the runner's own batting cell on purpose
+   (see `applyCSAtBase`), carrying the pitcher who threw it rather than the one the
+   runner batted against, and the log has never recorded which plate appearance it
+   happened during. So one already attributed away from its cell is left where it is
+   — there is nothing here that could work out where it belongs. */
+function outLogPlanFor(plan) {
+  const moves = [];
+  if (!plan.length) return moves;
+  const planned = new Map(plan.map(p => [p.ab, p]));
+  ['visiting', 'home'].forEach(battingTeam => {
+    const players = gameState.teams[battingTeam].players;
+    const innings = (gameState.innings && gameState.innings[battingTeam]) || [];
+    for (let col = 0; col < INNINGS; col++) {
+      const inn = innings[col];
+      if (!inn || !Array.isArray(inn.outsLog)) continue;
+      for (const o of inn.outsLog) {
+        if (o.srcP == null) continue;
+        const srcAb = players[o.srcP] && players[o.srcP].atBats[o.srcCol];
+        const p = srcAb && planned.get(srcAb);
+        if (!p || (o.pitcher || 0) !== p.from) continue;
+        moves.push({ out: o, to: p.to });
+      }
+    }
+  });
+  return moves;
+}
+
 function recomputePitcherAssignments() {
   const plan = computePitcherPlan();
   let popup = document.getElementById('recompute-popup');
@@ -5668,7 +5737,11 @@ function recomputePitcherAssignments() {
   if (cancel) cancel.onclick = () => { popup.style.display = 'none'; };
   const apply = document.getElementById('rc-apply');
   if (apply) apply.onclick = () => {
+    // The outs are worked out against the attribution the plan is replacing, so
+    // they are collected before the at-bats move (M3).
+    const outMoves = outLogPlanFor(plan);
     plan.forEach(p => { p.ab.pitcher = p.to; });
+    outMoves.forEach(m => { m.out.pitcher = m.to; });
     updatePitcherStats('visiting');
     updatePitcherStats('home');
     autoSave();

@@ -4257,7 +4257,7 @@
   // refused as "the inning already has 3 outs", which names a wall the scorer can
   // clear by hand instead of the one he has really hit. `overflowToNextColumn`
   // already had the sentence for it.
-  xfail('M1', 'a 16th inning says the card is full, not that the inning has 3 outs', () => {
+  test('a 16th inning says the card is full, not that the inning has 3 outs', () => {
     sel('home', 0, INNINGS - 1);                     // the bottom of the 15th
     play('K'); play('K'); play('K');
     flushTimers();                                   // the transition looks for a 16th
@@ -4278,7 +4278,7 @@
   // his column reports the row that *batted* it. So the overflow column was handed
   // back to the starter and the runner's line resumed one column late: rows read
   // 0, 0, 1, 1 down the slot, and the man he replaced was credited the at-bat.
-  xfail('M2', 'a pinch runner keeps the at-bat his inning bats around into', () => {
+  test('a pinch runner keeps the at-bat his inning bats around into', () => {
     sel('visiting', 0, 0);
     play('1B');                                      // p0 on 1st
     sel('visiting', 0, 0);
@@ -4302,7 +4302,7 @@
   // is counted from `inn.outsLog[].pitcher` — so a repair moved the strikeout and
   // left the out that made it behind: starter 0.2 IP with 1 K, reliever 0.0 IP
   // with 1 K. The popup promises "This updates IP, PC, H, R, ER, K and BB".
-  xfail('M3', 'fix stats moves the out along with the strikeout', () => {
+  test('fix stats moves the out along with the strikeout', () => {
     sel('visiting', 0, 0);
     play('K'); play('K');                            // two outs, both off the starter
     sel('visiting', 3, 0);                           // the 2nd K's cell, already played
