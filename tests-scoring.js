@@ -6,13 +6,7 @@
  * points the UI uses (selectCell, applyPlay, popup buttons, keydown) rather than
  * poking state, so a fix has to work on the real user path.
  *
- * test(...)         must pass; a failure fails the run.
- * xfail('#n', ...)  asserts the CORRECT behaviour for a known bug the code does
- *                   not have yet. A failure is expected and reported as a known
- *                   failure; once the fix lands the case starts passing and the
- *                   runner tells you to drop the marker. No cases currently use
- *                   it — the 2026-07-28 audit's findings were all promoted to
- *                   plain tests — but it stays for the next one.
+ * test(...) must pass; a failure fails the run.
  */
 (function () {
   'use strict';
@@ -185,17 +179,15 @@
   }
   function ok(what, cond) { if (!cond) fail(what); }
 
-  function record(name, fn, xfailFinding) {
+  function test(name, fn) {
     reset();
     try {
       fn();
-      results.push({ name, pass: true, xfail: xfailFinding });
+      results.push({ name, pass: true });
     } catch (e) {
-      results.push({ name, pass: false, xfail: xfailFinding, error: (e && e.message) || String(e) });
+      results.push({ name, pass: false, error: (e && e.message) || String(e) });
     }
   }
-  function test(name, fn) { record(name, fn); }
-  function xfail(finding, name, fn) { record(name, fn, finding); }
 
   /* ------------------------------------------------------------ drivers ---*/
   /* `p` throughout is a lineup *row* index, not a batting spot: a row is
@@ -537,8 +529,8 @@
   });
 
   /* =====================================================================
-     Phase 2 — result-changing bugs, fixed. Promoted from xfail; each case now
-     guards the fix for the audit finding named in its comment.
+     Phase 2 — result-changing bugs, fixed. Each case guards the fix for the
+     audit finding named in its comment.
      ===================================================================== */
 
   // #1

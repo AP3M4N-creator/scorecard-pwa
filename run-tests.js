@@ -18,11 +18,6 @@
  * app.js and the suite as classic scripts in one realm, which is the only way a
  * suite can reach app.js's top-level `let gameState` / `let selectedCell`
  * bindings (they are global lexical bindings, not properties of window).
- *
- * Known-failure ("xfail") results are expected: they are the audit findings that
- * later phases fix, asserting the *correct* behaviour today. They do not fail
- * the run. A known failure that starts passing DOES fail the run — that is the
- * signal to promote it to a plain test.
  */
 
 const fs = require('fs');
@@ -97,7 +92,7 @@ function label(suite) {
 }
 
 const started = Date.now();
-let passed = 0, failed = 0, known = 0;
+let passed = 0, failed = 0;
 
 console.log('\nScorecard test suite\n');
 
@@ -106,26 +101,12 @@ for (const suite of SUITES) {
   const { results, fatal, warnings } = runSuite(suite);
 
   for (const r of results) {
-    const name = r.name;
-    if (r.xfail) {
-      if (r.pass) {
-        // The finding this case documents appears to be fixed.
-        failed++;
-        console.log(`  ✗ known failure ${r.xfail} NOW PASSES — promote it: drop the xfail marker`);
-        console.log(`      ${name}`);
-      } else {
-        known++;
-        if (!QUIET) {
-          console.log(`  ⚠ known failure ${r.xfail} — ${name}`);
-          console.log(`      ${r.error}`);
-        }
-      }
-    } else if (r.pass) {
+    if (r.pass) {
       passed++;
-      if (!QUIET) console.log(`  ✓ ${name}`);
+      if (!QUIET) console.log(`  ✓ ${r.name}`);
     } else {
       failed++;
-      console.log(`  ✗ ${name}`);
+      console.log(`  ✗ ${r.name}`);
       console.log(`      ${r.error}`);
     }
   }
@@ -140,9 +121,6 @@ for (const suite of SUITES) {
 }
 
 const secs = ((Date.now() - started) / 1000).toFixed(1);
-const parts = [`${passed} passed`];
-if (known) parts.push(`${known} known failures`);
-parts.push(`${failed} failed`);
-console.log(`${parts.join(' · ')}  (${secs}s)\n`);
+console.log(`${passed} passed · ${failed} failed  (${secs}s)\n`);
 
 process.exit(failed ? 1 : 0);

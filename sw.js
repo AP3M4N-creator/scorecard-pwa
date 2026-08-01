@@ -5,25 +5,16 @@
 //  - Fonts/icons are stale-while-revalidate: instant from cache, refreshed
 //    in the background.
 // Bump SHELL_VERSION only if you ever need to force-drop the whole cache.
-const SHELL_VERSION = 'v72';
+const SHELL_VERSION = 'v73';
 const CACHE = 'scorecard-' + SHELL_VERSION;
 
+// One file per family (per subset for Source Sans): they are variable fonts,
+// so a single file covers every weight the stylesheet asks for.
 const FONTS = [
-  'fonts/oswald-400-latin.woff2',
-  'fonts/oswald-500-latin.woff2',
-  'fonts/oswald-600-latin.woff2',
-  'fonts/oswald-700-latin.woff2',
-  'fonts/source-sans-3-400-ext.woff2',
-  'fonts/source-sans-3-400-latin.woff2',
-  'fonts/source-sans-3-500-ext.woff2',
-  'fonts/source-sans-3-500-latin.woff2',
-  'fonts/source-sans-3-600-ext.woff2',
-  'fonts/source-sans-3-600-latin.woff2',
-  'fonts/source-sans-3-700-ext.woff2',
-  'fonts/source-sans-3-700-latin.woff2',
-  'fonts/jetbrains-mono-500-latin.woff2',
-  'fonts/jetbrains-mono-600-latin.woff2',
-  'fonts/jetbrains-mono-700-latin.woff2'
+  'fonts/oswald-latin.woff2',
+  'fonts/source-sans-3-ext.woff2',
+  'fonts/source-sans-3-latin.woff2',
+  'fonts/jetbrains-mono-latin.woff2'
 ];
 
 // Files treated as "app code": always try the network first when online.
@@ -39,6 +30,7 @@ self.addEventListener('install', e => {
         base + 'icon-192.png',
         base + 'icon-512.png',
         base + 'icon-180.png',
+        base + 'field.png',
         ...FONTS.map(f => base + f)
       ]);
     }).then(() => self.skipWaiting())
