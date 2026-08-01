@@ -3837,22 +3837,32 @@
   // M1 — `moveRunner` skipped the tail too: no updatePitcherStats, so a run it
   // sent home never reached the pitcher's line, and no recomputeInning, so a
   // settled LOB went on counting a man who had scored.
+  //
+  // The move is made with two out rather than three: H1 refuses a runner move on a
+  // half-inning that is already over, so the third out comes after it here and LOB
+  // is read once the half really has ended.
   test('a runner moved home is charged to the pitcher and leaves LOB', () => {
     sel('visiting', 0, 0);
     play('1B');
-    play('K'); play('K'); play('K');
-    flushTimers();
-    eq('one man left on', lobTotal('visiting'), '1');
+    play('K'); play('K');                            // two out, he is still on 1st
     sel('visiting', 0, 0);
     moveRunner(); mrClick(0, 3);
     eq('the run is on the line', rTotal('visiting'), '1');
     eq('the pitcher is charged with it', pStat('visiting', 0, 'r'), '1');
-    eq('and nobody is left on any more', lobTotal('visiting'), '');
+    sel('visiting', 9, 0);
+    play('K');                                       // the third out, nobody on
+    flushTimers();
+    eq('and nobody is left on', lobTotal('visiting'), '');
   });
 
   // M5 — `applyChosenAdvancements` cleared the runner off the base whether or not
   // `recordOut` accepted the out, so with the inning already at three he came off
   // the bases with nothing to show for it: no out, not left on, gone.
+  //
+  // H1 has since put the wall further forward: a finished half-inning is refused
+  // before the popup opens, so the set of choices this used to answer can no longer
+  // be entered at all. The mutator still refuses it on its own — which is what M5
+  // was about — so that is asserted where it now lives.
   test('a runner is not taken off the bases without an out to show for it', () => {
     sel('visiting', 0, 0);
     play('1B');
@@ -3861,9 +3871,13 @@
     flushTimers();
     eq('two left on', lobTotal('visiting'), '2');
     sel('visiting', 0, 0);
-    editRunners(); runnerPopup({ 1: -2, 0: 0 });     // no out left to record
+    editRunners();
+    ok('the finished half-inning is refused, not asked about', !visible('runner-popup'));
+    // The same choices, straight at the mutator: out at 2nd for the man on 2nd.
+    applyChosenAdvancements('visiting', 0, { 1: -2, 0: 0 }, 'X', { pIdx: 0, col: 0 });
     eq('still three outs', inn('visiting', 0).outs, 3);
     eq('the runner is still on 2nd', onB('visiting', 0, 1), 0);
+    eq('and both men are still left on', lobTotal('visiting'), '2');
     basesConsistent('visiting', 0);
   });
 
@@ -4210,7 +4224,7 @@
   // `applyCSAtBase`, `applyPickoff` and `applyRunnerEvent` all refuse with
   // INNING_OVER; `moveRunner`'s move branch and `applyChosenAdvancements`' advance
   // branch (which is what Rnrs reaches) did not.
-  xfail('H1', 'a stranded runner cannot be walked home after the third out', () => {
+  test('a stranded runner cannot be walked home after the third out', () => {
     sel('visiting', 0, 0);
     play('1B');                                      // p0 on 1st
     play('K'); play('K'); play('K');

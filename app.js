@@ -1797,6 +1797,18 @@ function placeBatter(ab, inn, play, pIdx, col) {
 // thrown out on the play is logged against it and comes off again with it.
 function applyChosenAdvancements(team, innIdx, choices, reason, src) {
   const inn = getInnState(team, innIdx);
+  // H1: nothing moves once the half-inning is over. The stranded runners are still
+  // standing in `inn.bases` — that is where LOB comes from — so the advance branch
+  // below would walk one of them home onto the linescore, the batter's R and the
+  // pitcher's R and ER, and drop him out of LOB. Every sibling refuses the same way
+  // (`applySBAtBase`, `applyCSAtBase`, `applyPickoff`, `applyRunnerEvent`).
+  //
+  // Here rather than inside the branch, because a set of choices *made* while the
+  // inning was live can legitimately record the third out on a lead runner and still
+  // have a trailing runner's advance to write after it. The bases are walked
+  // lead-runner-first (2, 1, 0) precisely so that order holds, and this way that
+  // play still enters exactly as it did.
+  if (inn.outs >= 3) { showPlayReject(INNING_OVER); return; }
   const rsn = reason || '';
   [2, 1, 0].forEach(fromBase => {
     if (inn.bases[fromBase] === null) return;
@@ -3730,6 +3742,13 @@ function editRunners() {
   const innIdx = parseInt(selectedCell.dataset.inn);
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   if (!ab.play) return;
+  // H1: a correction to a half-inning that is already over can only do one of two
+  // illegal things — score a stranded runner or record a 4th out — so it is refused
+  // before the popup opens, the way `applyRunnerEvent` refuses. Asking the scorer
+  // where three runners went and only then turning the whole answer down is a worse
+  // way to say the same no. `applyChosenAdvancements` still holds the line for
+  // whoever calls it next.
+  if (getInnState(team, innIdx).outs >= 3) { showPlayReject(INNING_OVER); return; }
   const batterLbl = getBatterLabel(team, pIdx, innIdx);
   const src = { pIdx, col: innIdx };
   pushUndo(team, pIdx, innIdx);
@@ -3802,6 +3821,13 @@ function moveRunner() {
         reportRunnerCollision(toBase, inn.bases[toBase], rn);
         return;
       }
+      // H1: neither half of this popup works on a finished half-inning. The out
+      // branch has always said so; the move branch walked a stranded runner home —
+      // a run on the linescore, on the batter's R and on the pitcher's R and ER,
+      // and a man dropped out of LOB, all after the third out. The runners are
+      // still offered because they are still standing there, which is exactly why
+      // the refusal has to explain itself (the base picker does the same).
+      if (inn.outs >= 3) { showPlayReject(INNING_OVER); return; }
       // A man off the bases with no out to his name is the one thing this popup
       // could produce that the rest of the app cannot (m3): "Remove" wiped his
       // advancement, his out and his out-on-base and left the play, the hit and the
@@ -3811,7 +3837,6 @@ function moveRunner() {
       // the out is recorded against his own cell, standing on the base he was on,
       // the way a pickoff records one. What the out *was* goes in the play text; an
       // entry made in error is undo's to take back, not this button's.
-      if (isOut && inn.outs >= 3) { showPlayReject(INNING_OVER); return; }
       pushUndo(team, pIdx, innIdx);
       const rab = runnerAtBat(team, rn);
       if (!rab) return;
