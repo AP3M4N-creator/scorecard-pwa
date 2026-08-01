@@ -4180,4 +4180,216 @@
     eq('and the scorer can take it off', ab('visiting', 0, 0).rbi, 0);
     ok('with no refusal', !visible('play-reject'));
   });
+
+  /* =====================================================================
+     2026-07-31 audit — the third pass.
+
+     Ten findings, one case each, asserting the behaviour the fix will have.
+     One commit per severity family:
+
+       High    H1  a run could be scored after the third out — the two manual
+                   runner paths lacked the guard every sibling has
+       Medium  M1  no 16th inning, and the refusal named the wrong wall
+               M2  a pinch runner lost the at-bat his inning batted around into
+               M3  "Fix Stats" moved the strikeout and left its out behind
+       Minor   L1  Rnrs on an empty diamond burned an undo press
+               L2  Move on an empty diamond said nothing at all
+               L3  the summary printed a name the debounce had not scraped yet
+               L4  the player-of-the-game line disagreed with the box score
+                   above it on a sacrifice that achieved nothing
+               L5  applyFieldPos dereferenced its popup unguarded
+               L6  getNextFreeColumn was dead code
+     ===================================================================== */
+
+  /* ---- H1: no run after the third out -------------------------------- */
+
+  // Three outs and the stranded runners are still standing in `inn.bases` — that
+  // is how LOB is derived — so both manual runner paths would walk one of them
+  // home: onto the linescore, onto the batter's R, onto the pitcher's R and ER,
+  // and off LOB. Silently, and it survived a reload. `applySBAtBase`,
+  // `applyCSAtBase`, `applyPickoff` and `applyRunnerEvent` all refuse with
+  // INNING_OVER; `moveRunner`'s move branch and `applyChosenAdvancements`' advance
+  // branch (which is what Rnrs reaches) did not.
+  xfail('H1', 'a stranded runner cannot be walked home after the third out', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st
+    play('K'); play('K'); play('K');
+    flushTimers();
+    eq('the half ended with him on', lobTotal('visiting'), '1');
+
+    sel('visiting', 0, 0);
+    moveRunner(); mrClick(0, 3);                     // Move → Home
+    eq('no run on the line', rTotal('visiting'), '');
+    eq('nothing charged to the pitcher', pStat('visiting', 0, 'r'), '');
+    eq('no run on the batter either', bStat('visiting', 0, 'r'), '');
+    eq('he is still on 1st', onB('visiting', 0, 0), 0);
+    eq('and still left on base', lobTotal('visiting'), '1');
+    ok('the press is answered', visible('play-reject'));
+    ok('and it names the wall',
+       document.getElementById('play-reject').textContent.indexOf('3 outs') >= 0);
+
+    sel('visiting', 0, 0);
+    editRunners();                                   // Rnrs, the other path in
+    ok('a dead half-inning is refused before the popup opens', !visible('runner-popup'));
+    eq('still no run', rTotal('visiting'), '');
+    eq('still left on base', lobTotal('visiting'), '1');
+  });
+
+  /* ---- M1: the end of the card -------------------------------------- */
+
+  // `columnForInning` answered "the last column" for an inning the card has no
+  // room for, so the transition out of the bottom of the 15th parked the leadoff
+  // on column 14 — the 15th, three outs already on it — and every entry there was
+  // refused as "the inning already has 3 outs", which names a wall the scorer can
+  // clear by hand instead of the one he has really hit. `overflowToNextColumn`
+  // already had the sentence for it.
+  xfail('M1', 'a 16th inning says the card is full, not that the inning has 3 outs', () => {
+    sel('home', 0, INNINGS - 1);                     // the bottom of the 15th
+    play('K'); play('K'); play('K');
+    flushTimers();                                   // the transition looks for a 16th
+    eq('the card has no column for a 16th inning', columnForInning('visiting', INNINGS), -1);
+    ok('the press is answered', visible('play-reject'));
+    ok('and it names the wall that was hit',
+       document.getElementById('play-reject').textContent.indexOf('card is full') >= 0);
+    eq('the selection did not cross to the other side', selectedCell.dataset.team, 'home');
+    ok('and no leadoff was filed against a column that does not exist',
+       !gameState.nextLeadoff || !gameState.nextLeadoff.visiting ||
+       gameState.nextLeadoff.visiting[-1] === undefined);
+  });
+
+  /* ---- M2: the pinch runner's own column ---------------------------- */
+
+  // `shiftColumnsRight` seeds the inserted column's sub line from
+  // `subRowOf(atBats[at - 1])`, and a pinch runner does not live in `subChange` —
+  // his column reports the row that *batted* it. So the overflow column was handed
+  // back to the starter and the runner's line resumed one column late: rows read
+  // 0, 0, 1, 1 down the slot, and the man he replaced was credited the at-bat.
+  xfail('M2', 'a pinch runner keeps the at-bat his inning bats around into', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                      // p0 on 1st
+    sel('visiting', 0, 0);
+    markPinchRunner();                               // row 1 runs for him
+    sel('visiting', 3, 0);
+    for (let i = 0; i < 8; i++) play('BB');          // the side bats around
+    eq('the overflow column continues the 1st', getRealInning('visiting', 1), 0);
+    eq('the inserted column is the runner\'s', subRowOf(ab('visiting', 0, 1)), 1);
+    eq('and so is the one after it', subRowOf(ab('visiting', 0, 2)), 1);
+
+    sel('visiting', 0, 1);
+    play('K');                                       // he comes up in the overflow
+    const slot = gameState.teams.visiting.players[0].atBats;
+    eq('the overflow at-bat is his', tallyAtBats('visiting', 0, slot, 1).ab, 1);
+    eq('and the starter keeps only his own', tallyAtBats('visiting', 0, slot, 0).ab, 1);
+  });
+
+  /* ---- M3: Fix Stats keeps its promise ------------------------------ */
+
+  // `recomputePitcherAssignments` reassigns `ab.pitcher` and nothing else, but IP
+  // is counted from `inn.outsLog[].pitcher` — so a repair moved the strikeout and
+  // left the out that made it behind: starter 0.2 IP with 1 K, reliever 0.0 IP
+  // with 1 K. The popup promises "This updates IP, PC, H, R, ER, K and BB".
+  xfail('M3', 'fix stats moves the out along with the strikeout', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K');                            // two outs, both off the starter
+    sel('visiting', 3, 0);                           // the 2nd K's cell, already played
+    usePitcher(1);                                   // the change really happened before it
+    recomputePitcherAssignments();
+    clickId('rc-apply');
+    eq('the starter keeps his own out', pStat('visiting', 0, 'ip'), '0.1');
+    eq('with the K that goes with it', pStat('visiting', 0, 'k'), '1');
+    eq('the reliever gets the out he made', pStat('visiting', 1, 'ip'), '0.1');
+    eq('with his own K', pStat('visiting', 1, 'k'), '1');
+  });
+
+  /* ---- L1 / L2: a press that changes nothing says why ---------------- */
+
+  // m1 fixed exactly this for `applyRunnerEvent`: with the bases empty
+  // `showRunnerPopup` calls straight back with `{}`, so nothing changed — but the
+  // snapshot had already been pushed and the redo stack cleared, leaving a dead
+  // Undo press between the scorer and the last play that really happened.
+  xfail('L1', 'pressing Rnrs with the bases empty does not burn an undo press', () => {
+    sel('visiting', 0, 0);
+    play('K');
+    sel('visiting', 0, 0);
+    const undos = playHistory.length;
+    editRunners();
+    eq('nothing pushed to undo', playHistory.length, undos);
+    ok('the press is answered', visible('play-reject'));
+    ok('and it says what is missing',
+       document.getElementById('play-reject').textContent.indexOf('no runner to move') >= 0);
+  });
+
+  // The app's own policy, from NOTHING_TO_MOVE and removePitch: a press that
+  // changes nothing says why. `moveRunner` returned bare.
+  xfail('L2', 'pressing Move with the bases empty says why', () => {
+    sel('visiting', 0, 0);
+    play('K');
+    sel('visiting', 0, 0);
+    moveRunner();
+    ok('no popup', !visible('move-runner-popup'));
+    ok('the press is answered', visible('play-reject'));
+    ok('and it says what is missing',
+       document.getElementById('play-reject').textContent.indexOf('no runner to move') >= 0);
+  });
+
+  /* ---- L3: the summary reads the card, not the last save ------------- */
+
+  // `collectState` scrapes the lineup inputs on the 400ms debounce, so a name
+  // typed just before the summary opened was not in the state yet and the box
+  // score printed "Pos 1". `livePlayerField` exists for this and every popup
+  // already uses it.
+  xfail('L3', 'the summary prints a name typed a moment before it opened', () => {
+    setPlayer('visiting', 0, '7', 'Molina');         // typed, not yet scraped
+    sel('visiting', 0, 0);
+    play('1B');
+    eq('the debounce has not scraped it yet', gameState.teams.visiting.players[0].name, '');
+    showGameSummary();
+    const names = Array.from(document.querySelectorAll('#gs-inner tr'))
+      .map(tr => (tr.children[0] && tr.children[0].textContent) || '');
+    ok('the box score names him', names.some(n => n.indexOf('Molina') >= 0));
+    const hl = document.querySelector('#gs-inner .gs-hl-value');
+    ok('and so does the player of the game', !!hl && hl.textContent.indexOf('Molina') >= 0);
+    document.getElementById('game-summary-modal').classList.remove('active');
+  });
+
+  /* ---- L4: one answer to "was that an at-bat" ----------------------- */
+
+  // Rule 9.02(a)(1): a sacrifice costs no at-bat only if it did its job, which is
+  // what `tallyAtBats` / `sacrificeExemptsAB` say (#17). `findPlayerOfGame` kept
+  // its own list with SAC/SF/SH in it, so the POG's "h-for-ab" line could
+  // contradict the box score printed above it.
+  xfail('L4', 'the player of the game line agrees with the box score on a sacrifice', () => {
+    setPlayer('visiting', 0, '7', 'Nunez');
+    sel('visiting', 0, 0);
+    play('SF');                                      // nobody on: it drove nobody in
+    collectState();
+    showGameSummary();
+    const row = Array.from(document.querySelectorAll('#gs-inner tr'))
+      .map(tr => Array.from(tr.children).map(td => td.textContent.trim()))
+      .find(c => c[0] && c[0].indexOf('Nunez') >= 0);
+    ok('he is on the box score', !!row);
+    eq('charged the at-bat', row[1], '1');
+    const hl = document.querySelector('#gs-inner .gs-highlight-card .gs-hl-detail');
+    ok('and the player-of-the-game line says the same', !!hl && hl.textContent.indexOf('0-1') >= 0);
+    document.getElementById('game-summary-modal').classList.remove('active');
+  });
+
+  /* ---- L5 / L6: the two latent ones --------------------------------- */
+
+  // The same shape m6 guarded in `setPitcher`: the popup is the only caller today,
+  // so the dereference is latent — but it is one line from a crash, and every other
+  // popup in the file is dismissed through a null check or hidePopupById.
+  xfail('L5', 'a position change does not need its popup in the DOM', () => {
+    lineupDirty = true;
+    const popup = document.getElementById('pos-change-popup');
+    if (popup) popup.remove();
+    applyFieldPos('visiting', 0, '6', null);
+    eq('the position is on the card', gameState.teams.visiting.players[0].pos, '6');
+  });
+
+  // Superseded by `columnForInning` and left behind. Nothing calls it, and the
+  // comment above `columnForInning` explains why nothing should.
+  xfail('L6', 'the column scan columnForInning replaced is gone', () => {
+    eq('getNextFreeColumn is no longer defined', typeof getNextFreeColumn, 'undefined');
+  });
 })();
