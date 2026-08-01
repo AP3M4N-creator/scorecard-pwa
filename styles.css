@@ -70,6 +70,12 @@ body {
 a { color: var(--navy); text-decoration: underline; text-underline-offset: 2px; }
 a:hover { color: var(--accent); }
 input, select, textarea, button { font-family: inherit; font-size: inherit; color: inherit; }
+/* A text field keeps its own white background, so it must not inherit a light
+   colour from a dark container: app.js builds the fielder-number prompt as a
+   dark bar with `color:#fff`, which left the typed "6-3" white on white.
+   Deliberately weak (0,0,1) so `.linescore input` and friends, which set a
+   light colour to sit on the navy scoreboard, still win. */
+input, textarea { color: var(--text); }
 :focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
 ::selection { background: rgba(0,50,120,0.16); }
 
