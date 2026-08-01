@@ -4406,4 +4406,300 @@
   test('the column scan columnForInning replaced is gone', () => {
     eq('getNextFreeColumn is no longer defined', typeof getNextFreeColumn, 'undefined');
   });
+
+  /* =====================================================================
+     2026-08-01 — the fourth audit's findings, as known failures
+
+     One marker per finding (H1 gets one per confirmed shape, since the three
+     go through two different functions). Each asserts the CORRECT behaviour,
+     so the fix promotes its own case to `test`.
+     ===================================================================== */
+
+  /* ---- H1: rule 5.08(a), the batter retired before first ------------- */
+
+  /* No run scores on a play whose third out is the batter-runner put out before
+     he reaches first. `applyPlayEffects` walks the runners home (app.js:1721)
+     and only then records his out (app.js:1735), so audit 3's guard at the top
+     of `applyChosenAdvancements` sees two outs and lets the run through.
+
+     The refusal belongs in the popups, the way the occupancy check refuses a
+     base somebody is standing on: with the batter's own out the half-inning is
+     over, so Home is not a place the scorer can send anybody. */
+
+  function homeBtn(base) {
+    const popup = document.getElementById('runner-popup');
+    if (!visible('runner-popup')) fail('runner popup is not open');
+    return popup.querySelector(`.rp-btn[data-base="${base}"][data-dest="3"]`);
+  }
+
+  function twoOutOnThird() {
+    sel('visiting', 0, 0); play('K');                // out 1
+    sel('visiting', 3, 0); play('K');                // out 2
+    sel('visiting', 6, 0); play('3B');               // and a man on 3rd
+  }
+
+  xfail('H1', 'a sacrifice fly with two out cannot send the runner home', () => {
+    twoOutOnThird();
+    sel('visiting', 9, 0); play('SF');
+    const home = homeBtn(2);
+    ok('the popup will not send him home', !!home && isOptionBlocked(home));
+    runnerPopup({ 2: 2 });
+    eq('no run', rTotal('visiting'), '');
+    eq('no RBI', ab('visiting', 9, 0).rbi, 0);
+    // #17's other side: a sacrifice that achieved nothing is an ordinary out.
+    eq('the sacrifice is charged as an at-bat', bStat('visiting', 9, 'ab'), '1');
+    eq('he is left on base', lobTotal('visiting'), '1');
+  });
+
+  xfail('H1', 'a groundout at first with two out cannot send the runner home', () => {
+    twoOutOnThird();
+    sel('visiting', 9, 0);
+    promptPositionPlay('GO ');
+    positionPopup('3');
+    const home = homeBtn(2);
+    ok('the popup will not send him home', !!home && isOptionBlocked(home));
+    runnerPopup({ 2: 2 });
+    eq('no run', rTotal('visiting'), '');
+    eq('no RBI', ab('visiting', 9, 0).rbi, 0);
+  });
+
+  // The second site: `applyRunnerOutcomes` (app.js:2205). Here the batter's out
+  // is a choice, so the bar has to follow it — one out already, the runner on
+  // 1st forced at 2nd, and the batter at first is the third.
+  xfail('H1', 'a double play ending on the batter at first cannot send the runner home', () => {
+    sel('visiting', 0, 0); play('K');                // out 1
+    sel('visiting', 3, 0); play('3B');               // man on 3rd
+    sel('visiting', 6, 0); play('1B'); runnerPopup({ 2: 2 });
+    sel('visiting', 9, 0);
+    promptPositionPlay('DP ');
+    positionPopup('4-6-3');
+    const home = document.getElementById('outcome-popup')
+      .querySelector('.oc-btn[data-base="2"][data-action="safe"][data-dest="3"]');
+    ok('the popup will not send him home', !!home && isOptionBlocked(home));
+    outcomePopup({ 0: ['out', 1], batter: ['out'] });
+    eq('no run', rTotal('visiting'), '');
+    eq('three outs', inn('visiting', 0).outs, 3);
+  });
+
+  // The controls. These pass today and have to keep passing: the rule is about
+  // the batter's own out, not about two being out.
+  test('a sacrifice fly with one out still scores the runner', () => {
+    sel('visiting', 0, 0); play('K');
+    sel('visiting', 3, 0); play('3B');
+    sel('visiting', 6, 0); play('SF');
+    const home = homeBtn(2);
+    ok('Home is offered', !!home && !isOptionBlocked(home));
+    runnerPopup({ 2: 3 });
+    eq('the run counts', rTotal('visiting'), '1');
+    eq('and the RBI', ab('visiting', 6, 0).rbi, 1);
+    eq('no at-bat charged', bStat('visiting', 6, 'ab'), '');
+  });
+
+  test('a third out tagged on the bases still lets the run count', () => {
+    sel('visiting', 0, 0); play('K');
+    sel('visiting', 3, 0); play('K');
+    sel('visiting', 6, 0); play('1B');
+    sel('visiting', 9, 0); play('2B'); runnerPopup({ 0: 2 });   // 2nd and 3rd, two out
+    sel('visiting', 12, 0); play('1B');
+    ok('Home is offered — the batter reaches, so his out is not the third',
+      !isOptionBlocked(homeBtn(2)));
+    runnerPopup({ 2: 3, 1: -2 });                    // lead scores, trailer out at 3rd
+    eq('the run counts', rTotal('visiting'), '1');
+    eq('and the RBI', ab('visiting', 12, 0).rbi, 1);
+    eq('three outs', inn('visiting', 0).outs, 3);
+  });
+
+  /* ---- H2: the card with no library entry --------------------------- */
+
+  // `currentGameHasUnsavedChanges` answers "no" when there is nothing to compare
+  // against (app.js:6020) — which is the card most at risk, because a game that
+  // was never "Save as New Game"d has `currentGameId: null`. So no confirm, and
+  // the `flushSave()` after the swap writes the incoming game over the outgoing
+  // one's only copy.
+  xfail('H2', 'a card that was never saved still counts as unsaved changes', () => {
+    clearStorage();
+    const realConfirm = window.confirm;
+    let asked = 0;
+    window.confirm = function () { asked++; return false; };
+    try {
+      const other = JSON.parse(JSON.stringify(createEmptyState()));
+      other.info.visitingTeam = 'Jays';
+      safeStorage.setItem(LIBRARY_KEY, JSON.stringify(
+        [{ id: 'x', date: '', teams: 'a vs b', score: '0 - 0', state: other }]));
+      sel('visiting', 0, 0); play('1B');
+      eq('the card has no library entry', gameState.currentGameId, null);
+      ok('and it counts as unsaved', currentGameHasUnsavedChanges());
+      loadGameFromLibrary(0);
+      eq('the scorer was asked before it was thrown away', asked, 1);
+      eq('and answering no left his game alone', ab('visiting', 0, 0).play, '1B');
+      ok('the other game did not come in', gameState.info.visitingTeam !== 'Jays');
+    } finally { window.confirm = realConfirm; clearStorage(); }
+  });
+
+  // The same hole after the current game's own entry is deleted: `currentGameId`
+  // is left dangling and the comparison finds nothing again.
+  xfail('H2', 'a card whose library entry was deleted still counts as unsaved', () => {
+    clearStorage();
+    const realConfirm = window.confirm;
+    window.confirm = function () { return true; };
+    try {
+      sel('visiting', 0, 0); play('1B');
+      saveAsNewGame();
+      ok('saved, so nothing is outstanding', !currentGameHasUnsavedChanges());
+      deleteGameFromLibrary(0);
+      ok('its only copy is gone, so everything is outstanding', currentGameHasUnsavedChanges());
+    } finally { window.confirm = realConfirm; clearStorage(); }
+  });
+
+  /* ---- M1: a cleared pitching change ---------------------------------- */
+
+  // `clearSelectedCell` blanks `ab.pitcherChangeNum` (app.js:4180) and leaves
+  // `inn.currentPitcher` on the reliever, so the card no longer records when he
+  // came in while the state still says he is out there.
+  xfail('M1', 'clearing a play takes its pitching change off the mound with it', () => {
+    sel('visiting', 0, 0); play('K');
+    sel('visiting', 3, 0); usePitcher(1); play('K');   // the reliever comes in here
+    sel('visiting', 6, 0); play('K');                  // and this is the latest play
+    sel('visiting', 3, 0); clearSelectedCell();
+    eq('the marker is gone', ab('visiting', 3, 0).pitcherChangeNum, '');
+    eq('and so is the change', getEffectivePitcher('visiting', 0), 0);
+    eq('the inning no longer claims a pitcher of its own', inn('visiting', 0).pitcherSet, false);
+    sel('visiting', 9, 0); play('1B');
+    eq('the next hit is charged to the man the card has on the mound', pStat('visiting', 0, 'h'), '1');
+    eq('and not to the reliever', pStat('visiting', 1, 'h'), '');
+  });
+
+  /* ---- M2: redo skips the tail --------------------------------------- */
+
+  // `restoreSnapshot` puts the data back and stops there, so a redone third out
+  // leaves the half-inning open — no side change, no leadoff, and every further
+  // entry refused as "3 outs". Audit 3's Family A fixed this same hole for
+  // `editRunners` and `moveRunner`.
+  xfail('M2', 'a redone third out ends the half-inning', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K'); play('K');
+    eq('three outs', inn('visiting', 0).outs, 3);
+    undoLastPlay();
+    eq('two outs after the undo', inn('visiting', 0).outs, 2);
+    redoLastPlay();
+    eq('three outs again', inn('visiting', 0).outs, 3);
+    ok('and the side is changing', pendingTransitionTimer !== null);
+    flushTimers();
+    eq('leadoff for the next inning', gameState.nextLeadoff.visiting[1], 9);
+    eq('the home half is up', selectedCell.dataset.team, 'home');
+  });
+
+  /* ---- M3: the defensive-change log ----------------------------------- */
+
+  // `applyFieldPos` builds the label from state (app.js:5588) and *stores* it, so
+  // a change recorded within the 400ms debounce is logged permanently as "Pos 1".
+  // Audit 3's L3 was the display version of this one.
+  xfail('M3', 'a defensive change logs the name the scorer has typed', () => {
+    lineupDirty = true;
+    setPos('visiting', 0, 'CF');
+    setPlayer('visiting', 0, '9', 'Ortiz');          // typed, not yet collected
+    applyFieldPos('visiting', 0, 'LF', 'T3');
+    const entry = gameState.defChanges[0].changes[0];
+    eq('the log names him', entry.name, '#9 Ortiz');
+  });
+
+  /* ---- L1: the earned-run review popup -------------------------------- */
+
+  // The fallback is the row index + 1, and rows are `spot * ROWS_PER_POS`, so the
+  // 4th spot's starter reads "Batter 10".
+  xfail('L1', 'the earned-run review names the batting spot, not the row', () => {
+    sel('visiting', 9, 0); play('HR');
+    sel('visiting', 9, 0);
+    reviewEarnedRuns();
+    const t = document.getElementById('er-review-popup').textContent;
+    ok('the run belongs to the 4th spot', t.indexOf('Batter 4') >= 0);
+    ok('and not to row 10', t.indexOf('Batter 10') < 0);
+  });
+
+  // And it reads names from state rather than the inputs, and labels a run with
+  // the man who BATTED — so a pinch runner's run goes to the man he ran for,
+  // which is the distinction `runRowOf` exists for.
+  xfail('L1', 'the earned-run review reads the card and credits the man who ran', () => {
+    lineupDirty = true;
+    setPlayer('visiting', 0, '7', 'Nunez');
+    setPlayer('visiting', 1, '21', 'Ruiz');
+    setPlayer('visiting', 3, '5', 'Molina');
+    sel('visiting', 0, 0); play('1B');
+    sel('visiting', 0, 0); markPinchRunner();        // Ruiz runs for Nunez
+    sel('visiting', 3, 0); play('HR');               // both score
+    sel('visiting', 0, 0);
+    reviewEarnedRuns();
+    const t = document.getElementById('er-review-popup').textContent;
+    ok('the pinch runner is credited with his run', t.indexOf('Ruiz') >= 0);
+    ok('not the man he ran for', t.indexOf('Nunez') < 0);
+    ok('and the names come off the card', t.indexOf('Molina') >= 0);
+  });
+
+  /* ---- L2: a pitch removed from a cell that has a play ---------------- */
+
+  // `removePitch` refreshes the pitcher line only when it took back an auto-play
+  // (app.js:2979), so PC stays one too high on screen and in the state until the
+  // next play or a reload — and the wrong number is what gets saved in between.
+  xfail('L2', 'removing a pitch takes it off the pitcher line as well', () => {
+    sel('visiting', 0, 0);
+    pitch('B'); pitch('F');
+    play('1B');                                      // the play adds its result pitch
+    const before = Number(pStat('visiting', 0, 'pc'));
+    eq('three pitches so far', before, 3);
+    sel('visiting', 0, 0);
+    removePitch();
+    eq('the pitcher line drops one', pStat('visiting', 0, 'pc'), String(before - 1));
+    collectState();
+    eq('and so does what gets saved', gameState.teams.home.pitchers[0].pc, String(before - 1));
+  });
+
+  /* ---- L3: the last two silent dead presses --------------------------- */
+
+  xfail('L3', 'redo with nothing to redo says so', () => {
+    redoLastPlay();
+    ok('it says why', visible('play-reject'));
+  });
+
+  xfail('L3', 'the spray chart says why it will not open on a cell with no hit', () => {
+    sel('visiting', 0, 0); play('K');
+    sel('visiting', 0, 0);
+    editSprayChart();
+    ok('it says why', visible('play-reject'));
+  });
+
+  /* ---- L4: SUB on a pinch runner's line -------------------------------- */
+
+  // `promptSubRemoval`'s "he never batted, so this is an undo" path does not know
+  // the line came from PR, so it reverts the whole thing with no popup and no
+  // re-entry — while `prRow` on his own column survives, leaving the run with a
+  // man the card no longer has in the game.
+  xfail('L4', 'SUB does not quietly undo a pinch runner\'s line', () => {
+    lineupDirty = true;
+    setPlayer('visiting', 0, '7', 'Nunez');
+    setPlayer('visiting', 1, '21', 'Ruiz');
+    sel('visiting', 0, 0); play('1B');
+    sel('visiting', 0, 0); markPinchRunner();
+    eq('the line forward is his', ab('visiting', 0, 1).subChange, 1);
+    sel('visiting', 0, 1); markSub();
+    ok('it says why', visible('play-reject'));
+    eq('the line is still the pinch runner\'s', ab('visiting', 0, 1).subChange, 1);
+    eq('and he is still running in the 1st', ab('visiting', 0, 0).prRow, 1);
+  });
+
+  /* ---- the re-stamped sequence number ---------------------------------- */
+
+  // `ab.seq` orders the plays of a game for the pitcher decisions. `finishPlay`
+  // only stamps it once — but clearing a play resets it to 0, so re-entering the
+  // cell stamps it again and the play sorts after everything recorded since,
+  // which can move the go-ahead run behind the wrong pitcher.
+  xfail('seq', 'a play cleared and re-entered keeps its place in the game', () => {
+    sel('visiting', 0, 0); play('1B');
+    const first = ab('visiting', 0, 0).seq;
+    sel('visiting', 3, 0); play('K');
+    const second = ab('visiting', 3, 0).seq;
+    ok('they are stamped in order', first > 0 && first < second);
+    sel('visiting', 0, 0); clearSelectedCell();
+    sel('visiting', 0, 0); play('2B');               // nobody on: no popup to answer
+    ok('the re-entered play still sorts first', ab('visiting', 0, 0).seq < second);
+  });
 })();
