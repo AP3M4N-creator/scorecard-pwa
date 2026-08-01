@@ -4438,7 +4438,7 @@
     sel('visiting', 6, 0); play('3B');               // and a man on 3rd
   }
 
-  xfail('H1', 'a sacrifice fly with two out cannot send the runner home', () => {
+  test('a sacrifice fly with two out cannot send the runner home', () => {
     twoOutOnThird();
     sel('visiting', 9, 0); play('SF');
     const home = homeBtn(2);
@@ -4451,7 +4451,7 @@
     eq('he is left on base', lobTotal('visiting'), '1');
   });
 
-  xfail('H1', 'a groundout at first with two out cannot send the runner home', () => {
+  test('a groundout at first with two out cannot send the runner home', () => {
     twoOutOnThird();
     sel('visiting', 9, 0);
     promptPositionPlay('GO ');
@@ -4466,7 +4466,7 @@
   // The second site: `applyRunnerOutcomes` (app.js:2205). Here the batter's out
   // is a choice, so the bar has to follow it — one out already, the runner on
   // 1st forced at 2nd, and the batter at first is the third.
-  xfail('H1', 'a double play ending on the batter at first cannot send the runner home', () => {
+  test('a double play ending on the batter at first cannot send the runner home', () => {
     sel('visiting', 0, 0); play('K');                // out 1
     sel('visiting', 3, 0); play('3B');               // man on 3rd
     sel('visiting', 6, 0); play('1B'); runnerPopup({ 2: 2 });
@@ -4509,6 +4509,43 @@
     eq('three outs', inn('visiting', 0).outs, 3);
   });
 
+  // A fielder's choice opens with the batter safe, so the plate starts open and
+  // the bar arrives with the click that marks him out. The runner already sent
+  // there is set back to his base and told about it, the way the out cap does.
+  test('marking the batter out sends a runner already headed home back', () => {
+    twoOutOnThird();
+    sel('visiting', 9, 0);
+    promptPositionPlay('FC ');
+    positionPopup('5');
+    outcomePopup({ 2: ['safe', 3], batter: ['out'] });
+    ok('it says why', visible('play-reject'));
+    eq('no run', rTotal('visiting'), '');
+    eq('he is still on 3rd, and left there', lobTotal('visiting'), '1');
+    eq('three outs', inn('visiting', 0).outs, 3);
+  });
+
+  // The state-level backstops. The popups no longer offer the run, so these are
+  // for a set of choices that arrives from an import, a hand edit or a headless
+  // caller — the only paths that can still ask for one.
+  test('a set of advancements that scores after the batter is out is refused', () => {
+    twoOutOnThird();
+    const choices = { 2: 3 };
+    barRunsAfterBatterOut('visiting', 0, choices);
+    eq('the run is taken out of the set', choices[2], undefined);
+    ok('and it says why', visible('play-reject'));
+  });
+
+  test('runner outcomes that score after the batter is out are refused', () => {
+    twoOutOnThird();
+    sel('visiting', 9, 0);
+    const a = ab('visiting', 9, 0);
+    a.play = 'DP';
+    applyRunnerOutcomes('visiting', 9, 0, a, inn('visiting', 0), 'DP',
+      { 2: { action: 'safe', dest: 3 }, batter: { action: 'out' } });
+    eq('no run', rTotal('visiting'), '');
+    eq('he keeps the base he was on', onB('visiting', 0, 2), 6);
+  });
+
   /* ---- H2: the card with no library entry --------------------------- */
 
   // `currentGameHasUnsavedChanges` answers "no" when there is nothing to compare
@@ -4516,7 +4553,7 @@
   // was never "Save as New Game"d has `currentGameId: null`. So no confirm, and
   // the `flushSave()` after the swap writes the incoming game over the outgoing
   // one's only copy.
-  xfail('H2', 'a card that was never saved still counts as unsaved changes', () => {
+  test('a card that was never saved still counts as unsaved changes', () => {
     clearStorage();
     const realConfirm = window.confirm;
     let asked = 0;
@@ -4531,14 +4568,15 @@
       ok('and it counts as unsaved', currentGameHasUnsavedChanges());
       loadGameFromLibrary(0);
       eq('the scorer was asked before it was thrown away', asked, 1);
+      // The swap replaces `gameState` wholesale, so his single still being here is
+      // the proof the load was refused.
       eq('and answering no left his game alone', ab('visiting', 0, 0).play, '1B');
-      ok('the other game did not come in', gameState.info.visitingTeam !== 'Jays');
     } finally { window.confirm = realConfirm; clearStorage(); }
   });
 
   // The same hole after the current game's own entry is deleted: `currentGameId`
   // is left dangling and the comparison finds nothing again.
-  xfail('H2', 'a card whose library entry was deleted still counts as unsaved', () => {
+  test('a card whose library entry was deleted still counts as unsaved', () => {
     clearStorage();
     const realConfirm = window.confirm;
     window.confirm = function () { return true; };

@@ -1402,6 +1402,39 @@ function showPlayNotice(msg) { showPlayToast(msg, 'notice'); }
 // the same thing about it (L2). One constant, because six copies of a sentence drift.
 const INNING_OVER = 'The inning already has 3 outs — clear a play first.';
 
+/* Rule 5.08(a): no run scores on a play whose third out is made by the
+   batter-runner before he reaches first. The fly caught, the groundout at
+   first, the batter doubled off at the front end of a double play — his out
+   ends the half-inning, and it ends it before any runner can be credited with
+   crossing the plate.
+
+   The card applies a play's advancements before it records the batter's out
+   (`applyPlayEffects`), so audit 3's `inn.outs >= 3` guard sees two outs and
+   waves the run through: a sacrifice fly with two out scored a run, an RBI,
+   and — because `sacrificeExemptsAB` read the run as a successful sacrifice —
+   took the at-bat off as well. Three wrong figures from one tap.
+
+   So the plate is closed up front, in the two popups that offer it, the way the
+   occupancy check refuses a base somebody is standing on. The state-level
+   backstops below it are for choices that did not come through a popup.
+
+   Only the batter-runner half of the rule. The force-out half needs to know
+   whether an out on the bases was a force, which the card has never recorded
+   (the standing force-vs-tag gap) — which is also why a run scored while a
+   trailing runner is tagged out still counts, as it should. */
+const NO_RUN_508A = 'Two out — the batter is retired before first, so his out ends the inning before the run (5.08(a)).';
+
+// The state-level half of that refusal, for the `showRunnerPopup` path. A set of
+// choices still carrying a run when the batter's own out will end the inning came
+// from an import, a hand edit or a headless caller; the runner keeps his base,
+// the way the #4 occupancy backstop leaves a colliding runner where he is.
+function barRunsAfterBatterOut(team, innIdx, choices) {
+  if (getInnState(team, innIdx).outs < 2) return;
+  let barred = 0;
+  [2, 1, 0].forEach(b => { if (choices[b] === 3) { delete choices[b]; barred++; } });
+  if (barred) showPlayReject(NO_RUN_508A);
+}
+
 // The other wall, and a different answer: this one cannot be cleared by hand. The
 // card is fifteen columns wide and an inning that bats around takes more than one
 // of them, so a side can run out of card — at the end of the 15th, or earlier if
@@ -1717,7 +1750,11 @@ function applyPlayEffects(team, pIdx, innIdx, play, prev, done) {
     // Default advancement: hits advance by hit type, sac advance 1, outs = 0 (hold)
     const defaultAdv = play === '3B' ? 3 : play === '2B' ? 2 : (isHitOrError || isSac) ? 1 : 0;
     const batterLbl = getBatterLabel(team, pIdx, innIdx);
+    // Does this play put the batter out? The popup needs it for the 5.08(a) bar,
+    // and the callback below has always needed it to know who to record.
+    const batterRetired = isSac || play === 'IF' || isOutPlay(play);
     showRunnerPopup(team, innIdx, defaultAdv, function(choices) {
+      if (batterRetired) barRunsAfterBatterOut(team, innIdx, choices);
       applyChosenAdvancements(team, innIdx, choices, batterLbl, src);
       // Place batter based on play type
       if (isHitOrError) {
@@ -1731,7 +1768,7 @@ function applyPlayEffects(team, pIdx, innIdx, play, prev, done) {
         } else {
           placeBatter(ab, inn, play, pIdx, innIdx);
         }
-      } else if (isSac || play === 'IF' || isOutPlay(play)) {
+      } else if (batterRetired) {
         recordBatterOut(team, innIdx, pIdx, ab);
       }
       // RBI
@@ -1739,7 +1776,7 @@ function applyPlayEffects(team, pIdx, innIdx, play, prev, done) {
         ab.rbi = countRunnersScored(team, prev);
       }
       done();
-    }, { batterTakesBase: isHitOrError, batterPIdx: pIdx });
+    }, { batterTakesBase: isHitOrError, batterPIdx: pIdx, batterRetired });
     return;
   }
 
@@ -2056,6 +2093,9 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
   html += `<button class="oc-btn" data-base="batter" data-action="out" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid ${!batterSafe ? 'var(--accent)' : '#ccc'};border-radius:3px;background:${!batterSafe ? '#fce4ec' : '#fff'};color:${!batterSafe ? 'var(--accent)' : '#555'};cursor:pointer;font-family:var(--mono)">Out</button>`;
   html += `</div></div>`;
 
+  // Rule 5.08(a) — see NO_RUN_508A. Hidden until the chosen outcomes make the
+  // batter's out the third one, which they can stop doing again on the next click.
+  html += `<div id="oc-508a" style="display:none;font-size:10px;color:var(--accent);margin:2px 0 6px;line-height:1.4">${escapeHtml(NO_RUN_508A)}</div>`;
   html += `<button id="oc-confirm" style="margin-top:6px;width:100%;padding:7px;font-size:12px;font-weight:700;background:var(--navy);color:var(--gold);border:none;border-radius:4px;cursor:pointer;font-family:var(--heading);letter-spacing:0.5px;text-transform:uppercase">Confirm</button>`;
   popup.innerHTML = html;
   showPopupBackdrop();
@@ -2080,11 +2120,58 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
     return list;
   }
 
+  /* Rule 5.08(a) — see NO_RUN_508A. Here the batter's out is one of the choices,
+     so the bar has to be re-derived on every click the way the collision check is:
+     his out is the third when the outs already made plus the ones this play marks
+     on the runners come to two. On a ground-ball double play that is the ordinary
+     case — one out, the man on 1st forced at 2nd, the batter at first — and the
+     man on 3rd may not be sent home on it. */
+  function runsBarred() {
+    if (!outcomes.batter || outcomes.batter.action !== 'out') return false;
+    let n = getInnState(team, innIdx).outs;
+    for (let b = 0; b < 3; b++) if (outcomes[b] && outcomes[b].action === 'out') n++;
+    return n >= 2;
+  }
+
+  // Repaint one row's buttons against what `outcomes` now says. The click handler
+  // has always done this inline for the row it was in and for a row the out cap
+  // set back; the 5.08(a) revert below needs the same thing.
+  function repaintOcRow(key) {
+    const row = popup.querySelector('.oc-row[data-base="' + key + '"]');
+    if (!row) return;
+    const oc = key === 'batter' ? outcomes.batter : outcomes[key];
+    row.querySelectorAll('.oc-btn').forEach(b => {
+      const isOut = b.dataset.action === 'out';
+      const dest = b.dataset.dest ? parseInt(b.dataset.dest) : (isOut ? undefined : 0);
+      const isActive = !!oc && oc.action === b.dataset.action && (isOut ? true : oc.dest === dest);
+      b.style.borderColor = isActive ? (isOut ? 'var(--accent)' : '#2e7d32') : '#ccc';
+      b.style.background = isActive ? (isOut ? '#fce4ec' : '#e8f5e9') : '#fff';
+      b.style.color = isActive ? (isOut ? 'var(--accent)' : '#2e7d32') : '#555';
+    });
+  }
+
   function refreshOutcomeAvailability() {
+    const barred = runsBarred();
+    // A runner already sent home when the bar comes on is set back to his base and
+    // told about it — the courtesy the out cap does for an out it takes off (M4).
+    if (barred) {
+      let sentBack = false;
+      for (let b = 0; b < 3; b++) {
+        if (outcomes[b] && outcomes[b].action === 'safe' && outcomes[b].dest === 3) {
+          outcomes[b] = { action: 'safe', dest: b };
+          repaintOcRow(b);
+          sentBack = true;
+        }
+      }
+      if (sentBack) showPlayReject(NO_RUN_508A);
+    }
+    const note = document.getElementById('oc-508a');
+    if (note) note.style.display = barred ? 'block' : 'none';
     popup.querySelectorAll('.oc-btn').forEach(btn => {
       if (btn.dataset.action !== 'safe') return;   // an out never collides
       const key = btn.dataset.base === 'batter' ? 'batter' : parseInt(btn.dataset.base);
       const dest = btn.dataset.dest ? parseInt(btn.dataset.dest) : 0;
+      if (barred && dest === 3) { setOptionBlocked(btn, true); return; }
       const hypothetical = ocParties().map(p => (p.key === key ? { key: p.key, from: p.from, dest } : p));
       setOptionBlocked(btn, runnerOrderConflicts(hypothetical).has(key));
     });
@@ -2205,6 +2292,14 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
 function applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes) {
   const playLabel = play.replace(/^(DP|FC|TP)\s*/, '') || play;
 
+  // The 5.08(a) backstop for this path — see NO_RUN_508A. The popup blocks Home
+  // once the batter's out is the third of the half, so a set of outcomes that
+  // still sends somebody there did not come from it.
+  let outsThisPlay = 0;
+  for (let b = 0; b < 3; b++) if (outcomes[b] && outcomes[b].action === 'out') outsThisPlay++;
+  const runsBarred = !!(outcomes.batter && outcomes.batter.action === 'out') &&
+    inn.outs + outsThisPlay >= 2;
+
   // Process runners from 3rd → 1st, tracking which were thrown out on THIS play
   const runnersOutThisPlay = [];
   [2, 1, 0].forEach(fromBase => {
@@ -2226,6 +2321,8 @@ function applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes) {
       clearRunner(inn, fromBase);
       runnersOutThisPlay.push(rn);
     } else if (oc.action === 'safe') {
+      // He keeps the base he is on, as under the #4 backstop below.
+      if (runsBarred && oc.dest === 3) { showPlayReject(NO_RUN_508A); return; }
       // #4 backstop — see applyChosenAdvancements.
       if (!moveRunnerTo(inn, fromBase, oc.dest, rn)) return;
       for (let step = fromBase + 1; step <= oc.dest; step++) {
@@ -2398,6 +2495,14 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
   // a scorer answering it should be able to see which event he is answering for (m1).
   const title = (opts && opts.title) || 'Advance Runners';
   let html = '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;color:#333">' + escapeHtml(title) + '</div>';
+  // Rule 5.08(a) — see NO_RUN_508A. `opts.batterRetired` is the caller saying this
+  // play puts the batter out; with two already gone that out is the third, so Home
+  // comes off the board for everybody. Said in words as well as greyed out, because
+  // an option that is simply missing reads as the app losing track.
+  const runBarred = !!(opts && opts.batterRetired) && inn.outs >= 2;
+  if (runBarred) {
+    html += '<div style="font-size:10px;color:var(--accent,#c41e3a);margin:-4px 0 10px;line-height:1.4">' + escapeHtml(NO_RUN_508A) + '</div>';
+  }
   const choices = {};
 
   runners.forEach(r => {
@@ -2472,6 +2577,10 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
       const dest = parseInt(btn.dataset.dest);
       if (dest < 0) return;   // "Out at" never collides with anyone
       const key = btn.dataset.base === 'batter' ? 'batter' : parseInt(btn.dataset.base);
+      // The 5.08(a) bar goes through here rather than being painted once at render
+      // time, or the collision refresh below would open the plate back up on the
+      // next click. The batter's own row tops out at 3rd, so this is the runners.
+      if (runBarred && dest === 3) { setOptionBlocked(btn, true); return; }
       setOptionBlocked(btn, runnerOrderConflicts(rpParties({ key, dest })).has(key));
     });
   }
@@ -6013,11 +6122,32 @@ function stateSignature(state) {
   return JSON.stringify(clone);
 }
 
+// Is there anything on this card worth stopping for? Records first — but a lineup
+// typed in before the first pitch is somebody's work too, and it is read off the
+// inputs because that is where it still is inside the 400ms debounce.
+function cardHasContent() {
+  if (teamHasRecords('visiting') || teamHasRecords('home')) return true;
+  for (const team of ['visiting', 'home']) {
+    const players = gameState.teams[team].players;
+    for (let p = 0; p < players.length; p++) {
+      if (livePlayerField(team, p, 'name') || livePlayerField(team, p, 'num')) return true;
+    }
+  }
+  return false;
+}
+
 // True if the in-progress game differs from its saved library snapshot.
 function currentGameHasUnsavedChanges() {
-  if (!gameState.currentGameId) return false;
-  const entry = getGameLibrary().find(g => g.id === gameState.currentGameId);
-  if (!entry || !entry.state) return false;
+  const entry = gameState.currentGameId
+    ? getGameLibrary().find(g => g.id === gameState.currentGameId)
+    : null;
+  // H2: no entry to compare against is not "nothing to lose" — it is the card most
+  // at risk. A game that was never "Save as New Game"d has `currentGameId: null`,
+  // and one whose library entry has been deleted has an id matching nothing; in
+  // both cases its only copy is the `baseball-scorecard` slot that the caller is
+  // about to write the incoming game over, after which it is gone for good. So
+  // anything recorded on it counts as unsaved, and the scorer gets his confirm.
+  if (!entry || !entry.state) return cardHasContent();
   return stateSignature(gameState) !== stateSignature(entry.state);
 }
 
