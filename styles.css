@@ -229,6 +229,20 @@ details.info-details > summary:hover { color: var(--navy); }
   text-transform: uppercase; color: var(--gold); opacity: .7; white-space: nowrap;
 }
 
+/* The matchup cell: who is at the plate, over who is on the mound. Left-aligned
+   and tighter than the other live cells, because two stacked name/label pairs
+   centred against each other read as four unrelated lines. */
+.live-cell.live-matchup { align-items: flex-start; min-width: 170px; gap: 1px; }
+.live-matchup .ls-label-2 { margin-top: 5px; }
+.live-matchup .ls-name {
+  font-family: var(--font); font-size: 15px; font-weight: 600; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.live-matchup .ls-name-sm { font-size: 14px; }
+.live-matchup .ls-sub {
+  font-family: var(--mono); font-size: 11px; color: rgba(255,255,255,0.6);
+}
+
 /* ---------- Team tabs ---------- */
 .tab-bar { display: flex; gap: 26px; border-bottom: 1px solid var(--rule); }
 .tab-btn {

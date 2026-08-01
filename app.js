@@ -3176,6 +3176,41 @@ function showStrikeoutPopup(target) {
   popup.style.display = 'block';
 }
 
+/* The pitcher's name as the card has him right now, the way `getActivePlayerName`
+   reads a batter: off the input rather than the state, so a reliever written in as
+   he comes out of the bullpen is named in the panel before the debounce (L3). */
+function livePitcherLabel(team, idx) {
+  const num = livePitcherField(team, idx, 'num');
+  const name = livePitcherField(team, idx, 'name');
+  if (!num && !name) return 'Pitcher ' + (idx + 1);
+  return (num ? '#' + num + ' ' : '') + (name || 'Pitcher ' + (idx + 1));
+}
+
+/* Every pitch one pitcher has thrown in the game so far, counted live.
+
+   The PC on the pitching line can't answer this: `updatePitcherStats` skips at-bats
+   with no play yet, so it stands still through a nine-pitch at-bat and jumps when
+   the play lands. The panel is what a manager watches a starter's count on, so the
+   at-bat in progress is counted here too.
+
+   `ab.pitcher` is only stamped when the play is entered, so an unfinished at-bat is
+   attributed the way `applyPlay` is about to attribute it — whoever the column says
+   is on the mound. `battingTeam` picks the side whose at-bats hold the pitches;
+   these are the pitches thrown *at* them, by `battingTeam`'s opponent. */
+function livePitchCount(battingTeam, pitcherIdx) {
+  let n = 0;
+  for (const player of gameState.teams[battingTeam].players) {
+    for (let col = 0; col < player.atBats.length; col++) {
+      const ab = player.atBats[col];
+      const pitches = ab && ab.pitches;
+      if (!pitches || !pitches.length) continue;
+      const owner = ab.play ? (ab.pitcher || 0) : getEffectivePitcher(battingTeam, col);
+      if (owner === pitcherIdx) n += pitches.length;
+    }
+  }
+  return n;
+}
+
 /* Game Situation Panel */
 function updateSituation() {
   if (!selectedCell) return;
@@ -3214,11 +3249,17 @@ function updateSituation() {
   const lsBatter = document.getElementById('ls-batter');
   if (lsBatter) lsBatter.textContent = getActivePlayerName(team, pIdx, innIdx);
 
-  // Pitch sequence
+  // The man on the mound, and his running pitch count. Both repaint from here,
+  // which every pitch goes through — a count that only moved when the plate
+  // appearance finished would be a pitch count you can't take a pitcher out on.
+  const pitchingTeam = team === 'visiting' ? 'home' : 'visiting';
+  const pIdxOnMound = getEffectivePitcher(team, innIdx);
+  const lsPitcher = document.getElementById('ls-pitcher');
+  if (lsPitcher) lsPitcher.textContent = livePitcherLabel(pitchingTeam, pIdxOnMound);
   const lsPitches = document.getElementById('ls-pitches');
   if (lsPitches) {
-    const pitches = ab.pitches || [];
-    lsPitches.textContent = pitches.length > 0 ? pitches.length + ' pitches' : '';
+    const n = livePitchCount(team, pIdxOnMound);
+    lsPitches.textContent = n + (n === 1 ? ' pitch' : ' pitches');
   }
 
   // Linescore highlight + auto-zeros for completed innings
@@ -3345,10 +3386,12 @@ function renderFinalReadout() {
   const lsInn = document.getElementById('ls-inning');
   const lsCount = document.getElementById('ls-count');
   const lsBatter = document.getElementById('ls-batter');
+  const lsPitcher = document.getElementById('ls-pitcher');
   const lsPitches = document.getElementById('ls-pitches');
   if (lsInn) lsInn.textContent = 'FINAL';
   if (lsCount) lsCount.textContent = runsOnLine('visiting') + '-' + runsOnLine('home');
   if (lsBatter) lsBatter.textContent = '';
+  if (lsPitcher) lsPitcher.textContent = '';
   if (lsPitches) lsPitches.textContent = '';
   for (let i = 1; i <= 3; i++) {
     const od = document.getElementById('ls-out-' + i);
@@ -5807,6 +5850,9 @@ function setPitcher(idx) {
   // other popup in the file is dismissed through a null check or hidePopupById.
   const popup = document.getElementById('pitcher-popup');
   if (popup) popup.style.display = 'none';
+  // The panel names the man on the mound now, so the handover has to reach it here
+  // — otherwise it keeps naming the pitcher who just left until the next pitch.
+  updateSituation();
   autoSave();
 }
 

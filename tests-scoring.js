@@ -4810,4 +4810,50 @@
     eq('and back on', ab('visiting', 0, 0).play, 'K');
     ok('in the place it always had', ab('visiting', 0, 0).seq < second);
   });
+
+  /* ---- The live panel's AT BAT / PITCHER readout ----------------------- */
+
+  const lsText = id => document.getElementById(id).textContent;
+
+  // The count is the one a manager takes a starter out on, so it has to move on
+  // the pitch. The pitching line can't be the source: `updatePitcherStats` skips
+  // an at-bat with no play on it yet, so PC stands still through a nine-pitch
+  // at-bat and then jumps.
+  test('the panel counts pitches as they are thrown, not at the end of the at-bat', () => {
+    sel('visiting', 0, 0);
+    pitch('S');
+    eq('one pitch reads singular', lsText('ls-pitches'), '1 pitch');
+    pitch('B');
+    eq('and the second lands before any play does', lsText('ls-pitches'), '2 pitches');
+    eq('while the pitching line has yet to move', pStat('visiting', 0, 'pc'), '');
+    play('1B');                                       // the play adds its result pitch
+    sel('visiting', 3, 0);
+    eq('the next batter carries the total forward', lsText('ls-pitches'), '3 pitches');
+    pitch('B');
+    eq('and adds to it', lsText('ls-pitches'), '4 pitches');
+  });
+
+  test('the panel names the man on the mound and counts only his pitches', () => {
+    lineupDirty = true;
+    eq('the starter, before anyone is written in', lsText('ls-pitcher'), 'Pitcher 1');
+    sel('visiting', 0, 0); play('K');                 // three pitches, all his
+    sel('visiting', 3, 0);
+    eq('his three', lsText('ls-pitches'), '3 pitches');
+    document.querySelector('input[data-team="home"][data-pitcher="1"][data-field="num"]').value = '31';
+    document.querySelector('input[data-team="home"][data-pitcher="1"][data-field="name"]').value = 'Ramos';
+    usePitcher(1);
+    eq('the reliever is named as he comes in', lsText('ls-pitcher'), '#31 Ramos');
+    eq('and comes in on none of his own', lsText('ls-pitches'), '0 pitches');
+    pitch('S');
+    eq('the first is his', lsText('ls-pitches'), '1 pitch');
+    eq('and the starter keeps his three', pStat('visiting', 0, 'pc'), '3');
+  });
+
+  test('a final card empties the matchup readout', () => {
+    sel('home', 0, 8); play('HR');                    // walk-off in the 9th
+    eq('the game is final', lsText('ls-inning'), 'FINAL');
+    eq('nobody is at the plate', lsText('ls-batter'), '');
+    eq('nobody is on the mound', lsText('ls-pitcher'), '');
+    eq('and no count is showing', lsText('ls-pitches'), '');
+  });
 })();
