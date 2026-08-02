@@ -105,7 +105,22 @@ document.addEventListener('click', function (e) {
     /* Document-space top, so a scrolled page still measures the same box. */
     var top = wrap.getBoundingClientRect().top + window.scrollY;
     var body = window.innerHeight - top - deck - PAD - (head ? head.getBoundingClientRect().height : 40);
-    var h = Math.floor(body / STARTERS);
+
+    /* The nine starters are not the only rows in the box. A sub row shows
+       itself the moment a name is typed into it — no toggle involved — and
+       it is content-height, not --cell-h, so the starters have to give up
+       the space or the bottom of the order slides under the deck. Measure
+       what is actually on screen: a collapsed row reports no height.
+
+       If even the floor cannot swallow them — the Show-sub-rows toggle, all
+       eighteen at once — stop shrinking and let it scroll. A 44px row is a
+       bad trade for a scroll it does not prevent. */
+    var subs = 0;
+    wrap.querySelectorAll('tr.pos-sub').forEach(function (r) {
+      subs += r.getBoundingClientRect().height;
+    });
+    var h = Math.floor((body - subs) / STARTERS);
+    if (h < FIT_MIN) h = Math.floor(body / STARTERS);
     root.style.setProperty('--cell-h', Math.max(FIT_MIN, Math.min(FIT_MAX, h)) + 'px');
   }
 
@@ -118,6 +133,10 @@ document.addEventListener('click', function (e) {
   document.addEventListener('click', function (e) {
     if (e.target.closest && e.target.closest('[data-act], [data-ui-act]')) refit();
   });
+  /* Naming a substitute is what reveals his row, and it happens under the
+     scorer's fingers rather than on a press. Coalesced to one measurement
+     per frame, so a whole name costs one. */
+  document.addEventListener('input', refit);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit);
   window.addEventListener('load', refit);
   refit();
