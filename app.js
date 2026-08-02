@@ -352,6 +352,124 @@ function diamondSVG(team, playerIdx, innIdx) {
   </svg>`;
 }
 
+/* ------------------------------------------------------ names that fit ----
+   A name wider than the Player column used to run off the end of it. An
+   <input> has no ellipsis to give, so it cut mid-letter, and a card that reads
+   "Encarnacio" tells the scorer nothing about which Encarnacion batted.
+
+   Wrapping to a second line is not on offer: the at-bat cells are rowspanned
+   over the whole slot, so a taller name row is a taller card, and the one-page
+   fit in ui.js is measuring exactly that. So the text is shrunk to the column
+   instead — what a scorer does with a pen when the name is longer than the box.
+
+   The size is computed rather than stepped down: measure the name once on a
+   canvas at whatever size the stylesheet is asking for, then scale by the
+   ratio. One reflow per name, not five. Anything without a measurable box — a
+   collapsed sub row, or jsdom under the test runner, where nothing has a width
+   — is left at its CSS size and never reaches the canvas. */
+const NAME_FIT_MIN = 6;      // px floor — a name this small is at the edge of legible.
+const NAME_FIT_SQUEEZE = -0.04;  // em. How far the letters may be pulled together at the floor.
+const NAME_FIT_SELECTOR = '.scoring-grid td.player-cell input, .live-matchup .ls-name';
+
+function nameFitContext() {
+  if (nameFitContext._ctx === undefined) {
+    try { nameFitContext._ctx = document.createElement('canvas').getContext('2d'); }
+    catch (e) { nameFitContext._ctx = null; }
+  }
+  return nameFitContext._ctx;
+}
+
+function measureNameWidth(text, cs, fontSize) {
+  const ctx = nameFitContext();
+  if (!ctx) return 0;
+  ctx.font = `${cs.fontStyle || 'normal'} ${cs.fontWeight || 400} ${fontSize}px ${cs.fontFamily}`;
+  // The skin tracks the grid names out by .02em, which is part of the width they
+  // need. Canvas letterSpacing is missing on Safari before 17.4 — add it by hand
+  // there, one gap per character, which is what the layout engine does anyway.
+  const track = cs.letterSpacing === 'normal' ? 0 : (parseFloat(cs.letterSpacing) || 0);
+  if ('letterSpacing' in ctx) {
+    ctx.letterSpacing = track + 'px';
+    return ctx.measureText(text).width;
+  }
+  return ctx.measureText(text).width + track * text.length;
+}
+
+/* What each name was last measured, and measured against. Re-fitting is a write
+   to the element followed by a read of the layout, so doing it to all 54 names
+   on a card costs 54 relayouts — and a re-fit is asked for on every click, most
+   of which are pitches that change no name and no column. Skip the ones that
+   have not moved: a pure read, no write, no relayout. */
+const _nameFitSeen = new WeakMap();
+
+/* Shrink one name until the whole of it is inside its own box. `force` measures
+   again even if nothing looks changed — for when the metrics themselves moved
+   under us, which is what a webfont finishing loading does. */
+function fitName(el, force) {
+  if (!el) return;
+  const text = (el.tagName === 'INPUT' ? el.value : el.textContent) || '';
+  const seen = _nameFitSeen.get(el);
+  if (!force && seen && seen.text === text && seen.box === nameBoxWidth(el)) return;
+  shrinkName(el, text);
+  // Recorded *after* the fit: that is the number the next call will read.
+  _nameFitSeen.set(el, { text, box: nameBoxWidth(el) });
+}
+
+function nameBoxWidth(el) {
+  return el.getBoundingClientRect().width || el.clientWidth;
+}
+
+function shrinkName(el, text) {
+  // Measure against the stylesheet, not against the last fit.
+  el.style.fontSize = '';
+  el.style.letterSpacing = '';
+  if (!text.trim()) return;
+  const cs = window.getComputedStyle(el);
+  const base = parseFloat(cs.fontSize);
+  const inset = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+              + (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.borderRightWidth) || 0);
+  // Less a hair: the columns land on fractional widths, and a name measured to
+  // exactly the width of one can still round its way back over the edge.
+  const avail = nameBoxWidth(el) - inset - 0.5;
+  if (!base || !(avail > 0)) return;
+  const w = measureNameWidth(text, cs, base);
+  if (!w || w <= avail) return;
+  // Rounded down to a tenth: rounding up puts the last glyph back over the edge.
+  const fs = Math.max(NAME_FIT_MIN, Math.floor(base * (avail / w) * 10) / 10);
+  el.style.fontSize = fs + 'px';
+  if (fs > NAME_FIT_MIN) return;
+
+  // The floor bound before the name did — the Player column is set in Graduate,
+  // which is a wide face, and a hyphenated double name on a phone runs past even
+  // 6px. Close what is left by pulling the letters together, as far as they can
+  // go before they touch. A name still too long after that is past helping.
+  const over = measureNameWidth(text, cs, fs) - avail;
+  if (over <= 0) return;
+  const track = cs.letterSpacing === 'normal' ? 0 : (parseFloat(cs.letterSpacing) || 0);
+  el.style.letterSpacing = Math.max(track - over / text.length, NAME_FIT_SQUEEZE * fs) + 'px';
+}
+
+function fitAllNames(force) {
+  document.querySelectorAll(NAME_FIT_SELECTOR).forEach(el => fitName(el, force));
+}
+
+/* Coalesced, because the things that invalidate every name at once — a resize
+   across a column-width breakpoint, the webfont arriving, a game loading — tend
+   to arrive together. A timer rather than an animation frame: a card that loads
+   while its tab is in the background (an iOS PWA coming out of the app switcher)
+   is given no frames, and the names would sit unfitted until something else
+   happened to touch them. */
+let _nameFitQueued = 0, _nameFitForce = false;
+function refitNames(force) {
+  _nameFitForce = _nameFitForce || force === true;
+  if (_nameFitQueued) return;
+  _nameFitQueued = setTimeout(() => {
+    _nameFitQueued = 0;
+    const f = _nameFitForce;
+    _nameFitForce = false;
+    fitAllNames(f);
+  }, 0);
+}
+
 function buildScoringGrid(team, containerId) {
   const wrap = document.getElementById(containerId);
   let html = '<table class="scoring-grid"><thead><tr>';
@@ -3241,7 +3359,10 @@ function updateSituation() {
 
   // Batter
   const lsBatter = document.getElementById('ls-batter');
-  if (lsBatter) lsBatter.textContent = getActivePlayerName(team, pIdx, innIdx);
+  if (lsBatter) {
+    lsBatter.textContent = getActivePlayerName(team, pIdx, innIdx);
+    fitName(lsBatter);
+  }
 
   // The man on the mound, and his running pitch count. Both repaint from here,
   // which every pitch goes through — a count that only moved when the plate
@@ -3249,7 +3370,10 @@ function updateSituation() {
   const pitchingTeam = team === 'visiting' ? 'home' : 'visiting';
   const pIdxOnMound = getEffectivePitcher(team, innIdx);
   const lsPitcher = document.getElementById('ls-pitcher');
-  if (lsPitcher) lsPitcher.textContent = livePitcherLabel(pitchingTeam, pIdxOnMound);
+  if (lsPitcher) {
+    lsPitcher.textContent = livePitcherLabel(pitchingTeam, pIdxOnMound);
+    fitName(lsPitcher);
+  }
   const lsPitches = document.getElementById('ls-pitches');
   if (lsPitches) {
     const n = livePitchCount(team, pIdxOnMound);
@@ -3384,8 +3508,8 @@ function renderFinalReadout() {
   const lsPitches = document.getElementById('ls-pitches');
   if (lsInn) lsInn.textContent = 'FINAL';
   if (lsCount) lsCount.textContent = runsOnLine('visiting') + '-' + runsOnLine('home');
-  if (lsBatter) lsBatter.textContent = '';
-  if (lsPitcher) lsPitcher.textContent = '';
+  if (lsBatter) { lsBatter.textContent = ''; fitName(lsBatter); }
+  if (lsPitcher) { lsPitcher.textContent = ''; fitName(lsPitcher); }
   if (lsPitches) lsPitches.textContent = '';
   for (let i = 1; i <= 3; i++) {
     const od = document.getElementById('ls-out-' + i);
@@ -4977,6 +5101,9 @@ function applyState() {
   updateSprayMini();
   updateExtraInnings();
   updateLiveStatsFromState();
+  // Every name in the lineup arrived at once and none of them fired an input
+  // event, so none of them has been measured against its column yet.
+  refitNames();
 
   // Restore timer state
   if (gameState.timerRunning && gameState.timerStart) {
@@ -7298,6 +7425,29 @@ document.addEventListener('input', function(e) {
 /* Auto-save on any input/select change (autoSave is itself debounced) */
 document.addEventListener('input', function(e) {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') autoSave();
+});
+
+/* Keep a name inside its column as it is typed, letter by letter, rather than
+   letting it disappear off the right-hand edge and reappear on blur. */
+document.addEventListener('input', function(e) {
+  const t = e.target;
+  if (t && t.matches && t.matches(NAME_FIT_SELECTOR)) fitName(t);
+});
+/* Breakpoints move the Player column, the webfont changes what a name measures,
+   and clicks load games, reveal sub rows and switch teams — all of which put
+   names in front of the scorer that have not been measured at their real size. */
+// These four measure again from scratch: the column may be the same width as it
+// was and the name the same name, and the answer still different.
+window.addEventListener('resize', function() { refitNames(true); });
+window.addEventListener('orientationchange', function() { refitNames(true); });
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(function() { refitNames(true); });
+// A grid inside a hidden tab has no width to measure against, so a card that
+// loaded out of sight is measured when it comes back into it.
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'visible') refitNames(true);
+});
+document.addEventListener('click', function(e) {
+  if (e.target.closest && e.target.closest('[data-act], [data-ui-act]')) refitNames();
 });
 document.addEventListener('change', function(e) {
   if (e.target.tagName === 'SELECT') autoSave();

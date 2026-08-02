@@ -223,9 +223,14 @@ details.info-details > summary:hover { color: var(--navy); }
    centred against each other read as four unrelated lines. */
 .live-cell.live-matchup { align-items: flex-start; min-width: 170px; gap: 1px; }
 .live-matchup .ls-label-2 { margin-top: 5px; }
+/* `width: 100%`, not the fit-content this flex column would otherwise give it:
+   the name is measured against its own box before it is shrunk to fit (see
+   fitName), and a box that is only ever as wide as the text it already holds
+   says there is no room even for an em dash. The ellipsis stays as a backstop
+   for a name past shrinking. */
 .live-matchup .ls-name {
   font-family: var(--font); font-size: 15px; font-weight: 600; color: #fff;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%;
 }
 .live-matchup .ls-name-sm { font-size: 14px; }
 .live-matchup .ls-sub {
