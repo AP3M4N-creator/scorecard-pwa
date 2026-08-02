@@ -650,11 +650,20 @@ details.info-details > summary:hover { color: var(--navy); }
 .gs-team-score .gs-score-num { font-size: 40px; font-weight: 600; line-height: 1.05; }
 .gs-vs { font-size: 14px; color: var(--gold); opacity: .7; }
 .gs-final-tag { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--gold); }
-.gs-section { margin-bottom: 20px; }
+/* Every table in here is `width: 100%`, which a table treats as a floor, not a
+   cap — it can never lay out narrower than its min-content, and the linescore's
+   13 columns (name + 9 innings + R/H/E) are wider than the modal on a phone.
+   The overflow used to spill out of the white box and off the screen: at 390px
+   the table ran to 373 with the card's content edge at 331, so the E column was
+   drawn over the overlay and past the right edge with nothing to scroll — the
+   modal's own `overflow-y: auto` puts no scrollable width on a centred flex
+   child. The section scrolls instead, and the caption stays put while it does. */
+.gs-section { margin-bottom: 20px; overflow-x: auto; }
 .gs-section h3 {
   font-family: var(--heading); font-size: 13px; font-weight: 600;
   letter-spacing: .12em; text-transform: uppercase; color: var(--text-light);
   border-bottom: 1px solid var(--rule); padding-bottom: 4px; margin-bottom: 8px;
+  position: sticky; left: 0;
 }
 .gs-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .gs-table th {
@@ -767,6 +776,22 @@ details.info-details > summary:hover { color: var(--navy); }
      lands past the edge is LOB — R, H and E stay on screen, and the column
      already scrolls for the extra-innings case. */
   .linescore td.team-col > span { max-width: 92px; }
+}
+
+/* Phone: the game summary spends 104px of a 390px screen on modal and card
+   padding, which is most of what the linescore is short by. Give the box the
+   width back and take the cell padding down to what a mono digit actually
+   needs, and the nine-inning line — every inning plus R, H and E — fits on
+   screen with room for three extra innings before the section has to scroll.
+   Same trade the strip above makes: tighten enough that a regulation game
+   fits, and scroll for the rest. */
+@media (max-width: 560px) {
+  .game-summary-modal { padding: 10px; }
+  .game-summary-inner { padding: 20px 16px; width: 100%; margin-top: 10px; }
+  .gs-table th, .gs-table td { padding: 5px 3px; }
+  /* The banner's 28px gutters are what push the two club names into the score
+     between them once the box is this narrow. */
+  .gs-score-banner { gap: 14px; padding: 14px; }
 }
 
 
