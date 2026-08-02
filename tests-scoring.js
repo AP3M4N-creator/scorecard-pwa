@@ -141,7 +141,6 @@
           renderOut(team, p, col);
           renderPlayText(team, p, col);
           renderPitches(team, p, col);
-          renderPitchCount(team, p, col);
           renderPitcherChange(team, p, col);
         }
       }

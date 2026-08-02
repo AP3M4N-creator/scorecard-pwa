@@ -390,7 +390,6 @@ function buildScoringGrid(team, containerId) {
       html += `<div class="pitcher-change-mark" id="pcm-${team}-${sp}-${inn}"></div>`;
       html += `<div class="sub-change-mark" id="scm-${team}-${sp}-${inn}"></div>`;
       html += `<div class="pitch-track" id="pt-${team}-${sp}-${inn}"></div>`;
-      html += `<div class="pitch-count" id="pc-${team}-${sp}-${inn}"></div>`;
       html += `<div class="diamond-wrap">${diamondSVG(team, sp, inn)}</div>`;
       html += `<div class="play-text" id="txt-${team}-${sp}-${inn}"></div>`;
       html += `<div class="out-num" data-team="${team}" data-p="${sp}" data-inn="${inn}"></div>`;
@@ -1582,7 +1581,6 @@ function renderInning(team, prev) {
       renderOut(team, p, col);
       renderPlayText(team, p, col);
       renderPitches(team, p, col);
-      renderPitchCount(team, p, col);
       renderPitcherChange(team, p, col);
     }
   }
@@ -2452,11 +2450,9 @@ function finishPlay(team, pIdx, innIdx, snapshot) {
   renderOut(team, pIdx, innIdx);
   renderPlayText(team, pIdx, innIdx);
   renderRBI(team, pIdx, innIdx);
-  renderPitchCount(team, pIdx, innIdx);
-  // The track as well as the count. Entering a play changes the pitch list — the
-  // result pitch, and since M7 the strikes or balls the play implies — and only the
-  // count was being repainted, so a button-entered K read "3 pitches" over an empty
-  // pitch track until something else happened to redraw the cell.
+  // Entering a play changes the pitch list — the result pitch, and since M7 the
+  // strikes or balls the play implies — so the track has to be repainted here or a
+  // button-entered K leaves an empty pitch track until something else redraws the cell.
   renderPitches(team, pIdx, innIdx);
   redoHistory.length = 0;
   playHistory.push(snapshot);
@@ -3042,7 +3038,6 @@ function addPitch(type) {
   pushUndo(team, pIdx, innIdx);
   ab.pitches.push(type);
   renderPitches(team, pIdx, innIdx);
-  renderPitchCount(team, pIdx, innIdx);
   updateSituation();
   checkAutoTrigger(team, pIdx, innIdx);
   autoSave();
@@ -3096,7 +3091,6 @@ function removePitch() {
     renderRBI(team, pIdx, innIdx);
   }
   renderPitches(team, pIdx, innIdx);
-  renderPitchCount(team, pIdx, innIdx);
   if (wasAutoPlay) {
     // A removal can't end a half-inning, so this is `clearPlayKeepPitches`'s tail
     // rather than the full `afterStateChange` — no transition to schedule, and the
@@ -3729,7 +3723,6 @@ function restorePlayerRow(team, pIdx, prevAbs) {
     renderOut(team, pIdx, c);
     renderPlayText(team, pIdx, c);
     renderPitches(team, pIdx, c);
-    renderPitchCount(team, pIdx, c);
     renderPitcherChange(team, pIdx, c);
   }
 }
@@ -4136,7 +4129,6 @@ function clearPlayKeepPitches() {
   renderOut(team, pIdx, innIdx);
   renderPlayText(team, pIdx, innIdx);
   renderPitches(team, pIdx, innIdx);
-  renderPitchCount(team, pIdx, innIdx);
   renderPitcherChange(team, pIdx, innIdx);
   recomputeInning(team, getRealInning(team, innIdx));
   updateSprayMini();
@@ -4406,7 +4398,6 @@ function clearSelectedCell() {
     renderPitches(team, pIdx, innIdx);
     renderPlayText(team, pIdx, innIdx);
     renderRBI(team, pIdx, innIdx);
-    renderPitchCount(team, pIdx, innIdx);
   }
 
   renderPitcherChange(team, pIdx, innIdx);
@@ -4948,7 +4939,6 @@ function applyState() {
         renderPlayText(team, p, inn);
         renderPitcherChange(team, p, inn);
         renderRBI(team, p, inn);
-        renderPitchCount(team, p, inn);
       });
     });
 
@@ -5077,16 +5067,6 @@ function promptErrorPlay() {
 function renderRBI(team, pIdx, innIdx) {
   // RBI dots are now rendered inline by renderPlayText
   renderPlayText(team, pIdx, innIdx);
-}
-
-/* Render pitch count in at-bat cell (Feature 12) */
-function renderPitchCount(team, pIdx, innIdx) {
-  const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
-  const el = document.getElementById(`pc-${team}-${pIdx}-${innIdx}`);
-  if (!el) return;
-  const count = (ab.pitches || []).length;
-  el.textContent = count > 0 ? count : '';
-  el.classList.toggle('active', count > 0);
 }
 
 /* Auto Player Stats (Feature 1) */

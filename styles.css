@@ -419,15 +419,24 @@ details.info-details > summary:hover { color: var(--navy); }
 
 .pitch-track { position: absolute; top: 2px; left: 3px; display: flex; gap: 3px; z-index: 1; line-height: 1; }
 .pitch-col { display: flex; flex-direction: column; }
-.pitch-mark { font-size: 10px; font-weight: 700; line-height: 1.05; font-family: var(--mono); }
+/* Long at-bats: step the marks down so a column of fouls can never run past the
+   bottom of the cell. The ceiling is derived from --cell-h rather than hard-coded,
+   because the cell shrinks to 54/52/50px at the breakpoints below while a column of
+   marks would not: a column starts 3px down (the cell's 1px border plus the track's
+   2px top) and has to stop 2px clear of the bottom padding edge, which leaves
+   (--cell-h - 5px) to divide between n marks at line-height 1. 11px is the cap, so
+   marks only shrink when the column is genuinely too tall to fit at full size.
+   app.js wraps at 7 per column, so 7 is the worst case. */
+.pitch-mark {
+  font-size: min(11px, calc((var(--cell-h) - 5px) / 4));
+  font-weight: 700; line-height: 1; font-family: var(--mono);
+}
+.pitch-col:has(.pitch-mark:nth-child(5)) .pitch-mark { font-size: min(11px, calc((var(--cell-h) - 5px) / 5)); }
+.pitch-col:has(.pitch-mark:nth-child(6)) .pitch-mark { font-size: min(11px, calc((var(--cell-h) - 5px) / 6)); }
+.pitch-col:has(.pitch-mark:nth-child(7)) .pitch-mark { font-size: min(11px, calc((var(--cell-h) - 5px) / 7)); }
 .pitch-mark.strike { color: var(--accent); }
 .pitch-mark.foul { color: #55504a; }
 .pitch-mark.ball { color: var(--navy); }
-.pitch-count {
-  position: absolute; bottom: 2px; left: 3px; font-family: var(--mono);
-  font-size: 9px; font-weight: 600; color: var(--text-light); z-index: 2; display: none;
-}
-.pitch-count.active { display: block; }
 
 .rbi-badge { display: none; }
 .rbi-badge.active { display: inline; }
