@@ -187,6 +187,25 @@ details.info-details > summary:hover { color: var(--navy); }
 .linescore td.team-col {
   text-align: left; padding-left: 8px; background: transparent;
   font-family: var(--heading); font-weight: 600; font-size: 14px; color: #fff;
+  /* A club name past the column used to wrap, and a two-line row is a taller
+     strip — 14px off the one-page fit on an 11" iPad, for nothing. Same answer
+     the batting order gives a long name (see fitName in app.js): never wrap,
+     let the box take what it reasonably can, then shrink the text. */
+  white-space: nowrap;
+}
+/* The column grows to the name up to this cap and no further. 168px clears
+   every club name at full size with the strip stacked, where the table has the
+   width to itself; the deck block below tightens it for the case where the
+   live readout is competing for the same row. The span is what bounds the
+   column: an inline-block's max-width caps the cell's max-content
+   contribution, where a `max-width` on the `td` itself is a suggestion the
+   auto table layout is free to ignore. Middle-aligned because
+   an inline-block with `overflow: hidden` takes its baseline from its bottom
+   edge, which would drop the row back down the height this rule just saved.
+   The ellipsis is the backstop for a name past shrinking. */
+.linescore td.team-col > span {
+  display: inline-block; vertical-align: middle; max-width: 168px;
+  overflow: hidden; text-overflow: ellipsis;
 }
 .linescore td.total { background: rgba(255,255,255,0.12); }
 .linescore input {
@@ -740,6 +759,14 @@ details.info-details > summary:hover { color: var(--navy); }
   .linescore { width: max-content; }
   .linescore th, .linescore td { width: 19px; }
   .linescore th.team-col, .linescore td.team-col { width: 58px; padding-left: 6px; }
+  /* The table is the thing that scrolls here, so a wide name column costs
+     columns on screen rather than readout width. A one-line name is still
+     worth it: it takes 20px off the stacked strip on a 390px phone, and that
+     is 20px of batting order on a screen that only has ~109px of it (see the
+     H2 note above the 834px block). The cap is set so the one column that
+     lands past the edge is LOB — R, H and E stay on screen, and the column
+     already scrolls for the extra-innings case. */
+  .linescore td.team-col > span { max-width: 92px; }
 }
 
 
@@ -1138,6 +1165,11 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
   .linescore th, .linescore td { width: 26px; height: 22px; }
   .linescore th.team-col, .linescore td.team-col { width: 92px; }
   .linescore td.team-col { font-size: 13px; }
+  /* Every pixel the name column takes here comes off the live readout beside
+     it, which is already scrolling below 1024. On an 11" iPad landscape the
+     deck can afford the full 150 and the readout still fits whole; at the
+     835 edge it cannot, and a name shrunk a size is the cheaper loss. */
+  .linescore td.team-col > span { max-width: min(150px, 13vw); }
   .linescore input { font-size: 13px; }
 
   #live-stats { flex: 1; display: flex; align-items: center; min-width: 0; }

@@ -369,7 +369,11 @@ function diamondSVG(team, playerIdx, innIdx) {
    — is left at its CSS size and never reaches the canvas. */
 const NAME_FIT_MIN = 6;      // px floor — a name this small is at the edge of legible.
 const NAME_FIT_SQUEEZE = -0.04;  // em. How far the letters may be pulled together at the floor.
-const NAME_FIT_SELECTOR = '.scoring-grid td.player-cell input, .live-matchup .ls-name';
+/* The linescore label is fitted on the cell, not on the span inside it, for the
+   same reason .ls-name is given a width: the span is shrink-to-fit, so its own
+   box is only ever as wide as the text it already holds and every measurement
+   comes back half a pixel short. The cell has a real width. */
+const NAME_FIT_SELECTOR = '.scoring-grid td.player-cell input, .live-matchup .ls-name, .linescore td.team-col';
 
 function nameFitContext() {
   if (nameFitContext._ctx === undefined) {
@@ -7464,13 +7468,15 @@ window.addEventListener('pagehide', flushSave);
 document.getElementById('info-visiting-team')?.addEventListener('input', function() {
   gameState.info.visitingTeam = this.value;
   const label = document.getElementById('ls-v-label');
-  if (label) label.textContent = this.value || 'Visiting';
+  // The label is not the field being typed into, so the delegated fit above
+  // never sees it — measure it here, on the keystroke that changed it.
+  if (label) { label.textContent = this.value || 'Visiting'; fitName(label.parentElement); }
   autoSave();
 });
 document.getElementById('info-home-team')?.addEventListener('input', function() {
   gameState.info.homeTeam = this.value;
   const label = document.getElementById('ls-h-label');
-  if (label) label.textContent = this.value || 'Home';
+  if (label) { label.textContent = this.value || 'Home'; fitName(label.parentElement); }
   autoSave();
 });
 document.getElementById('info-innings')?.addEventListener('change', function() {
