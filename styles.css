@@ -215,7 +215,11 @@ details.info-details > summary:hover { color: var(--navy); }
 .linescore input:focus { outline: 2px solid var(--gold); outline-offset: -2px; }
 .linescore td.total input { color: var(--gold); font-weight: 700; }
 .linescore td.ls-active { background: rgba(255,255,255,0.22) !important; box-shadow: inset 0 0 0 2px var(--gold); }
+/* `position: relative` is here for the hit-area overlay the stacked strip
+   hangs off this chip — see the 834px block. The chip itself is small on
+   purpose: it shares the caption's line box, and that line is pure height. */
 .ei-btn {
+  position: relative;
   padding: 4px 10px; font-size: 11px; font-weight: 600; font-family: var(--heading);
   letter-spacing: .06em; background: transparent; color: var(--gold);
   border: 1px solid rgba(255,255,255,0.45); border-radius: 2px; cursor: pointer; vertical-align: middle;
@@ -721,6 +725,30 @@ details.info-details > summary:hover { color: var(--navy); }
   .scoring-grid td.player-cell { width: 128px; }
   .linescore th, .linescore td { width: 26px; }
 
+  /* +EI was a 36x23 target where the entry deck's own buttons are 44x40
+     (.quick-btn). On the stacked strip the chip sits in the caption's line
+     box and nothing else is on that line, so a real 44x40 box would grow the
+     line by 17.5px and take every one of them off the batting order — on a
+     390px phone that has ~109px of card to begin with. Same trade M3 was
+     closed for, so the painted chip stays put and only the target grows.
+
+     Downward, not centred: at 560 and below .ls-table-col is the table's
+     horizontal scroller, and an overflow that is not `visible` clips the
+     top edge the caption sits against — anything above the chip would be
+     cut. Below it there is the caption's 6px margin and then the linescore's
+     header row, which carries no handler, no input and no hit test of its
+     own, so the overlay can take it. 52x42, and the chip is its top edge.
+
+     The h3 has to be lifted for any of it to land: a table hit-tests above a
+     positioned box that is a descendant of an earlier sibling, whatever the
+     overlay's own z-index says, so the pseudo-element paints over the header
+     row but the taps still went to the th. Raising the caption itself is what
+     puts the button on top. Nothing overlaps here visually, so the lift is
+     hit-testing only. */
+  .linescore-wrap h3 { position: relative; z-index: 1; }
+  .ei-btn { padding: 4px 12px; }
+  .ei-btn::after { content: ''; position: absolute; inset: 0 -3px -20px; }
+
   /* The live readout is a row at every width. `display: flex` was an inline
      style on #live-stats until 60c6340 moved it into the 835px block, and
      below that breakpoint the five cells fell back to full-width blocks and
@@ -1186,7 +1214,17 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
   /* "Score by Innings" is what a linescore looks like — the caption is
      pure height. Only the +EI control survives, floated alongside. */
   .linescore-wrap h3 { margin: 0; font-size: 0; letter-spacing: 0; }
-  .linescore-wrap h3 .ei-btn { font-size: 11px; letter-spacing: .06em; padding: 4px 7px; }
+  /* On the deck the chip can just be the right size. The strip's height is
+     the live readout's (80.7px at 1194x834, and the linescore column is
+     stretched to it), so anything up to that is free — a 44x40 box, the
+     .quick-btn standard, costs the strip nothing and the table 8px of the
+     width it was not using. No overlay here: the caption is font-size: 0,
+     and reaching below the chip would reach into the table itself (the
+     overlay is scoped to the 834px block for that reason). */
+  .linescore-wrap h3 .ei-btn {
+    font-size: 11px; letter-spacing: .06em; padding: 4px 7px;
+    min-width: 44px; min-height: 40px;
+  }
   .linescore th, .linescore td { width: 26px; height: 22px; }
   .linescore th.team-col, .linescore td.team-col { width: 92px; }
   .linescore td.team-col { font-size: 13px; }
