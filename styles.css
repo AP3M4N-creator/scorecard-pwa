@@ -710,6 +710,25 @@ details.info-details > summary:hover { color: var(--navy); }
   body { padding-bottom: calc(140px + env(safe-area-inset-bottom, 0px)); }
 }
 
+/* Phone: the scoreboard strip is a flex row of a fixed-width table and the
+   live cells, and the table half is `flex: 0 0 auto` — a team name plus 13
+   columns that cannot shrink to fit, and +EI only adds more. Below ~530px it
+   pushed the whole document sideways. Stack the strip so the table gets the
+   full width, tighten the columns enough that a nine-inning card fits, and
+   let the column scroll on its own for the extra-innings case rather than
+   dragging the page with it. */
+@media (max-width: 560px) {
+  .linescore-wrap { flex-direction: column; }
+  .linescore-wrap > div:not(#live-stats) { min-width: 0; overflow-x: auto; }
+  /* Auto table layout treats a cell `width` as a suggestion and will squeeze
+     the columns to whatever the box allows — on an extra-innings card that
+     clips the two-digit totals. Hold the intrinsic width so the columns keep
+     their size and the column scrolls under them instead. */
+  .linescore { width: max-content; }
+  .linescore th, .linescore td { width: 19px; }
+  .linescore th.team-col, .linescore td.team-col { width: 58px; padding-left: 6px; }
+}
+
 
 /* ============================================================
    RANGERS DAY GAME — theme layer. Overrides only; everything
@@ -976,6 +995,23 @@ details.info-details > summary::before { color: var(--rb-red); }
 @media (max-width: 1024px) { :root { --cell-w: 75px; --cell-h: 58px; } }
 @media (max-width: 834px)  { :root { --cell-w: 69px; --cell-h: 55px; } }
 
+/* Same trap for the masthead: the theme takes the title from 25px to 30px
+   unconditionally, which overrode the base's step down to 18px and — the
+   title being `white-space: nowrap` — pushed the page sideways on a small
+   phone. Restate that step too, scaled to 30. */
+@media (max-width: 1024px) { .header-bar h1 { font-size: 22px; } }
+
 /* The entry deck is fixed at every size now, and .app already reserves the
    140px it occupies — so the base's mobile body padding would double up. */
 @media (max-width: 834px) { body { padding-bottom: 0; } }
+
+/* The theme sizes the scoreboard up (15px team names and figures), which is
+   what overran the phone in the first place. Take it back down inside the
+   stacked strip — this has to live here, after the theme's own linescore
+   rules, or those would win over the base breakpoint above. */
+@media (max-width: 560px) {
+  .linescore-wrap { padding: 10px 12px; }
+  .linescore th, .linescore td { height: 24px; }
+  .linescore td.team-col { font-size: 12px; letter-spacing: .01em; }
+  .linescore input { font-size: 12px; }
+}
