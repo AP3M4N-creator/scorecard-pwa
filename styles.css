@@ -100,17 +100,6 @@ input, textarea { color: var(--text); }
 }
 .header-bar h1 span { color: var(--navy); font-style: italic; }
 
-/* Baseball stitching, printed as a rule */
-.stitch {
-  height: 9px; margin: 0 0 4px;
-  background-image:
-    repeating-linear-gradient(66deg, var(--accent) 0 1.5px, transparent 1.5px 9px),
-    repeating-linear-gradient(114deg, var(--accent) 0 1.5px, transparent 1.5px 9px);
-  background-size: 100% 4px, 100% 4px;
-  background-position: 0 0, 0 5px;
-  background-repeat: repeat-x;
-  opacity: .75;
-}
 .header-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; align-items: center; }
 .header-actions button,
 .game-timer button,
@@ -806,7 +795,6 @@ a:hover { color: var(--rb-red); }
 .masthead .kicker { color: var(--rb-white); opacity: .7; letter-spacing: .34em; font-weight: 400; }
 .header-bar h1 { font-size: 30px; font-weight: 400; letter-spacing: .04em; color: var(--rb-white); }
 .header-bar h1 span { color: var(--rb-white); font-style: normal; opacity: .55; }
-.stitch { display: none; }
 
 .header-actions button, .game-timer button {
   border-color: rgba(255,255,255,0.32); color: var(--rb-white); border-radius: 3px; letter-spacing: .06em;
@@ -1014,4 +1002,128 @@ details.info-details > summary::before { color: var(--rb-red); }
   .linescore th, .linescore td { height: 24px; }
   .linescore td.team-col { font-size: 12px; letter-spacing: .01em; }
   .linescore input { font-size: 12px; }
+}
+
+
+/* ============================================================
+   ONE-PAGE FIT — the whole card on an iPad in landscape with no
+   scrolling. Keep this block last; it is layout only, and it
+   overrides the theme's spacing rather than its colours.
+
+   The budget on an 11" iPad (1194x834) is: scoreboard strip ~100,
+   the merged control row 40, the docked entry deck ~70, and the
+   rest is the batting grid. Row height is not guessed from the
+   viewport *width* any more — ui.js measures the leftover box and
+   writes --cell-h, so the same rules fit Safari-with-chrome and
+   the home-screen PWA. See fitGrid() in ui.js.
+   ============================================================ */
+
+/* Reserve exactly what the docked deck occupies, no more. The old
+   flat 140px was double a 70px deck. --deck-h is measured. */
+.app { padding-bottom: calc(var(--deck-h, 78px) + 14px + env(safe-area-inset-bottom, 0px)); }
+
+/* The details panel is a dropdown off the masthead now, not a row of
+   its own. The inputs stay in the document at all times either way —
+   app.js's collectState() scrapes them straight from the DOM. */
+.game-info-card { position: relative; }
+details.info-details > summary { padding: 8px 14px; min-height: 40px; justify-content: center;
+  border: 1px solid rgba(255,255,255,0.32); border-radius: 3px; color: var(--rb-white);
+  letter-spacing: .06em; }
+details.info-details > summary:hover { background: rgba(255,255,255,0.16); border-color: var(--rb-white); color: var(--rb-white); }
+.info-body {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 300;
+  width: max-content; max-width: min(680px, calc(100vw - 32px));
+  background: var(--paper, #fff); color: var(--rb-blue, #003278);
+  border: 1px solid var(--line, rgba(0,0,0,0.2)); border-top: 3px solid var(--rb-red, #c0111f);
+  border-radius: 3px; box-shadow: 0 12px 34px rgba(0,50,120,0.22);
+  padding: 14px 18px; margin: 0;
+}
+
+/* Summary / Games / New Game move behind one button so the linescore
+   and the live readout get the width they need on one line. */
+.hdr-menu { position: relative; }
+.hdr-menu-panel {
+  display: none; position: absolute; top: calc(100% + 8px); right: 0; z-index: 300;
+  min-width: 190px; padding: 6px;
+  background: var(--paper, #fff); border: 1px solid var(--line, rgba(0,0,0,0.2));
+  border-top: 3px solid var(--rb-red, #c0111f); border-radius: 3px;
+  box-shadow: 0 12px 34px rgba(0,50,120,0.22);
+}
+.hdr-menu.open .hdr-menu-panel { display: block; }
+.hdr-menu-panel button {
+  display: block; width: 100%; text-align: left;
+  padding: 10px 12px; min-height: 42px; border: none; border-radius: 2px;
+  background: transparent; color: var(--rb-blue, #003278); cursor: pointer;
+  font-family: var(--heading); font-size: 13px; font-weight: 600; letter-spacing: .06em;
+}
+.hdr-menu-panel button:hover { background: var(--paper-2, rgba(0,50,120,0.07)); }
+.hdr-menu-panel button.danger { color: var(--rb-red, #c0111f); }
+
+/* The team switch lives in the section bar now — one control row
+   instead of two. Only the active tab's copy is ever on screen. */
+.sec-bar > .tab-bar { border: none; gap: 4px; padding-right: 12px; margin-right: 6px;
+  border-right: 1px solid var(--line, rgba(0,0,0,0.16)); }
+.sec-bar .tab-btn { min-height: 34px; padding: 5px 12px; font-size: 15px; border-bottom-width: 2px; }
+
+@media (min-width: 835px) {
+  /* --- The strip: masthead, linescore and live readout on one deck --- */
+  .deck-strip {
+    position: sticky; top: 0; z-index: 120;
+    margin: 0 -20px; padding: 0 20px 8px;
+    background: var(--paper, #fff);
+  }
+  .header-bar { padding: 8px 20px; gap: 14px; }
+  .masthead .kicker { font-size: 9px; margin-bottom: 1px; }
+  .header-bar h1 { font-size: 19px; }
+  .header-actions { gap: 6px; }
+  .header-actions button, .game-timer button, details.info-details > summary {
+    padding: 7px 12px; min-height: 36px; font-size: 12px;
+  }
+  .game-timer .timer-display { min-width: 46px; font-size: 13px; }
+
+  .linescore-wrap {
+    display: flex; align-items: stretch; gap: 14px;
+    padding: 8px 14px; margin: 8px 0 0;
+  }
+  .ls-table-col { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+  /* "Score by Innings" is what a linescore looks like — the caption is
+     pure height. Only the +EI control survives, floated alongside. */
+  .linescore-wrap h3 { margin: 0; font-size: 0; letter-spacing: 0; }
+  .linescore-wrap h3 .ei-btn { font-size: 11px; letter-spacing: .06em; padding: 4px 7px; }
+  .linescore th, .linescore td { width: 26px; height: 22px; }
+  .linescore th.team-col, .linescore td.team-col { width: 92px; }
+  .linescore td.team-col { font-size: 13px; }
+  .linescore input { font-size: 13px; }
+
+  #live-stats { flex: 1; display: flex; align-items: center; min-width: 0; }
+  .live-cell { padding: 0 11px; gap: 2px; }
+  .live-cell .live-label { font-size: 9px; letter-spacing: .11em; }
+  #ls-inning, #ls-count { font-size: 22px !important; }
+  .live-cell svg { width: 34px; height: 34px; }
+  .live-cell.live-matchup { min-width: 0; flex: 1; }
+  .live-matchup .ls-name { font-size: 14px; }
+  .live-matchup .ls-name-sm { font-size: 13px; }
+  .live-matchup .ls-label-2 { margin-top: 2px; }
+  /* Hold the pitch-count line open. It is empty until the first pitch, and
+     letting it appear grew the strip 15px mid-at-bat — which moved the whole
+     grid under the scorer's finger, and cost a row height to claw back. */
+  .live-matchup .ls-sub { min-height: 14px; }
+
+  /* --- The control row --- */
+  .tab-content.active { padding-top: 0; }
+  .sec-bar { margin: 6px 0 4px; flex-wrap: nowrap; }
+  .sec-btn { min-height: 32px; padding: 4px 12px; }
+  .ghost-btn { min-height: 32px; padding: 5px 12px; font-size: 12px; }
+
+  /* --- The grid --- */
+  /* Leave the head row's `top: 0` alone. `.grid-wrap` is an overflow-x
+     scroll container, so the sticky head resolves against *that* box,
+     not the viewport — any other `top` just pushes the head row down
+     into the middle of the batting order. */
+  .scoring-grid thead th { padding: 5px 2px; }
+  .grid-wrap { padding-bottom: 0; }
+
+  /* The deck is a fixed overlay; it needs no bottom margin in flow. */
+  .quick-bar { margin-bottom: 0; }
+  .qb-core { padding: 8px 0; }
 }

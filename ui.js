@@ -20,7 +20,35 @@ document.addEventListener('click', function (e) {
     var wrap = el.closest('.main-area') && el.closest('.main-area').querySelector('.grid-wrap');
     if (!wrap) return;
     el.textContent = wrap.classList.toggle('show-subs') ? 'Hide sub rows' : 'Show sub rows';
+  } else if (act === 'menu') {
+    var menu = el.closest('.hdr-menu');
+    if (!menu) return;
+    var open = menu.classList.toggle('open');
+    el.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
+});
+
+/* Close the masthead menu and the details panel on any click outside them —
+   including a click on one of the menu's own buttons, which fires its
+   data-act on app.js and then wants the menu out of the way. */
+document.addEventListener('click', function (e) {
+  var inMenu = e.target.closest && e.target.closest('.hdr-menu');
+  var onTrigger = inMenu && e.target.closest('[data-ui-act="menu"]');
+  if (!onTrigger) {
+    document.querySelectorAll('.hdr-menu.open').forEach(function (m) {
+      m.classList.remove('open');
+      var b = m.querySelector('[data-ui-act="menu"]');
+      if (b) b.setAttribute('aria-expanded', 'false');
+    });
+  }
+  if (!(e.target.closest && e.target.closest('.game-info-card'))) {
+    document.querySelectorAll('details.info-details[open]').forEach(function (d) { d.open = false; });
+  }
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'Escape') return;
+  document.querySelectorAll('.hdr-menu.open').forEach(function (m) { m.classList.remove('open'); });
+  document.querySelectorAll('details.info-details[open]').forEach(function (d) { d.open = false; });
 });
 
 /* app.js's toggleQBDrawer() rewrites the drawer button to '···' / '∧'.
@@ -33,3 +61,64 @@ document.addEventListener('click', function (e) {
     });
   }, 0);
 });
+
+/* ---------------------------------------------------------------
+   One-page fit.
+
+   The batting grid gets whatever vertical space is left between the
+   scoreboard strip and the docked entry deck, so a nine-inning card
+   sits on an iPad screen with nothing to scroll. Measuring beats the
+   old --cell-h width breakpoints, which were guessing at height from
+   width and could not tell Safari-with-chrome from the home-screen
+   PWA.
+
+   Two variables come out of here:
+     --cell-h   batting row height, clamped to stay legible
+     --deck-h   what the docked deck actually occupies, so .app
+                reserves that and not a flat 140px
+
+   Below FIT_BREAK (phone, and iPad portrait) the stylesheet's own
+   breakpoint ladder is left alone: the card cannot fit there anyway,
+   and shrinking the cells would only make the scroll harder to read.
+   Extra innings and shown sub rows overflow past the floor by design
+   — they scroll. --------------------------------------------------- */
+(function () {
+  /* PAD covers what sits below the grid but outside this measurement:
+     .app's 14px gutter under the deck, plus a pixel or two of rounding
+     in the row heights. Short-changing it leaves the page 2-3px
+     scrollable, which on a touch screen is as annoying as 300px. */
+  var FIT_MIN = 44, FIT_MAX = 62, FIT_BREAK = 835, STARTERS = 9, PAD = 18;
+  var root = document.documentElement, queued = false;
+
+  function fit() {
+    queued = false;
+    /* Reserve the deck's resting height only. The More-plays drawer
+       expands over the card; it must not push 400px of padding in. */
+    var core = document.querySelector('.tab-content.active .qb-core');
+    var deck = core ? Math.ceil(core.getBoundingClientRect().height) : 0;
+    root.style.setProperty('--deck-h', deck + 'px');
+
+    var wrap = document.querySelector('.tab-content.active .grid-wrap');
+    if (window.innerWidth < FIT_BREAK || !wrap) { root.style.removeProperty('--cell-h'); return; }
+
+    var head = wrap.querySelector('thead');
+    /* Document-space top, so a scrolled page still measures the same box. */
+    var top = wrap.getBoundingClientRect().top + window.scrollY;
+    var body = window.innerHeight - top - deck - PAD - (head ? head.getBoundingClientRect().height : 40);
+    var h = Math.floor(body / STARTERS);
+    root.style.setProperty('--cell-h', Math.max(FIT_MIN, Math.min(FIT_MAX, h)) + 'px');
+  }
+
+  function refit() { if (!queued) { queued = true; requestAnimationFrame(fit); } }
+
+  window.addEventListener('resize', refit);
+  window.addEventListener('orientationchange', refit);
+  /* A tab switch, the drawer, the sub-row toggle and +EI all change the
+     boxes being measured; re-measure after whichever handler ran. */
+  document.addEventListener('click', function (e) {
+    if (e.target.closest && e.target.closest('[data-act], [data-ui-act]')) refit();
+  });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit);
+  window.addEventListener('load', refit);
+  refit();
+})();

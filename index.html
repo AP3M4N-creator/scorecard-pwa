@@ -32,28 +32,20 @@
 <div id="a11y-live" role="status" aria-live="polite" style="position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0"></div>
 
 <div class="app">
+ <div class="deck-strip">
   <div class="header-bar">
     <div class="masthead">
       <div class="kicker">Official Scorecard</div>
       <h1>Baseball <span>Scorecard</span></h1>
     </div>
-    <div class="game-timer">
-      <button id="timer-btn" data-act="toggleGameTimer">Start</button>
-      <span class="timer-display" id="timer-display">0:00</span>
-    </div>
     <div class="header-actions">
-      <button data-act="showGameSummary">Summary</button>
-      <button data-act="openGameLibrary">Games</button>
-      <button id="save-btn" class="primary" data-act="saveGame">Save</button>
-      <button class="danger" data-act="newGame">New Game</button>
-    </div>
-  </div>
-
-  <div class="stitch" aria-hidden="true"></div>
-
-  <div class="game-info-card">
+      <div class="game-timer">
+        <button id="timer-btn" data-act="toggleGameTimer">Start</button>
+        <span class="timer-display" id="timer-display">0:00</span>
+      </div>
+      <div class="game-info-card">
     <details class="info-details">
-      <summary>Game details — teams, umpires, conditions</summary>
+      <summary>Details</summary>
       <div class="info-body">
         <div class="info-group">
           <div class="info-row"><label for="info-visiting-team">Visiting Team</label><input type="text" id="info-visiting-team"></div>
@@ -83,11 +75,22 @@
         </div>
       </div>
     </details>
+      </div>
+      <button id="save-btn" class="primary" data-act="saveGame">Save</button>
+      <div class="hdr-menu">
+        <button class="hdr-more" data-ui-act="menu" aria-haspopup="true" aria-expanded="false">More</button>
+        <div class="hdr-menu-panel">
+          <button data-act="showGameSummary">Summary</button>
+          <button data-act="openGameLibrary">Games</button>
+          <button class="danger" data-act="newGame">New Game</button>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <div class="linescore-wrap" style="display:flex;gap:18px;align-items:stretch">
-    <div style="flex:0 0 auto">
-      <h3 style="display:flex;align-items:center;gap:8px">Score by Innings <button id="add-extra-inn-btn" class="ei-btn" data-act="addExtraInning" style="display:none">+EI</button></h3>
+  <div class="linescore-wrap">
+    <div class="ls-table-col">
+      <h3>Score by Innings <button id="add-extra-inn-btn" class="ei-btn" data-act="addExtraInning" style="display:none">+EI</button></h3>
       <table class="linescore">
         <thead>
           <tr id="ls-header-row">
@@ -101,7 +104,7 @@
         </tbody>
       </table>
     </div>
-    <div id="live-stats" style="flex:1;display:flex;gap:0;min-width:0">
+    <div id="live-stats">
       <div class="live-cell">
         <div class="live-label">Inning</div>
         <div id="ls-inning" style="font-size:24px;font-weight:600;color:#fff;font-family:var(--heading);line-height:1.1">▲ 1</div>
@@ -136,11 +139,7 @@
       </div>
     </div>
   </div>
-
-  <div class="tab-bar">
-    <button class="tab-btn active" data-tab="visiting" data-act="switchTab" data-arg="visiting">Visiting Team</button>
-    <button class="tab-btn" data-tab="home" data-act="switchTab" data-arg="home">Home Team</button>
-  </div>
+ </div>
 
   <div class="tab-content active" id="tab-visiting">
     <div class="main-area">
@@ -220,6 +219,10 @@
       </div>
 
       <div class="sec-bar">
+        <div class="tab-bar">
+          <button class="tab-btn active" data-tab="visiting" data-act="switchTab" data-arg="visiting">Visiting</button>
+          <button class="tab-btn" data-tab="home" data-act="switchTab" data-arg="home">Home</button>
+        </div>
         <button class="sec-btn active" data-ui-act="sec" data-panel="bat">Batting Order</button>
         <button class="sec-btn" data-ui-act="sec" data-panel="pitch">Pitching Record</button>
         <button class="sec-btn" data-ui-act="sec" data-panel="spray">Spray Chart</button>
@@ -321,6 +324,10 @@
       </div>
 
       <div class="sec-bar">
+        <div class="tab-bar">
+          <button class="tab-btn active" data-tab="visiting" data-act="switchTab" data-arg="visiting">Visiting</button>
+          <button class="tab-btn" data-tab="home" data-act="switchTab" data-arg="home">Home</button>
+        </div>
         <button class="sec-btn active" data-ui-act="sec" data-panel="bat">Batting Order</button>
         <button class="sec-btn" data-ui-act="sec" data-panel="pitch">Pitching Record</button>
         <button class="sec-btn" data-ui-act="sec" data-panel="spray">Spray &amp; Notes</button>
