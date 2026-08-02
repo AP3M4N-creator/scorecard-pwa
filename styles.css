@@ -788,7 +788,11 @@ details.info-details > summary:hover { color: var(--navy); }
   --green: var(--rb-blue);
   --select: rgba(192,17,31,0.12);
   --text: var(--rb-blue);
-  --text-light: rgba(0,50,120,0.6);
+  /* 0.6 measured 3.66:1 on the paper — under AA for the 11-19px labels this
+     paints (inactive team tab, section buttons, every field label). 0.72 is
+     the lightest step that clears 4.5:1 on the darkest ground it lands on
+     (--paper-2): 4.84:1 there, 5.07:1 on the paper, 5.50:1 on white. */
+  --text-light: rgba(0,50,120,0.72);
   --rule: var(--line-soft);
 
   /* Graduate is the varsity face; the broadsheet fonts stay on as the
