@@ -156,9 +156,10 @@
           <button class="quick-btn hit" data-act="applyPlay" data-arg="3B">3B<small>3</small></button>
           <button class="quick-btn hit" data-act="applyPlay" data-arg="HR">HR<small>4</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn out" data-act="applyPlay" data-arg="K">K<small>k</small></button>
           <button class="quick-btn out" data-act="promptGroundout">GO<small>g</small></button>
-          <button class="quick-btn walk" data-act="applyPlay" data-arg="BB">BB<small>w</small></button>
+          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="F">FO<small>x</small></button>
+          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="P">PO<small>p</small></button>
+          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="L">LO<small>l</small></button>
           <span class="qb-sep"></span>
           <button class="quick-btn undo-play" data-act="undoLastPlay">Undo<small>u</small></button>
           <button class="qb-more-btn" data-act="toggleQBDrawer">More plays</button>
@@ -172,15 +173,14 @@
             <button class="qbg-tab" data-ui-act="qbg" data-group="fix">Fix</button>
           </div>
           <div class="qbg-panel active" data-group="out">
-            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="F">FO<small>x</small></button>
-            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="P">PO<small>p</small></button>
-            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="L">LO<small>l</small></button>
+            <button class="quick-btn out" data-act="applyPlay" data-arg="K">K<small>k</small></button>
             <button class="quick-btn out" data-act="promptPositionPlay" data-arg="DP ">DP<small>d</small></button>
             <button class="quick-btn out" data-act="promptPositionPlay" data-arg="TP ">TP</button>
             <button class="quick-btn out" data-act="promptPositionPlay" data-arg="FC ">FC</button>
             <button class="quick-btn out" data-act="applyPlay" data-arg="IF">IF</button>
           </div>
           <div class="qbg-panel" data-group="reach">
+            <button class="quick-btn walk" data-act="applyPlay" data-arg="BB">BB<small>w</small></button>
             <button class="quick-btn walk" data-act="applyPlay" data-arg="HBP">HBP<small>h</small></button>
             <button class="quick-btn walk" data-act="applyPlay" data-arg="IBB">IBB<small>i</small></button>
             <button class="quick-btn walk" data-act="applyPlay" data-arg="CI">CI</button>
@@ -228,16 +228,6 @@
 
       <div class="sec-panel active" data-panel="bat">
         <div class="grid-wrap" id="grid-visiting"></div>
-        <div class="scoring-key">
-          <span class="key-title">Scoring key</span>
-          <span><b>1B 2B 3B HR</b> hits</span>
-          <span><b>K ꓘ</b> strikeout swinging · looking</span>
-          <span><b>BB HBP IBB</b> free pass</span>
-          <span><b>6-3</b> putout by position</span>
-          <span><b>E6</b> error</span>
-          <span><b>●</b> RBI</span>
-          <span><b>◆</b> filled diamond = run scored</span>
-        </div>
       </div>
       <div class="sec-panel" data-panel="pitch">
         <div class="pitcher-section" id="pitchers-visiting"></div>
@@ -267,9 +257,10 @@
           <button class="quick-btn hit" data-act="applyPlay" data-arg="3B">3B<small>3</small></button>
           <button class="quick-btn hit" data-act="applyPlay" data-arg="HR">HR<small>4</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn out" data-act="applyPlay" data-arg="K">K<small>k</small></button>
           <button class="quick-btn out" data-act="promptGroundout">GO<small>g</small></button>
-          <button class="quick-btn walk" data-act="applyPlay" data-arg="BB">BB<small>w</small></button>
+          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="F">FO<small>x</small></button>
+          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="P">PO<small>p</small></button>
+          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="L">LO<small>l</small></button>
           <span class="qb-sep"></span>
           <button class="quick-btn undo-play" data-act="undoLastPlay">Undo<small>u</small></button>
           <button class="qb-more-btn" data-act="toggleQBDrawer">More plays</button>
@@ -283,15 +274,14 @@
             <button class="qbg-tab" data-ui-act="qbg" data-group="fix">Fix</button>
           </div>
           <div class="qbg-panel active" data-group="out">
-            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="F">FO<small>x</small></button>
-            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="P">PO<small>p</small></button>
-            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="L">LO<small>l</small></button>
+            <button class="quick-btn out" data-act="applyPlay" data-arg="K">K<small>k</small></button>
             <button class="quick-btn out" data-act="promptPositionPlay" data-arg="DP ">DP<small>d</small></button>
             <button class="quick-btn out" data-act="promptPositionPlay" data-arg="TP ">TP</button>
             <button class="quick-btn out" data-act="promptPositionPlay" data-arg="FC ">FC</button>
             <button class="quick-btn out" data-act="applyPlay" data-arg="IF">IF</button>
           </div>
           <div class="qbg-panel" data-group="reach">
+            <button class="quick-btn walk" data-act="applyPlay" data-arg="BB">BB<small>w</small></button>
             <button class="quick-btn walk" data-act="applyPlay" data-arg="HBP">HBP<small>h</small></button>
             <button class="quick-btn walk" data-act="applyPlay" data-arg="IBB">IBB<small>i</small></button>
             <button class="quick-btn walk" data-act="applyPlay" data-arg="CI">CI</button>
@@ -339,16 +329,6 @@
 
       <div class="sec-panel active" data-panel="bat">
         <div class="grid-wrap" id="grid-home"></div>
-        <div class="scoring-key">
-          <span class="key-title">Scoring key</span>
-          <span><b>1B 2B 3B HR</b> hits</span>
-          <span><b>K ꓘ</b> strikeout swinging · looking</span>
-          <span><b>BB HBP IBB</b> free pass</span>
-          <span><b>6-3</b> putout by position</span>
-          <span><b>E6</b> error</span>
-          <span><b>●</b> RBI</span>
-          <span><b>◆</b> filled diamond = run scored</span>
-        </div>
       </div>
       <div class="sec-panel" data-panel="pitch">
         <div class="pitcher-section" id="pitchers-home"></div>
