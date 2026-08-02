@@ -5,13 +5,16 @@
 //  - Fonts/icons are stale-while-revalidate: instant from cache, refreshed
 //    in the background.
 // Bump SHELL_VERSION only if you ever need to force-drop the whole cache.
-const SHELL_VERSION = 'v79';
+const SHELL_VERSION = 'v80';
 const CACHE = 'scorecard-' + SHELL_VERSION;
 
-// One file per family (per style for Source Serif): they are variable fonts,
-// so a single file covers every weight the stylesheet asks for. addAll() is
-// all-or-nothing, so only list files that are actually in the repo.
+// One file per family (per style for Source Serif): the variable ones cover
+// every weight the stylesheet asks for from a single file. Graduate is a
+// single-weight face and the theme's display type; Source Serif stays on as
+// its fallback. addAll() is all-or-nothing, so only list files that are
+// actually in the repo.
 const FONTS = [
+  'fonts/graduate-latin.woff2',
   'fonts/source-serif-4-latin.woff2',
   'fonts/source-serif-4-italic.woff2',
   'fonts/jetbrains-mono-latin.woff2'

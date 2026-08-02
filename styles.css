@@ -709,3 +709,273 @@ details.info-details > summary:hover { color: var(--navy); }
   }
   body { padding-bottom: calc(140px + env(safe-area-inset-bottom, 0px)); }
 }
+
+
+/* ============================================================
+   RANGERS DAY GAME — theme layer. Overrides only; everything
+   above is the shared base. Keep this block last.
+
+   Three colours only:  Blue #003278   Red #C0111F   White #FFFFFF
+   Cells stay pure white; the header row and order column go solid
+   navy so the card reads like a program cover.
+   ============================================================ */
+
+@font-face {
+  font-family: 'Graduate';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('fonts/graduate-latin.woff2') format('woff2');
+}
+
+:root {
+  --rb-blue: #003278;
+  --rb-red: #c0111f;
+  --rb-white: #ffffff;
+
+  /* Everything else is one of the three, tinted or deepened */
+  --blue-deep: #001c45;
+  --paper: #eef2f8;          /* white cooled toward the blue */
+  --paper-2: #e2e9f4;
+  --line: rgba(0,50,120,0.22);
+  --line-soft: rgba(0,50,120,0.13);
+
+  --navy: var(--rb-blue);
+  --navy-light: #14448c;
+  --cream: var(--paper);
+  --cream-dark: var(--paper-2);
+  --card: var(--rb-white);
+  --border: var(--rb-blue);
+  --border-light: rgba(0,50,120,0.2);
+  --row-alt: #f7f9fc;
+  --accent: var(--rb-red);
+  --accent-light: #e8a3a8;
+  --gold: var(--rb-white);
+  --blue: var(--rb-blue);
+  --blue-light: rgba(0,50,120,0.1);
+  --green: var(--rb-blue);
+  --select: rgba(192,17,31,0.12);
+  --text: var(--rb-blue);
+  --text-light: rgba(0,50,120,0.6);
+  --rule: var(--line-soft);
+
+  /* Graduate is the varsity face; the broadsheet fonts stay on as the
+     fallback so a missing woff2 degrades to the old skin rather than to
+     system-ui. `font-src 'self'` — never link fonts.googleapis.com. */
+  --font: 'Graduate', "Source Serif 4", Georgia, serif;
+  --heading: 'Graduate', "Source Serif 4", Georgia, serif;
+  --mono: 'Graduate', 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+
+  --cell-w: 90px;
+  --cell-h: 62px;
+}
+
+body { background: var(--paper); color: var(--rb-blue); letter-spacing: .01em; }
+a { color: var(--rb-blue); }
+a:hover { color: var(--rb-red); }
+:focus-visible { outline: 2px solid var(--rb-red); outline-offset: 2px; }
+::selection { background: rgba(192,17,31,0.2); }
+.app { padding: 0 20px 140px; }
+
+/* ---------- Masthead ---------- */
+.header-bar {
+  border: none; padding: 14px 20px; margin: 0 -20px;
+  background: var(--rb-blue);
+  border-bottom: 4px solid var(--rb-red);
+  align-items: center;
+}
+.masthead .kicker { color: var(--rb-white); opacity: .7; letter-spacing: .34em; font-weight: 400; }
+.header-bar h1 { font-size: 30px; font-weight: 400; letter-spacing: .04em; color: var(--rb-white); }
+.header-bar h1 span { color: var(--rb-white); font-style: normal; opacity: .55; }
+.stitch { display: none; }
+
+.header-actions button, .game-timer button {
+  border-color: rgba(255,255,255,0.32); color: var(--rb-white); border-radius: 3px; letter-spacing: .06em;
+}
+.header-actions button:hover, .game-timer button:hover {
+  background: rgba(255,255,255,0.16); border-color: var(--rb-white); color: var(--rb-white);
+}
+.header-actions button.primary { background: var(--rb-red); border-color: var(--rb-red); color: var(--rb-white); }
+.header-actions button.primary:hover { background: #d9202f; color: var(--rb-white); }
+.header-actions button.danger { color: var(--rb-white); border-color: var(--rb-red); }
+.header-actions button.danger:hover { background: var(--rb-red); color: var(--rb-white); }
+.game-timer .timer-display { color: var(--rb-white); }
+
+.ghost-btn { border-color: var(--line); color: var(--rb-blue); border-radius: 3px; }
+.ghost-btn:hover { background: var(--paper-2); border-color: var(--rb-blue); }
+
+details.info-details > summary::before { color: var(--rb-red); }
+.info-row input, .ump-row input, .info-row select { border-bottom-color: var(--line); }
+.info-row input:focus, .ump-row input:focus, .info-row select:focus { border-bottom-color: var(--rb-red); }
+
+/* ---------- Scoreboard ---------- */
+.linescore-wrap {
+  background: var(--rb-blue); border-radius: 4px; padding: 12px 18px; margin: 12px 0;
+}
+.linescore-wrap h3 { color: var(--rb-white); opacity: .6; letter-spacing: .22em; }
+.linescore th, .linescore td { border-color: rgba(255,255,255,0.16); height: 27px; }
+.linescore th { color: var(--rb-white); opacity: .55; font-weight: 400; }
+.linescore th.team-col { opacity: .85; }
+.linescore td { background: rgba(255,255,255,0.05); }
+.linescore td.team-col { font-size: 15px; letter-spacing: .05em; }
+.linescore input { color: var(--rb-white); font-size: 15px; }
+.linescore td.total { background: var(--rb-red); }
+.linescore td.total input { color: var(--rb-white); }
+.linescore td.ls-active { background: var(--rb-red) !important; box-shadow: inset 0 0 0 2px var(--rb-white); }
+.ei-btn { color: var(--rb-white); border-color: rgba(255,255,255,0.5); }
+.ei-btn:hover { background: var(--rb-red); border-color: var(--rb-red); }
+
+.live-cell { border-left-color: rgba(255,255,255,0.18); }
+.live-cell .live-label { color: var(--rb-white); opacity: .55; }
+#ls-inning, #ls-count {
+  color: var(--rb-white) !important; font-family: var(--heading) !important;
+  font-size: 28px !important; font-weight: 400 !important;
+}
+#ls-batter { color: var(--rb-white) !important; }
+.ls-out-dot { border-color: rgba(255,255,255,0.45); }
+.ls-out-dot.active { background: var(--rb-red); border-color: var(--rb-red); }
+
+/* ---------- Tabs ---------- */
+.tab-bar { border-bottom-color: var(--line); }
+.tab-btn { font-weight: 400; font-size: 19px; letter-spacing: .05em; }
+.tab-btn.active { color: var(--rb-blue); border-bottom-color: var(--rb-red); }
+.sec-btn, .qbg-tab { font-weight: 400; letter-spacing: .07em; border-color: var(--line); border-radius: 3px; }
+.sec-btn:hover, .qbg-tab:hover { border-color: var(--rb-blue); color: var(--rb-blue); }
+.sec-btn.active, .qbg-tab.active { background: var(--rb-red); border-color: var(--rb-red); color: var(--rb-white); }
+
+/* ---------- Entry deck, docked at every size ---------- */
+.tab-content.active .quick-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 150;
+  flex-direction: column-reverse;
+  background: rgba(255,255,255,0.97); backdrop-filter: blur(12px);
+  border-top: 3px solid var(--rb-red); padding: 0 20px;
+  box-shadow: 0 -8px 30px rgba(0,50,120,0.16);
+  max-height: 78vh; overflow-y: auto;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.qb-core { padding: 10px 0; border-bottom-color: var(--line-soft); }
+.qb-drawer.open { border-bottom-color: var(--line-soft); }
+.qb-sep { background: var(--line-soft); }
+.qb-label { font-weight: 400; letter-spacing: .18em; }
+
+/* Red as a fill, blue as the outline, white as the ground */
+.quick-btn {
+  background: var(--rb-white); border-color: var(--line); color: var(--rb-blue);
+  border-radius: 4px; min-height: 46px; font-size: 15px; font-weight: 400; letter-spacing: .04em;
+}
+.quick-btn:hover { background: var(--paper-2); border-color: var(--rb-blue); }
+.quick-btn:active { background: var(--rb-red); border-color: var(--rb-red); color: var(--rb-white); }
+.quick-btn.hit { background: var(--rb-red); border-color: var(--rb-red); color: var(--rb-white); }
+.quick-btn.hit:hover { background: #d9202f; border-color: var(--rb-blue); }
+.quick-btn.walk { background: var(--rb-blue); border-color: var(--rb-blue); color: var(--rb-white); }
+.quick-btn.walk:hover { background: #00408f; }
+.quick-btn.runner { color: var(--rb-blue); border-color: var(--rb-blue); }
+.quick-btn.runner:hover { background: var(--blue-light); }
+.quick-btn.out { color: var(--rb-blue); }
+.quick-btn.undo-play, .quick-btn.pitcher-change {
+  color: var(--rb-red); border-color: var(--rb-red); background: var(--rb-white);
+}
+.quick-btn.undo-play:hover, .quick-btn.pitcher-change:hover { background: var(--rb-red); color: var(--rb-white); }
+.quick-btn small { opacity: .5; }
+.qb-more-btn { border-color: var(--line); color: var(--rb-blue); border-radius: 4px; }
+.qb-more-btn.open { background: var(--rb-red); border-color: var(--rb-red); color: var(--rb-white); }
+
+/* ---------- Grid — white cells ---------- */
+.scoring-grid th, .scoring-grid td { border-color: var(--border-light); }
+.scoring-grid thead th {
+  background: var(--rb-blue); color: var(--rb-white);
+  font-weight: 400; letter-spacing: .12em; border-bottom: 3px solid var(--rb-red);
+  border-color: rgba(255,255,255,0.2); border-bottom-color: var(--rb-red);
+}
+.scoring-grid thead th.inn-col { font-size: 18px; color: var(--rb-white); font-weight: 400; }
+.scoring-grid td.order-cell {
+  background: var(--rb-blue); color: var(--rb-white); font-weight: 400; font-size: 18px;
+}
+.scoring-grid td.stat-cell { background: var(--paper-2); color: var(--rb-blue); font-weight: 400; }
+.scoring-grid tr.pos-starter > td { border-top: 2px solid var(--rb-blue); }
+.pos-starter td { background: var(--rb-white); }
+.pos-sub td { background: var(--row-alt); }
+.pos-sub td.player-cell input { font-style: normal; opacity: .75; }
+.scoring-grid td.player-cell input { font-weight: 400; letter-spacing: .02em; }
+.scoring-grid td.pos-cell select option { background: var(--rb-white); color: var(--rb-blue); }
+
+.at-bat-cell { background: var(--rb-white); }
+.at-bat-cell.selected { background: var(--select) !important; outline: 2px solid var(--rb-red); }
+.at-bat-cell .play-text { color: var(--rb-blue); text-shadow: 0 0 4px #fff, 0 0 8px rgba(255,255,255,.95); }
+.at-bat-cell .out-num.active { color: var(--rb-blue); }
+
+.at-bat-cell.play-hit { background: rgba(0,50,120,0.12) !important; }
+.at-bat-cell.play-hr  { background: var(--rb-red) !important; }
+.at-bat-cell.play-k   { background: rgba(192,17,31,0.14) !important; }
+.at-bat-cell.play-bb  { background: rgba(0,50,120,0.07) !important; }
+.at-bat-cell.play-dp  { background: rgba(192,17,31,0.09) !important; }
+.at-bat-cell.play-go  { background: rgba(0,50,120,0.04) !important; }
+
+.pitch-mark.strike { color: var(--rb-red); }
+.pitch-mark.foul { color: rgba(0,50,120,0.5); }
+.pitch-mark.ball { color: var(--rb-blue); }
+.rbi-dot-mark { background: var(--rb-red); }
+
+.diamond-svg .base-line { stroke: rgba(0,50,120,0.25); }
+.diamond-svg .base-dot { fill: rgba(0,50,120,0.25); }
+.diamond-svg .home-dot { fill: rgba(0,50,120,0.25); }
+.diamond-svg .seg.reached .base-line { stroke: var(--rb-blue); }
+.diamond-svg .seg.reached .base-dot { fill: var(--rb-blue); }
+.diamond-svg .seg.reached ~ .home-dot { fill: var(--rb-blue); }
+.diamond-svg.scored .base-line { stroke: var(--rb-blue); }
+.diamond-svg.scored .diamond-fill { fill: var(--rb-blue); opacity: .9; }
+.diamond-svg .out-on-path, .diamond-svg .out-on-cross { stroke: var(--rb-blue); }
+.diamond-svg .adv-label { fill: var(--rb-blue); }
+.diamond-wrap:has(.diamond-svg.scored) ~ .play-text { color: var(--rb-white); text-shadow: none; }
+
+/* A home run inverts the whole cell — white marks on red. This has to sit
+   after the diamond rules above: on a homer every segment carries .reached
+   and the diamond is .scored, and `.diamond-svg .seg.reached .base-line`
+   ties this block on specificity, so source order is what decides. Put it
+   any earlier and the basepaths stay navy on the red ground. */
+.at-bat-cell.play-hr .play-text,
+.at-bat-cell.play-hr .out-num.active { color: var(--rb-white); text-shadow: none; }
+.at-bat-cell.play-hr .diamond-svg .base-line,
+.at-bat-cell.play-hr .diamond-svg .seg.reached .base-line,
+.at-bat-cell.play-hr .diamond-svg.scored .base-line { stroke: var(--rb-white); }
+.at-bat-cell.play-hr .diamond-svg .base-dot,
+.at-bat-cell.play-hr .diamond-svg .seg.reached .base-dot,
+.at-bat-cell.play-hr .diamond-svg .home-dot,
+.at-bat-cell.play-hr .diamond-svg .seg.reached ~ .home-dot { fill: var(--rb-white); }
+.at-bat-cell.play-hr .diamond-svg.scored .diamond-fill { fill: var(--rb-white); opacity: .95; }
+.at-bat-cell.play-hr .diamond-svg .adv-label { fill: var(--rb-white); }
+.at-bat-cell.play-hr .pitch-mark { color: var(--rb-white); }
+
+/* ---------- Pitchers, notes, modals ---------- */
+.pitcher-grid th {
+  background: var(--rb-blue); color: var(--rb-white); font-weight: 400;
+  border-bottom: 3px solid var(--rb-red); border-color: rgba(255,255,255,0.2); border-bottom-color: var(--rb-red);
+}
+.pitcher-grid td.p-era { background: var(--paper-2); }
+.pitcher-grid td.p-stat.er-review { background: rgba(192,17,31,0.14); }
+.pitcher-grid td.p-stat.er-review::after { border-right-color: var(--rb-red); }
+.notes-box textarea, .spray-mini-svg { border-color: var(--line); }
+
+.modal-box, .hotkey-modal-inner, .game-summary-inner, .spray-popup { border-color: var(--rb-blue); }
+.modal-box h2, .hotkey-modal h2 { border-bottom-color: var(--rb-red); font-weight: 400; }
+.hk-table td:first-child { background: var(--rb-blue); color: var(--rb-white); }
+.modal-box .game-list li button.load-btn { color: var(--rb-blue); border-color: var(--rb-blue); }
+.modal-box .game-list li button.del-btn { color: var(--rb-red); border-color: var(--rb-red); }
+.modal-close:hover { background: var(--paper-2); border-color: var(--rb-blue); }
+.gs-header { border-bottom-color: var(--rb-red); }
+.gs-score-banner { background: var(--rb-blue); }
+.gs-team-score .gs-team-name, .gs-vs, .gs-final-tag { color: var(--rb-white); opacity: .65; }
+.gs-team-score .gs-score-num { color: var(--rb-white); }
+.gs-plays span { background: var(--paper-2); }
+.spray-popup #spray-marker { fill: var(--rb-red); }
+
+/* The theme's `:root` sits after the base breakpoints, so an unconditional
+   --cell-w/--cell-h here would win at every width and the grid would stop
+   shrinking on the iPad and phone. Restate the ladder, scaled to 90/62. */
+@media (max-width: 1280px) { :root { --cell-w: 82px; --cell-h: 60px; } }
+@media (max-width: 1024px) { :root { --cell-w: 75px; --cell-h: 58px; } }
+@media (max-width: 834px)  { :root { --cell-w: 69px; --cell-h: 55px; } }
+
+/* The entry deck is fixed at every size now, and .app already reserves the
+   140px it occupies — so the base's mobile body padding would double up. */
+@media (max-width: 834px) { body { padding-bottom: 0; } }
