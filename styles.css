@@ -545,6 +545,9 @@ details.info-details > summary:hover { color: var(--navy); }
 }
 
 /* ---------- Spray + notes ---------- */
+/* Both team tabs carry this row; the single .notes-box moves between them. */
+.spray-row { display: flex; gap: 30px; align-items: flex-start; flex-wrap: wrap; }
+.spray-row .notes-box { flex: 1; min-width: 280px; }
 .spray-mini { text-align: center; }
 .spray-mini h4 {
   font-family: var(--heading); font-size: 12px; font-weight: 600;

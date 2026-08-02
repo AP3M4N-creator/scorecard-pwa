@@ -225,7 +225,7 @@
         </div>
         <button class="sec-btn active" data-ui-act="sec" data-panel="bat">Batting Order</button>
         <button class="sec-btn" data-ui-act="sec" data-panel="pitch">Pitching Record</button>
-        <button class="sec-btn" data-ui-act="sec" data-panel="spray">Spray Chart</button>
+        <button class="sec-btn" data-ui-act="sec" data-panel="spray">Spray &amp; Notes</button>
         <button class="ghost-btn" data-ui-act="subs" style="margin-left:auto">Show sub rows</button>
       </div>
 
@@ -236,11 +236,21 @@
         <div class="pitcher-section" id="pitchers-visiting"></div>
       </div>
       <div class="sec-panel" data-panel="spray">
-        <div class="spray-mini" id="spray-visiting" style="width:300px">
-          <h4>Visiting Spray Chart</h4>
-          <svg class="spray-mini-svg" data-team="visiting" viewBox="0 0 300 300" width="290" height="290">
-            <image href="field.png" x="0" y="0" width="300" height="300" preserveAspectRatio="xMidYMid meet"></image>
-          </svg>
+        <div class="spray-row">
+          <div class="spray-mini" id="spray-visiting" style="width:300px">
+            <h4>Visiting Spray Chart</h4>
+            <svg class="spray-mini-svg" data-team="visiting" viewBox="0 0 300 300" width="290" height="290">
+              <image href="field.png" x="0" y="0" width="300" height="300" preserveAspectRatio="xMidYMid meet"></image>
+            </svg>
+          </div>
+          <!-- The notes are the game's, not a team's, but the card is duplicated
+               per team tab. One box, moved into whichever tab's Spray panel is on
+               screen by ui.js — see placeNotes(). It starts here because Visiting
+               is the tab that opens. -->
+          <div class="notes-box" id="notes-box">
+            <label for="game-notes">Notes</label>
+            <textarea id="game-notes" placeholder="Game notes..."></textarea>
+          </div>
         </div>
       </div>
     </div>
@@ -341,16 +351,12 @@
         <div class="pitcher-section" id="pitchers-home"></div>
       </div>
       <div class="sec-panel" data-panel="spray">
-        <div style="display:flex;gap:30px;align-items:flex-start;flex-wrap:wrap">
+        <div class="spray-row">
           <div class="spray-mini" id="spray-home" style="width:300px">
             <h4>Home Spray Chart</h4>
             <svg class="spray-mini-svg" data-team="home" viewBox="0 0 300 300" width="290" height="290">
               <image href="field.png" x="0" y="0" width="300" height="300" preserveAspectRatio="xMidYMid meet"></image>
             </svg>
-          </div>
-          <div class="notes-box" style="flex:1;min-width:280px">
-            <label for="game-notes">Notes</label>
-            <textarea id="game-notes" placeholder="Game notes..."></textarea>
           </div>
         </div>
       </div>

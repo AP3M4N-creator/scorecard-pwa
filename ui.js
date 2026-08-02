@@ -63,6 +63,43 @@ document.addEventListener('click', function (e) {
 });
 
 /* ---------------------------------------------------------------
+   One Notes box, both team tabs.
+
+   The team card is duplicated per tab, and the Notes field was inside
+   the Home copy — so a note about the game could only be written by
+   first switching teams. Two textareas would mean two values to keep
+   in sync and app.js reads exactly one #game-notes, so instead the one
+   box is moved into whichever tab's Spray panel is on screen. Moving a
+   node keeps its value, its listeners and its undo history; only focus
+   is lost, and that only happens on a tab switch, which was taking the
+   box off screen anyway.
+
+   Hung off switchTab() rather than the tab button's click, because
+   app.js switches teams on its own too — the half-inning ending, an
+   undo restoring the other side. Reassigning the global rebinds the
+   name for app.js's internal calls as well as for the data-act
+   dispatch, both of which resolve `switchTab` through window.
+   --------------------------------------------------------------- */
+(function () {
+  function placeNotes() {
+    var box = document.getElementById('notes-box');
+    var row = document.querySelector('.tab-content.active .sec-panel[data-panel="spray"] .spray-row');
+    if (box && row && box.parentElement !== row) row.appendChild(box);
+  }
+  function hook() {
+    var orig = window.switchTab;
+    if (typeof orig === 'function' && !orig._notesHooked) {
+      var wrapped = function () { var r = orig.apply(this, arguments); placeNotes(); return r; };
+      wrapped._notesHooked = true;
+      window.switchTab = wrapped;
+    }
+    placeNotes();   // in case a tab was switched before the hook was in place
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hook);
+  else hook();
+})();
+
+/* ---------------------------------------------------------------
    One-page fit.
 
    The batting grid gets whatever vertical space is left between the
