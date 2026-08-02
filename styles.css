@@ -947,7 +947,16 @@ details.info-details > summary::before { color: var(--rb-red); }
 .at-bat-cell.play-go  { background: rgba(0,50,120,0.04) !important; }
 
 .pitch-mark.strike { color: var(--rb-red); }
-.pitch-mark.foul { color: rgba(0,50,120,0.5); }
+/* 0.5 measured 2.65:1, and a foul mark is scoring data read at 6-7px in daylight,
+   not decoration. The tinted cells are the hard case: .play-k and .play-hit set a
+   translucent background, which drops the cell's opaque --rb-white and composites
+   over the --paper underneath instead, so a mark there sits on #e8d3da/#d1dbe9 and
+   not on the white the plain cells give it. --text-light's 0.72 only reaches 4.48:1
+   there. 0.78 clears it on every ground measured in-page: 5.19:1 on those two,
+   5.29:1 on a selected cell, 6.47:1 on a plain one. Still lighter than a ball, and
+   the two never share a column anyway — the ball is a ● and the foul an ✕. A homer
+   keeps its own white-on-red override further down. */
+.pitch-mark.foul { color: rgba(0,50,120,0.78); }
 .pitch-mark.ball { color: var(--rb-blue); }
 .rbi-dot-mark { background: var(--rb-red); }
 
