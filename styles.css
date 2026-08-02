@@ -692,6 +692,25 @@ details.info-details > summary:hover { color: var(--navy); }
   :root { --cell-w: 64px; --cell-h: 50px; }
   .scoring-grid td.player-cell { width: 128px; }
   .linescore th, .linescore td { width: 26px; }
+
+  /* The live readout is a row at every width. `display: flex` was an inline
+     style on #live-stats until 60c6340 moved it into the 835px block, and
+     below that breakpoint the five cells fell back to full-width blocks and
+     stacked: 262px of a 390px phone spent on the readout, which started the
+     batting order 742px down an 844px screen with the docked deck already
+     covering the bottom 174px. No part of the card was on the page.
+
+     The row does not fit a phone either, so it scrolls sideways — the same
+     trade the linescore table above it makes. `overflow-x: auto` is already
+     set at 1024px, from when the inline style was still doing this job. */
+  #live-stats { display: flex; align-items: center; min-width: 0; }
+  /* Or the cells shrink to fit rather than scrolling, and the two names in
+     the matchup cell are what give way first. */
+  #live-stats > .live-cell { flex: 0 0 auto; }
+  /* The dividers separate cells from each other. At 835px and up the first
+     one also parts the readout from the linescore table beside it; on the
+     stacked strip it is a stray rule against the padding edge. */
+  #live-stats > .live-cell:first-child { border-left: none; padding-left: 0; }
   /* Keep entry in reach: dock the quick bar to the bottom edge */
   .tab-content.active .quick-bar {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 150;
