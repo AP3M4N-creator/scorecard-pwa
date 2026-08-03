@@ -28,7 +28,7 @@ Do **not** bump `SHELL_VERSION` in `sw.js` by hand — the pre-commit hook does 
 | **F10** | Fielder entry is a text field → iOS alphabetic keyboard | iPad | M | **done** |
 | **F11** | Advance Runners: no defaults, no cancel, silent refusal | iPad | M | **done** |
 | **F12** | Spray prompt fires on every hit with no way to turn it off | iPad | S | **done** (won't-fix + 2) |
-| **F13** | Jersey numbers clip at 1024px | polish | XS | todo |
+| **F13** | Jersey numbers clip at 1024px | polish | XS | **done** |
 | **F14** | Win-probability chart never re-themed | polish | S | todo |
 | **F15** | "PO" collision and "CLR All" mislabel | polish | XS | todo |
 | **F16** | Zero prints blank in one linescore, `0` in the other | polish | XS | todo |
@@ -611,11 +611,35 @@ hints), and the popup covers the row of the batter you just recorded.
 
 ## Tier 4 — polish (one pass, one commit each or all together)
 
-### F13 — jersey numbers clip at 1024px
-`input[data-field="num"]` measures 23px wide against a `scrollWidth` of 28 — every 2-digit
-number is cut mid-glyph on a 10.2"/10.9" iPad. Widen the `#` column at `≤1100px`, or shrink
-the number's font a step. Note 1024×768 is also right at the fit limit (`--cell-h` at its
-44px floor), so take the pixels from `AVG` or `POS`, not from the at-bat columns.
+### F13 — jersey numbers clip at 1024px — **done**
+
+**Done, and neither of the fixes this finding suggested is the right one.** The padding was
+the clip: the input is centre-aligned with `padding: 6px 6px`, so 12 of the column's 24px went
+on padding a centred number doesn't need, leaving 11px for ~16px of digits. One rule in
+`styles.css` gives the digits the cell — nothing is taken from `AVG`, `POS` or the at-bat
+columns, and no font shrinks.
+
+**Widening the column would not have worked.** `.scoring-grid` is `table-layout: fixed` and
+already over-constrained at ≤1100px — declared widths are scaled to fit, so a wider `width`
+on `td.num-cell` changes nothing there (measured: 30px declared renders 24px at 1024px, 19px
+at 834px, and declaring 38px moved neither). The lever that works is content width.
+
+`AVG` had the same clip from the same rule and is fixed with it: `.333` was 38px in a 35px box.
+A five-character `1.000` still overflows in portrait (36 in 29) — a font step doesn't rescue
+that one either (33 in 29), and it is only on the card until the first out, so it stays.
+
+**Verified** at 1280 / 1024 / 834 / 560: no rendered `#` or `AVG` value is clipped at any of
+them, and the fixture's numbers read `12 3 27 44 1 18 9 21 30` where they read `1: 2: 4: 2: 3(`
+before. The pitcher grid's own `#` was measured too — 33px box, 33px content, already fine.
+
+**Measurement gotcha:** an input's `scrollWidth` sits 1px above its `clientWidth` even with an
+8px font and zero padding, so `scrollWidth > clientWidth` is only real clipping at ≥2px.
+
+**The finding as filed.** `input[data-field="num"]` measures 23px wide against a `scrollWidth`
+of 28 — every 2-digit number is cut mid-glyph on a 10.2"/10.9" iPad. Widen the `#` column at
+`≤1100px`, or shrink the number's font a step. Note 1024×768 is also right at the fit limit
+(`--cell-h` at its 44px floor), so take the pixels from `AVG` or `POS`, not from the at-bat
+columns.
 
 ### F14 — win-probability chart never re-themed
 Axis labels are `rgba(255,255,255,0.45)` (y) and `0.35` (x) at 9px over a

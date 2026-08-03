@@ -379,6 +379,16 @@ details.info-details > summary:hover { color: var(--navy); }
 .scoring-grid td.player-cell input { font-weight: 600; }
 .scoring-grid td.num-cell input,
 .scoring-grid td.avg-cell input { text-align: center; font-family: var(--mono); font-size: 12px; font-weight: 500; }
+/* A 2-digit jersey is ~16px of 12px mono, and at 1024px the # column gets 24px —
+   but 12 of those went on side padding, leaving 11px, so every 2-digit number was
+   cut mid-glyph, and a `.333` in AVG with it (F13). Both are centre-aligned, so
+   the side padding was buying nothing; the digits get the cell instead. Widening
+   the column was the other way and it does nothing: the grid is `table-layout:
+   fixed` and already over-constrained at ≤1100px, so a declared width there is
+   ignored — and at 1024x768 `--cell-h` sits on its 44px floor, so there are no
+   pixels to take from the at-bat columns anyway. */
+.scoring-grid td.num-cell input,
+.scoring-grid td.avg-cell input { padding-left: 1px; padding-right: 1px; }
 .scoring-grid input:focus { outline: 2px solid var(--navy); outline-offset: -2px; }
 .scoring-grid td.pos-cell select {
   width: 100%; height: 100%; border: none; background: transparent;
