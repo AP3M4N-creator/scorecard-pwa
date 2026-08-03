@@ -7675,8 +7675,23 @@ function winProbFromDiff(runDiff, halfInnsRemaining) {
   return normalCDF((runDiff + hfa) / sigma);
 }
 
+/* The chart was drawn for the old dark skin and never re-coloured with the rest
+   of the card: white-on-black axis labels, and — worse than the labels — a curve
+   stroked `var(--gold)`, which this theme defines as #ffffff because everywhere
+   else it is ink *on* the navy ground. Over the plot's own rgba(0,0,0,0.2) that
+   left the line at about 1.6:1, so the chart's whole content was invisible, not
+   just its captions. Everything here now comes from the palette: paper ground,
+   navy curve and home-favoured band, red for the visiting side, --text-light for
+   the axes. Home above the 50% line and the visiting team below it is the one
+   thing a reader has to be told, so both sides are named (F14). */
 function renderWinProbSVG(container, data, vTeam, hTeam, numInns, isEstimate) {
-  const W = 560, H = 160;
+  // The viewBox was a fixed 560 with `max-width` to match, so inside the 836px
+  // summary panel ~270px sat dead to the right. Take the width from the
+  // container and keep the type at its drawn size, rather than scaling a 560px
+  // drawing up and thickening every stroke with it. `width:100%` below still
+  // lets it shrink if the panel later narrows under a fixed render.
+  const W = Math.max(320, Math.min(900, Math.round(container.clientWidth || 560)));
+  const H = 160;
   const PAD = { top: 14, right: 16, bottom: 26, left: 34 };
   const iW = W - PAD.left - PAD.right;
   const iH = H - PAD.top - PAD.bottom;
@@ -7696,35 +7711,43 @@ function renderWinProbSVG(container, data, vTeam, hTeam, numInns, isEstimate) {
   data.forEach((d, i) => { below += ` L${px(i).toFixed(1)},${Math.max(py(d.homeTeamWinProbability), py(50)).toFixed(1)}`; });
   below += ` L${px(n-1).toFixed(1)},${py(50).toFixed(1)} Z`;
 
+  // The "N inn." caption is right-anchored on the same baseline as the tick
+  // numbers. It cleared them at the old fixed 560, but a fluid width means a
+  // phone-column panel where the last tick runs straight into it — so a tick
+  // that close keeps its gridline and gives up its number.
+  const capEdge = PAD.left + iW - (String(numInns).length + 5) * 6.2 - 8;
+
   let marks = '';
   for (let inn = 1; inn < numInns; inn++) {
-    const x = (PAD.left + (inn / numInns) * iW).toFixed(1);
-    marks += `<line x1="${x}" y1="${PAD.top}" x2="${x}" y2="${PAD.top + iH}" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>`;
-    marks += `<text x="${x}" y="${H - 4}" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.35)" font-family="monospace">${inn}</text>`;
+    const xn = PAD.left + (inn / numInns) * iW;
+    const x = xn.toFixed(1);
+    marks += `<line x1="${x}" y1="${PAD.top}" x2="${x}" y2="${PAD.top + iH}" stroke="var(--navy)" stroke-opacity="0.12" stroke-width="1"/>`;
+    if (xn < capEdge) marks += `<text x="${x}" y="${H - 4}" text-anchor="middle" font-size="10" fill="var(--text-light)" font-family="var(--mono)">${inn}</text>`;
   }
 
   let yMarks = '';
   for (const pct of [25, 50, 75, 100]) {
     const y = py(pct).toFixed(1);
-    yMarks += `<text x="${PAD.left - 4}" y="${(parseFloat(y) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="rgba(255,255,255,0.45)" font-family="monospace">${pct}</text>`;
-    if (pct === 50) yMarks += `<line x1="${PAD.left}" y1="${y}" x2="${PAD.left + iW}" y2="${y}" stroke="rgba(255,255,255,0.25)" stroke-width="1" stroke-dasharray="3,3"/>`;
+    yMarks += `<text x="${PAD.left - 4}" y="${(parseFloat(y) + 3).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--text-light)" font-family="var(--mono)">${pct}</text>`;
+    if (pct === 50) yMarks += `<line x1="${PAD.left}" y1="${y}" x2="${PAD.left + iW}" y2="${y}" stroke="var(--navy)" stroke-opacity="0.34" stroke-width="1" stroke-dasharray="3,3"/>`;
   }
 
   const lastProb = data[n-1].homeTeamWinProbability;
-  const dotColor = lastProb >= 50 ? 'var(--gold)' : '#7b9fd4';
-  const dot = `<circle cx="${px(n-1).toFixed(1)}" cy="${py(lastProb).toFixed(1)}" r="3.5" fill="${dotColor}" stroke="var(--navy)" stroke-width="1.5"/>`;
+  const dotColor = lastProb >= 50 ? 'var(--navy)' : 'var(--accent)';
+  const dot = `<circle cx="${px(n-1).toFixed(1)}" cy="${py(lastProb).toFixed(1)}" r="3.5" fill="${dotColor}" stroke="var(--card)" stroke-width="1.5"/>`;
   const label = `${hTeam} win%${isEstimate ? ' (est.)' : ''}`;
 
   container.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;display:block;overflow:visible" xmlns="http://www.w3.org/2000/svg">
     <defs><clipPath id="${clipId}"><rect x="${PAD.left}" y="${PAD.top}" width="${iW}" height="${iH}"/></clipPath></defs>
-    <rect x="${PAD.left}" y="${PAD.top}" width="${iW}" height="${iH}" fill="rgba(0,0,0,0.2)" rx="2"/>
+    <rect x="${PAD.left}" y="${PAD.top}" width="${iW}" height="${iH}" fill="var(--cream)" stroke="var(--rule)" rx="2"/>
     ${yMarks}${marks}
-    <path d="${above}" fill="rgba(212,168,83,0.22)" clip-path="url(#${clipId})"/>
-    <path d="${below}" fill="rgba(90,130,200,0.22)" clip-path="url(#${clipId})"/>
-    <polyline points="${pts}" fill="none" stroke="var(--gold)" stroke-width="1.5" stroke-linejoin="round" clip-path="url(#${clipId})"/>
+    <path d="${above}" fill="var(--navy)" fill-opacity="0.14" clip-path="url(#${clipId})"/>
+    <path d="${below}" fill="var(--accent)" fill-opacity="0.13" clip-path="url(#${clipId})"/>
+    <polyline points="${pts}" fill="none" stroke="var(--navy)" stroke-width="1.75" stroke-linejoin="round" clip-path="url(#${clipId})"/>
     ${dot}
-    <text x="${PAD.left + 4}" y="${PAD.top + 12}" font-size="9" fill="rgba(212,168,83,0.8)" font-family="var(--heading)">${label}</text>
-    <text x="${PAD.left + iW - 2}" y="${H - 4}" text-anchor="end" font-size="9" fill="rgba(255,255,255,0.35)" font-family="monospace">${numInns} inn.</text>
+    <text x="${PAD.left + 4}" y="${PAD.top + 12}" font-size="10" fill="var(--navy)" font-family="var(--heading)">${escapeHtml(label)}</text>
+    <text x="${PAD.left + 4}" y="${PAD.top + iH - 5}" font-size="10" fill="var(--accent)" font-family="var(--heading)">${escapeHtml(vTeam)} ahead</text>
+    <text x="${PAD.left + iW - 2}" y="${H - 4}" text-anchor="end" font-size="10" fill="var(--text-light)" font-family="var(--mono)">${numInns} inn.</text>
   </svg>`;
 }
 

@@ -29,7 +29,7 @@ Do **not** bump `SHELL_VERSION` in `sw.js` by hand — the pre-commit hook does 
 | **F11** | Advance Runners: no defaults, no cancel, silent refusal | iPad | M | **done** |
 | **F12** | Spray prompt fires on every hit with no way to turn it off | iPad | S | **done** (won't-fix + 2) |
 | **F13** | Jersey numbers clip at 1024px | polish | XS | **done** |
-| **F14** | Win-probability chart never re-themed | polish | S | todo |
+| **F14** | Win-probability chart never re-themed | polish | S | **done** |
 | **F15** | "PO" collision and "CLR All" mislabel | polish | XS | todo |
 | **F16** | Zero prints blank in one linescore, `0` in the other | polish | XS | todo |
 | **F17** | Hotkey help unreachable without a keyboard | polish | XS | todo |
@@ -641,8 +641,35 @@ of 28 — every 2-digit number is cut mid-glyph on a 10.2"/10.9" iPad. Widen the
 (`--cell-h` at its 44px floor), so take the pixels from `AVG` or `POS`, not from the at-bat
 columns.
 
-### F14 — win-probability chart never re-themed
-Axis labels are `rgba(255,255,255,0.45)` (y) and `0.35` (x) at 9px over a
+### F14 — win-probability chart never re-themed — **done**
+
+**Worse than filed: the curve was invisible too, not just the labels.** It is stroked
+`var(--gold)`, and this theme defines `--gold: var(--rb-white)` — #ffffff — because
+everywhere else in the app that token is ink *on* the navy ground. Over the plot's own
+`rgba(0,0,0,0.2)` wash that put the line at **1.6:1**. So the chart had no readable content
+at all, captions or curve. Every colour now comes from the palette: `--cream` ground,
+`--navy` curve and upper band, `--accent` lower band, `--text-light` axes. Measured on the
+fixture at 1194×834: worst label **5.07:1** (from ≈1.2), curve **10.8:1** on the ground and
+**8.4:1** over its own bands, captions 10.8 and 5.6.
+
+**Width comes from the container, not a scaled 560.** `width="100%"` + `preserveAspectRatio`
+would have scaled a 560px drawing up 1.5× and thickened every stroke and glyph with it, so
+`W` is `clamp(320, container.clientWidth, 900)` instead and the type stays at its drawn size.
+Verified 834px in the 834px panel (the ~270px dead strip is gone) and 336 in a 390px phone
+column with no overflow. `container.clientWidth` is 0 in jsdom and in a closed modal, so it
+falls back to 560; `showGameSummary` renders after `classList.add('active')`, which is what
+makes the measurement real.
+
+**Two things the finding did not mention.** The `N inn.` caption is right-anchored on the
+same baseline as the tick numbers — clear at a fixed 560, a collision at 336 — so a tick
+inside the caption's width now keeps its gridline and gives up its number. And the team
+names went into the SVG **unescaped**; they are hand-typed, so both are through
+`escapeHtml` now. The upper and lower bands are also named (`Rangers win% (est.)` /
+`Astros ahead`), since navy-above / red-below is the one thing a reader has to be told. The
+bands themselves are only ~1.27:1 against the ground, which is fine — they are tints, and
+the curve and the 50% rule carry the reading. 6 new tests, **395 green**.
+
+**The finding as filed.** Axis labels are `rgba(255,255,255,0.45)` (y) and `0.35` (x) at 9px over a
 `rgba(0,0,0,0.2)` plot ground — **≈1.2:1**, invisible; they were styled for the old dark
 skin. The gold "Rangers win% (est.)" caption is the same story. Also `viewBox="0 0 560 160"`
 is fixed, so it renders 560px inside an 834px panel with ~270px dead to the right.

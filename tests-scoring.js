@@ -5511,4 +5511,103 @@
     eq('nobody is on the mound', lsText('ls-pitcher'), '');
     eq('and no count is showing', lsText('ls-pitches'), '');
   });
+
+  /* F14 — the win-probability chart kept the old dark skin's colours. The axis
+     labels were white at 0.35–0.45 alpha, and the curve was stroked
+     `var(--gold)`, which this theme defines as #ffffff — so over the plot's own
+     black wash the line itself was invisible, not only its captions. The
+     viewBox was a fixed 560 as well, leaving ~270px of the summary panel dead. */
+  const WP_DATA = [
+    { homeTeamWinProbability: 50 },
+    { homeTeamWinProbability: 71 },
+    { homeTeamWinProbability: 38 },
+    { homeTeamWinProbability: 86 }
+  ];
+  function chartIn(width) {
+    const box = document.createElement('div');
+    document.body.appendChild(box);
+    if (width !== undefined) Object.defineProperty(box, 'clientWidth', { value: width, configurable: true });
+    return box;
+  }
+
+  test('the win-probability chart is drawn in the card palette, not the dark skin', () => {
+    const box = chartIn();
+    renderWinProbSVG(box, WP_DATA, 'Astros', 'Rangers', 9, true);
+    const svg = box.innerHTML;
+    ok('nothing is drawn in white-on-dark', svg.indexOf('rgba(255,255,255') < 0);
+    ok('and the plot ground is not a black wash', svg.indexOf('rgba(0,0,0,0.2)') < 0);
+    ok('no --gold ink, which this theme makes white', svg.indexOf('var(--gold)') < 0);
+    ok('the curve is navy', /<polyline[^>]*stroke="var\(--navy\)"/.test(svg));
+    const labels = Array.from(box.querySelectorAll('text'));
+    ok('there are labels to read', labels.length >= 12);
+    ok('and every one takes its colour from the palette',
+      labels.every(t => (t.getAttribute('fill') || '').indexOf('var(--') === 0));
+    box.remove();
+  });
+
+  test('the chart names both sides of the 50% line', () => {
+    const box = chartIn();
+    renderWinProbSVG(box, WP_DATA, 'Astros', 'Rangers', 9, true);
+    const text = box.textContent;
+    ok('the home team owns the upper band', text.indexOf('Rangers win% (est.)') >= 0);
+    ok('and the visiting team the lower', text.indexOf('Astros ahead') >= 0);
+    box.remove();
+  });
+
+  test('the chart takes its width from the panel it is drawn in', () => {
+    const wide = chartIn(836);
+    renderWinProbSVG(wide, WP_DATA, 'Astros', 'Rangers', 9, true);
+    eq('a wide panel is filled', wide.querySelector('svg').getAttribute('viewBox'), '0 0 836 160');
+    wide.remove();
+
+    const unmeasured = chartIn(0);
+    renderWinProbSVG(unmeasured, WP_DATA, 'Astros', 'Rangers', 9, true);
+    eq('an unmeasurable one falls back to the old width', unmeasured.querySelector('svg').getAttribute('viewBox'), '0 0 560 160');
+    unmeasured.remove();
+
+    const phone = chartIn(240);
+    renderWinProbSVG(phone, WP_DATA, 'Astros', 'Rangers', 9, true);
+    eq('and a phone column stops at the floor', phone.querySelector('svg').getAttribute('viewBox'), '0 0 320 160');
+    phone.remove();
+  });
+
+  test('a narrow panel drops the tick that would sit under the innings caption', () => {
+    const ticks = box => Array.from(box.querySelectorAll('text'))
+      .filter(t => /^\d+$/.test(t.textContent) && t.getAttribute('text-anchor') === 'middle')
+      .map(t => t.textContent);
+
+    const wide = chartIn(834);
+    renderWinProbSVG(wide, WP_DATA, 'Astros', 'Rangers', 10, true);
+    eq('an iPad panel numbers every inning', ticks(wide).join(','), '1,2,3,4,5,6,7,8,9');
+    ok('and still says how long the game was', wide.textContent.indexOf('10 inn.') >= 0);
+    wide.remove();
+
+    const phone = chartIn(336);
+    renderWinProbSVG(phone, WP_DATA, 'Astros', 'Rangers', 10, true);
+    eq('a phone column gives the last one up', ticks(phone).join(','), '1,2,3,4,5,6,7,8');
+    eq('but keeps its gridline', phone.querySelectorAll('line').length, wide.querySelectorAll('line').length);
+    ok('and the caption it made room for', phone.textContent.indexOf('10 inn.') >= 0);
+    phone.remove();
+  });
+
+  // The team names went into the SVG unescaped, and they are typed by hand.
+  test('a team name cannot write markup into the chart', () => {
+    const box = chartIn();
+    renderWinProbSVG(box, WP_DATA, '<script>x</script>', 'Ran<b>gers', 9, false);
+    eq('the name made no elements', box.querySelectorAll('script,b').length, 0);
+    ok('and it is still printed as typed', box.textContent.indexOf('Ran<b>gers win%') >= 0);
+    box.remove();
+  });
+
+  test('the game summary draws the chart it wires up', () => {
+    gameState.info.visitingTeam = 'Astros';
+    gameState.info.homeTeam = 'Rangers';
+    sel('visiting', 0, 0); play('HR');
+    showGameSummary();
+    const svg = document.querySelector('#gs-winprob-chart svg');
+    ok('the summary has a chart in it', !!svg);
+    ok('drawn with the navy curve', /var\(--navy\)/.test(svg.innerHTML));
+    ok('and both teams named on it', svg.textContent.indexOf('Rangers') >= 0 && svg.textContent.indexOf('Astros') >= 0);
+    document.getElementById('game-summary-modal').classList.remove('active');
+  });
 })();
