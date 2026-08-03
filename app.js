@@ -3668,12 +3668,20 @@ function updateSituation() {
 }
 
 function updateLiveStatsFromState() {
-  const half = lastHalfWithPlays();
-  if (!half) return;
   // The reload path: `updateSituation` bails with no cell selected, so a card that
   // comes back final and unbacked-up gets its ask from here (M1's reasoning, applied
-  // to the banner).
+  // to the banner). An *empty* card has to be asked about too, and this used to sit
+  // below the `!half` return — so New Game left the outgoing game's "Game final —
+  // this card exists only on this device" standing over a card with nothing on it,
+  // asking for a backup of a game that was no longer there to back up (F20).
   updateBackupReminder();
+  const half = lastHalfWithPlays();
+  // Nothing scored yet: the panel is written back to the state it opens in, rather
+  // than left reading the last game's. `applyState` drops the selection, so every
+  // path that reaches here with an empty card reaches it with nothing selected; if
+  // a cell somehow is selected, `updateSituation` owns the panel and has already
+  // painted the live at-bat, which must not be blanked out from under it. (F20)
+  if (!half) { if (!selectedCell) renderEmptyReadout(); return; }
   if (gameIsFinal()) { renderFinalReadout(); return; }
   const lsInn = document.getElementById('ls-inning');
   const arrow = half.team === 'visiting' ? '▲' : '▼';
@@ -3781,6 +3789,38 @@ function renderFinalReadout() {
   if (lsCount) lsCount.textContent = runsOnLine('visiting') + '-' + runsOnLine('home');
   if (lsBatter) { lsBatter.textContent = ''; fitName(lsBatter); }
   if (lsPitcher) { lsPitcher.textContent = ''; fitName(lsPitcher); }
+  if (lsPitches) lsPitches.textContent = '';
+  for (let i = 1; i <= 3; i++) {
+    const od = document.getElementById('ls-out-' + i);
+    if (od) od.classList.remove('active');
+  }
+  ['ls-b1','ls-b2','ls-b3'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.setAttribute('fill', 'rgba(255,255,255,0.2)');
+  });
+}
+
+/* The live panel, for a card with nothing scored on it. The counterpart to
+   `renderFinalReadout`, over the same five slots, writing what index.html ships —
+   which is what a first-ever launch of the app reads.
+
+   Nothing used to write it, because nothing had to: on a first launch the markup is
+   already right, and from the first tap onwards `updateSituation` owns the panel. A
+   card that is *replaced* is the case in between. New Game left INNING FINAL and a
+   BALL — STRIKE of `3-4` — the last game's final score, which is what
+   `renderFinalReadout` puts in that slot — over an empty card, and they stayed
+   there until the first tap. Same family as F1 and F4: derived display on a path
+   that runs with no selection. (F20) */
+function renderEmptyReadout() {
+  const lsInn = document.getElementById('ls-inning');
+  const lsCount = document.getElementById('ls-count');
+  const lsBatter = document.getElementById('ls-batter');
+  const lsPitcher = document.getElementById('ls-pitcher');
+  const lsPitches = document.getElementById('ls-pitches');
+  if (lsInn) lsInn.textContent = '▲ 1';
+  if (lsCount) lsCount.textContent = '0-0';
+  if (lsBatter) { lsBatter.textContent = '—'; fitName(lsBatter); }
+  if (lsPitcher) { lsPitcher.textContent = '—'; fitName(lsPitcher); }
   if (lsPitches) lsPitches.textContent = '';
   for (let i = 1; i <= 3; i++) {
     const od = document.getElementById('ls-out-' + i);
@@ -5300,6 +5340,17 @@ function applyState() {
     }
   });
 
+  // The outgoing card's selection, before anything is repainted. Every caller of
+  // `applyState` is replacing the card wholesale — boot, New Game, Load, Import — so
+  // the selected cell, and the inning it had lit on the line, belong to a game that
+  // is no longer on screen. Nothing ever cleared either: New Game left a cell of the
+  // finished game highlighted on an empty card, with `selectedCell` still pointing
+  // into it. Dropping it is also what puts the live readout on its no-selection
+  // path, which is the only path that repaints a card nobody has tapped yet. (F20)
+  if (selectedCell) selectedCell.classList.remove('selected');
+  selectedCell = null;
+  document.querySelectorAll('.linescore td.ls-active').forEach(el => el.classList.remove('ls-active'));
+
   document.getElementById('info-date').value = gameState.info.date || '';
   document.getElementById('info-start-time').value = gameState.info.startTime || '';
   document.getElementById('info-time-of-game').value = gameState.info.timeOfGame || '';
@@ -5315,10 +5366,16 @@ function applyState() {
   document.getElementById('ump-3b').value = gameState.umpires['3b'] || '';
   document.getElementById('game-notes').value = gameState.notes || '';
 
+  // Written every time, with the same fallback the header field's own input handler
+  // uses. Guarding the write on the name being non-empty meant a card that arrived
+  // without one kept the *previous* card's teams standing on the line — "Astros" and
+  // "Rangers" over a Visiting/Home pair of fields that had just been cleared, which
+  // is a linescore naming a game that is not on the card. A blank name is a fact
+  // about this card, and "Visiting"/"Home" is how the line states it. (F20)
   const vLabel = document.getElementById('ls-v-label');
-  if (vLabel && gameState.info.visitingTeam) vLabel.textContent = gameState.info.visitingTeam;
+  if (vLabel) vLabel.textContent = gameState.info.visitingTeam || 'Visiting';
   const hLabel = document.getElementById('ls-h-label');
-  if (hLabel && gameState.info.homeTeam) hLabel.textContent = gameState.info.homeTeam;
+  if (hLabel) hLabel.textContent = gameState.info.homeTeam || 'Home';
 
   ['visiting','home'].forEach(team => {
     // Ensure innings have new fields
