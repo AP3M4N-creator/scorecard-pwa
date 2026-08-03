@@ -5707,4 +5707,151 @@
     ok('and both teams named on it', svg.textContent.indexOf('Rangers') >= 0 && svg.textContent.indexOf('Astros') >= 0);
     document.getElementById('game-summary-modal').classList.remove('active');
   });
+
+  /* F20 — New Game left pieces of the finished card standing on the empty one, all
+     of them derived display written on a path that runs with no cell selected. Same
+     family as F1 and F4, and the same trust problem: the card showed figures that
+     belonged to a game no longer on it.
+
+       · the linescore rows still read "Astros" and "Rangers", because `applyState`
+         guarded the label write on the name being non-empty, so a blank name left
+         the old label standing instead of clearing it;
+       · the panel still read INNING **FINAL** over a BALL — STRIKE of **3-4** — the
+         last game's final score, which is what `renderFinalReadout` puts in that
+         slot — because `updateSituation` returns early with nothing selected and
+         `updateLiveStatsFromState` returned early for a card with no plays;
+       · the banner still asked for a backup of the game that had just been thrown
+         away, for the same reason: `updateBackupReminder` sat *below* that return;
+       · and the cell the last game ended on was still highlighted, with
+         `selectedCell` still pointing into it and its inning still lit on the line.
+         Nothing in the app had ever cleared a selection.
+
+     Every case here asserts the finished state first — a fix that made New Game
+     right by making the finished card wrong would pass otherwise. */
+  function startNewGame() {
+    const realConfirm = window.confirm;
+    window.confirm = function () { return true; };
+    try { newGame(); } finally { window.confirm = realConfirm; }
+  }
+  const lsLabel = side => document.getElementById('ls-' + side + '-label').textContent;
+  const lsActive = () => document.querySelectorAll('.linescore td.ls-active').length;
+  const outsShowing = () => [1, 2, 3].filter(i => document.getElementById('ls-out-' + i).classList.contains('active')).length;
+  const onBaseShowing = () => ['ls-b1', 'ls-b2', 'ls-b3'].filter(id => document.getElementById(id).getAttribute('fill') === 'var(--gold)').length;
+
+  /* Astros 3 – Rangers 4 on a walk-off: the review's own fixture, and the card the
+     New Game cases start from. The team names are typed rather than assigned, so the
+     labels are on the line by the path a scorer puts them there. */
+  function finishedCard() {
+    typeInto(document.getElementById('info-visiting-team'), 'Astros');
+    typeInto(document.getElementById('info-home-team'), 'Rangers');
+    lsInput('visiting', 0).value = '3';
+    updateLinescoreTotals('visiting');
+    lsInput('home', 0).value = '3';
+    updateLinescoreTotals('home');
+    sel('home', 0, 8);
+    play('HR');                                       // walk-off, 4-3
+    ok('the fixture is a finished game', gameIsFinal());
+  }
+
+  test('New Game takes the last game off the linescore rows', () => {
+    clearStorage();
+    try {
+      finishedCard();
+      eq('the line names the visiting side', lsLabel('v'), 'Astros');
+      eq('and the home side', lsLabel('h'), 'Rangers');
+      startNewGame();
+      eq('the new card has no visiting team', document.getElementById('info-visiting-team').value, '');
+      eq('and no home team', document.getElementById('info-home-team').value, '');
+      eq('so the row says Visiting', lsLabel('v'), 'Visiting');
+      eq('and the other says Home', lsLabel('h'), 'Home');
+    } finally { clearStorage(); }
+  });
+
+  // The same guard on the load and import paths, which is where a card with no team
+  // names actually arrives from — a save made before the header was filled in.
+  test('a card that arrives without team names says Visiting and Home', () => {
+    finishedCard();
+    collectState();
+    gameState.info.visitingTeam = '';
+    gameState.info.homeTeam = '';
+    applyState();
+    eq('the visiting row', lsLabel('v'), 'Visiting');
+    eq('the home row', lsLabel('h'), 'Home');
+  });
+
+  test('New Game hands back the readout an unscored card opens with', () => {
+    clearStorage();
+    try {
+      finishedCard();
+      eq('the finished card reads FINAL', lsText('ls-inning'), 'FINAL');
+      eq('with the final score in the count slot', lsText('ls-count'), '3-4');
+      startNewGame();
+      eq('the new card is in the top of the 1st', lsText('ls-inning'), '▲ 1');
+      eq('with no count on it', lsText('ls-count'), '0-0');
+      eq('nobody at the plate', lsText('ls-batter'), '—');
+      eq('nobody on the mound', lsText('ls-pitcher'), '—');
+      eq('and no pitch count', lsText('ls-pitches'), '');
+    } finally { clearStorage(); }
+  });
+
+  // Not only the final card: a game abandoned in the middle has outs and runners on
+  // the panel, and those are the figures most obviously about the wrong game.
+  test('New Game clears the outs and the runners of an unfinished game', () => {
+    clearStorage();
+    try {
+      sel('visiting', 0, 0);
+      play('K'); play('K');                           // two away
+      sel('visiting', 6, 0);
+      play('1B');                                     // and a man on 1st
+      eq('two outs are showing', outsShowing(), 2);
+      eq('with a runner on', onBaseShowing(), 1);
+      startNewGame();
+      eq('the new card is in the top of the 1st', lsText('ls-inning'), '▲ 1');
+      eq('nobody is out', outsShowing(), 0);
+      eq('and nobody is on', onBaseShowing(), 0);
+    } finally { clearStorage(); }
+  });
+
+  test('New Game stops asking for a backup of the game it threw away', () => {
+    clearStorage();
+    try {
+      finishedCard();
+      ok('the finished card asks to be backed up', visible('backup-reminder'));
+      startNewGame();
+      ok('the empty one has nothing to back up', !visible('backup-reminder'));
+    } finally { clearStorage(); }
+  });
+
+  test('New Game drops the selection the last game ended on', () => {
+    clearStorage();
+    try {
+      finishedCard();
+      ok('the finished card has a cell selected', !!selectedCell);
+      eq('and its inning lit on the line', lsActive(), 1);
+      startNewGame();
+      eq('nothing is selected on the new card', selectedCell, null);
+      eq('no cell is left highlighted', document.querySelectorAll('.at-bat-cell.selected').length, 0);
+      eq('and no inning is left lit', lsActive(), 0);
+    } finally { clearStorage(); }
+  });
+
+  // A selection is dropped because the *card* is being replaced, so Load and Import
+  // shed it too — `applyState` is the one place all three paths meet.
+  test('loading a different card drops the selection into the old one', () => {
+    clearStorage();
+    try {
+      const other = JSON.parse(JSON.stringify(createEmptyState()));
+      other.info.visitingTeam = 'Jays';
+      safeStorage.setItem(LIBRARY_KEY, JSON.stringify(
+        [{ id: 'x', date: '', teams: 'Jays vs Home', score: '0 - 0', state: other }]));
+      sel('visiting', 0, 0);
+      play('1B');
+      saveAsNewGame();                                // so the load has nothing to warn about
+      ok('a cell is selected', !!selectedCell);
+      loadGameFromLibrary(0);
+      eq('the loaded card came in', gameState.info.visitingTeam, 'Jays');
+      eq('and it came in with nothing selected', selectedCell, null);
+      eq('with no cell left highlighted', document.querySelectorAll('.at-bat-cell.selected').length, 0);
+    } finally { clearStorage(); }
+  });
 })();
