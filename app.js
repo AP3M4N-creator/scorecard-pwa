@@ -6470,6 +6470,18 @@ function toggleQBDrawer() {
   const isOpen = drawers[0] && drawers[0].classList.contains('open');
   drawers.forEach(d => d.classList.toggle('open', !isOpen));
   btns.forEach(b => { b.classList.toggle('open', !isOpen); b.textContent = isOpen ? '···' : '∧'; });
+  // Below the width at which the drawer is laid flat it opens *over* the card, and
+  // its height is deliberately not reserved — so the grid needs its own scroll while
+  // it is open, and the cell being scored may already be behind the deck. The class
+  // is what the stylesheet keys that scroll off; `fit()` supplies the height (F9-A).
+  document.body.classList.toggle('drawer-open', !isOpen);
+  if (!isOpen && selectedCell && selectedCell.scrollIntoView) {
+    // After `fit()`, which runs on the same click and is what makes the grid
+    // scrollable in the first place — there is nowhere to scroll to before it.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (selectedCell) selectedCell.scrollIntoView({ block: 'nearest' });
+    }));
+  }
 }
 
 function updateInningVisibility() {

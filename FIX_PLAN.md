@@ -24,7 +24,7 @@ Do **not** bump `SHELL_VERSION` in `sw.js` by hand — the pre-commit hook does 
 | **F6** | Popups are not modal to touch | correctness | M | **done** |
 | **F7** | `markSub()` shows nothing at all | usability | S | **done** |
 | **F8** | A lone SB option auto-applies — including steal of home | correctness | XS | **done** |
-| **F9** | Open drawer covers the card, nothing scrolls | iPad | M | ruled: **B+A** |
+| **F9** | Open drawer covers the card, nothing scrolls | iPad | M | **done** |
 | **F10** | Fielder entry is a text field → iOS alphabetic keyboard | iPad | M | todo |
 | **F11** | Advance Runners: no defaults, no cancel, silent refusal | iPad | M | **done** |
 | **F12** | Spray prompt fires on every hit with no way to turn it off | iPad | S | **done** (won't-fix + 2) |
@@ -428,7 +428,31 @@ and no run scored. Existing single-runner tests must still auto-apply.
 
 ### F9 — the open drawer covers the card and nothing scrolls  ← ruled 2026-08-03: **B + A**
 
-**Adam:** B at ≥1100px (flat two-row drawer, no accordion), with A as the fallback below it.
+**Adam:** B at ≥ 1100px (flat two-row drawer, no accordion), with A as the fallback below it.
+
+**Measured before building, and the option text was wrong.** The preview said `--cell-h` would
+settle around 36px and still fit nine slots. It cannot: `FIT_MIN` is 44px, so instead of
+shrinking gracefully the fit hits the floor and the page scrolls. Re-measured at 1194×834, the
+flat drawer is exactly 2 rows / 98px of buttons and takes the deck from 63px to 177px:
+
+| | accordion (before) | flat, permanent |
+|---|---|---|
+| normal card | 57px rows, no scroll | **45px rows, no scroll, slot 9 fully visible** |
+| backup banner up | 51px rows, no scroll | 44px rows (the floor) + 46px scroll |
+
+Adam took that trade with the real numbers in front of him. The banner is dismissible, and a
+scroll that exists is still better than the old `pageScroll: 0` with the rows unreachable.
+
+**What landed.** `display: contents` on the five `.qbg-panel`s so their buttons wrap as one set
+— panels wrap as unbreakable blocks otherwise, which gave three ragged rows. `fit()` reserves
+the whole `.quick-bar` above 1100px instead of just `.qb-core`; below it, it keeps reserving
+only the core *and* now hands the grid a `--grid-max-h` for as long as the drawer is open, so
+the covered rows can be reached (A). `toggleQBDrawer` sets `body.drawer-open` — what the CSS
+keys that scroll off — and scrolls the selected cell back into view. Verified at 1024×768: grid
+bottom 576 vs deck top 594, scrollable by 110px, and it scrolls itself to the selected cell.
+
+Two things fell out for free, both listed in the finding: at ≥1100px only one group being
+reachable at a time is gone, and so is the group resetting to Outs on every half-inning change.
 
 **Measured at 1194×834.** Drawer open: grid bottom 753 vs deck top 657 — batting slots 8
 and 9 are behind the deck, and `pageScroll` is **0**, so they cannot be brought into view.

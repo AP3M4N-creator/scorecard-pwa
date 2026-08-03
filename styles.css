@@ -1275,3 +1275,42 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
   .quick-bar { margin-bottom: 0; }
   .qb-core { padding: 8px 0; }
 }
+
+/* ---------- F9 — at iPad-landscape width the drawer stops being a drawer ----
+
+   The More-plays drawer expanded *over* the card and `fit()` deliberately did not
+   reserve it ("it must not push 400px of padding in"), so at 1194x834 with the
+   drawer open the grid ran to 753 and the deck began at 657: batting slots 8 and 9
+   sat behind it, and `pageScroll` was 0, so they could not be brought into view.
+   That bites exactly when it matters — SB, CS, WP, SUB and PR all live in there,
+   and the bottom of the order comes up as often as any other part of it.
+
+   Wide enough and there is no need for a drawer at all: all 33 buttons lay out in
+   two rows at 1194px. The accordion goes, and with it two other annoyances — only
+   one group reachable at a time, and the group resetting to Outs on every
+   half-inning change, because each tab owns its own copy of the drawer.
+
+   `display: contents` on the panels drops them out of the box tree so their buttons
+   wrap as one set, rather than each panel wrapping as an unbreakable block (which
+   put them in three ragged rows). The cost is real and was measured before it was
+   taken: the deck goes 63px to 164px, and the batting rows 57px to 46px. */
+@media (min-width: 1100px) {
+  .tab-content.active .qb-drawer {
+    max-height: none; opacity: 1; overflow: visible;
+    padding: 8px 0 4px; border-bottom: 1px solid var(--line-soft);
+  }
+  .qb-drawer .qbg-tabs { display: none; }
+  .qb-drawer .qbg-panel { display: contents; }
+  /* Nothing left to open. */
+  .qb-more-btn { display: none; }
+}
+
+/* Below that the drawer still opens over the card, and its height is still not
+   reserved — so the rows it covers need a way to be reached. The grid takes its own
+   scroll for exactly as long as the drawer is open; `--grid-max-h` is set by `fit()`,
+   which is the only thing that knows where the open drawer's top edge lands, and
+   removed again the moment it closes (F9-A). */
+body.drawer-open .tab-content.active .grid-wrap {
+  max-height: var(--grid-max-h, none);
+  overflow-y: auto;
+}

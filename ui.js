@@ -125,18 +125,42 @@ document.addEventListener('click', function (e) {
      in the row heights. Short-changing it leaves the page 2-3px
      scrollable, which on a touch screen is as annoying as 300px. */
   var FIT_MIN = 44, FIT_MAX = 62, FIT_BREAK = 835, STARTERS = 9, PAD = 18;
+  /* At and above this the stylesheet lays the drawer flat and it stops being a
+     drawer — every play button is on the deck all the time. Kept in step with the
+     `min-width: 1100px` block in styles.css. */
+  var FLAT_DRAWER = 1100;
   var root = document.documentElement, queued = false;
 
   function fit() {
     queued = false;
     /* Reserve the deck's resting height only. The More-plays drawer
-       expands over the card; it must not push 400px of padding in. */
-    var core = document.querySelector('.tab-content.active .qb-core');
-    var deck = core ? Math.ceil(core.getBoundingClientRect().height) : 0;
+       expands over the card; it must not push 400px of padding in.
+
+       Except where it does not expand: laid flat there is nothing to open and no
+       resting height to distinguish, so what has to be reserved is the whole deck.
+       Reserving only `.qb-core` there would leave 98px of buttons sitting over the
+       bottom of the order permanently, which is F9 made worse rather than fixed. */
+    var flat = window.innerWidth >= FLAT_DRAWER;
+    var box = document.querySelector(
+      '.tab-content.active ' + (flat ? '.quick-bar' : '.qb-core'));
+    var deck = box ? Math.ceil(box.getBoundingClientRect().height) : 0;
     root.style.setProperty('--deck-h', deck + 'px');
 
     var wrap = document.querySelector('.tab-content.active .grid-wrap');
     if (window.innerWidth < FIT_BREAK || !wrap) { root.style.removeProperty('--cell-h'); return; }
+
+    /* Narrower than that, the drawer still opens over the card and is still not
+       reserved — so give the grid its own scroll while it is open, or the rows
+       behind the deck cannot be reached at all (F9-A). Only `fit()` knows where the
+       open drawer's top edge actually lands. */
+    var openDrawer = flat ? null : document.querySelector('.tab-content.active .qb-drawer.open');
+    if (openDrawer) {
+      var gridTop = wrap.getBoundingClientRect().top;
+      var avail = Math.floor(openDrawer.getBoundingClientRect().top - gridTop - PAD);
+      root.style.setProperty('--grid-max-h', Math.max(160, avail) + 'px');
+    } else {
+      root.style.removeProperty('--grid-max-h');
+    }
 
     var head = wrap.querySelector('thead');
     /* Document-space top, so a scrolled page still measures the same box. */
