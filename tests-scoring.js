@@ -129,6 +129,12 @@
     pendingTransitionTimer = null;
     if (selectedCell) selectedCell.classList.remove('selected');
     selectedCell = null;
+    // SUB puts the caret in the substitute's name field (F7), and the keyboard
+    // handler ignores every hotkey while an input has focus — correct in the app,
+    // where the scorer is typing a name, but it must not cross into the next case.
+    // The row SUB opened is shared DOM too, so it comes back closed.
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    document.querySelectorAll('tr.pos-sub.revealed').forEach(tr => tr.classList.remove('revealed'));
     // The regulation-length select is a header field the grid never rebuilds, so a
     // case that shortened the game has to hand back a nine-inning card.
     const innSel = document.getElementById('info-innings');
@@ -319,6 +325,11 @@
     const input = document.getElementById('pos-input');
     input.value = text;
     input.onkeydown({ key: 'Enter', preventDefault() {} });
+  }
+  // Any other key into that popup's own handler — Escape, which is its cancel.
+  function keyPosPopup(k) {
+    if (!visible('pos-popup')) fail('position popup is not open');
+    document.getElementById('pos-input').onkeydown({ key: k, preventDefault() {} });
   }
 
   // Pitching change. changePitcher() is what creates #pitcher-popup, which
@@ -568,7 +579,8 @@
   test('a stolen base after the 3rd out cannot score a run', () => {
     sel('visiting', 0, 0);
     play('3B'); play('K'); play('K'); play('K'); // 3 outs, runner stranded on 3rd
-    key('r');                                    // only SBH is offered: applied directly
+    key('r');                                    // only SBH is offered — and since F8 it is offered, not taken
+    basePicker(2);
     eq('R total', rTotal('visiting'), '');
     eq('runner did not reach home', ab('visiting', 0, 0).bases[3], false);
     ok('and the refusal says so (L2)', visible('play-reject'));
@@ -706,6 +718,38 @@
     positionPopup('GO 6-3');
     eq('play', ab('visiting', 0, 0).play, '6-3');
     eq('outs', inn('visiting', 0).outs, 1);
+  });
+
+  /* F2 — the `6-3` in the box is the placeholder, not a value. Confirming an empty
+     field closed the popup and recorded nothing, silently: on iPad the keyboard
+     comes up over the deck and Return is the reflex, so the out simply vanished. */
+  test('confirming an empty fielder field is refused, not lost', () => {
+    sel('visiting', 0, 0);
+    promptGroundout();
+    positionPopup('');                              // Return with nothing typed
+    eq('no play was written', ab('visiting', 0, 0).play, '');
+    eq('and no out was recorded', inn('visiting', 0).outs, 0);
+    ok('the popup is still open to finish', visible('pos-popup'));
+    ok('and it says why', visible('play-reject'));
+    ok('naming what to type',
+      document.getElementById('play-reject').textContent.indexOf('6-3') >= 0);
+    positionPopup('6-3');                           // finishing it still works
+    eq('the out lands', ab('visiting', 0, 0).play, '6-3');
+    eq('on the inning too', inn('visiting', 0).outs, 1);
+    ok('and the popup closed behind it', !visible('pos-popup'));
+    ok('with the backdrop', !visible('popup-backdrop'));
+  });
+
+  // Whitespace is not an entry either — `.trim()` is what the guard reads.
+  test('a fielder field holding only spaces is refused too', () => {
+    sel('visiting', 0, 0);
+    promptGroundout();
+    positionPopup('   ');
+    eq('no play was written', ab('visiting', 0, 0).play, '');
+    ok('the popup is still open', visible('pos-popup'));
+    keyPosPopup('Escape');                          // and Escape is still the way out
+    ok('Escape closes it', !visible('pos-popup'));
+    eq('still nothing written', ab('visiting', 0, 0).play, '');
   });
 
   // #4
@@ -1384,10 +1428,43 @@
     play('3B');                                    // p0 on 3rd
     play('2B'); runnerPopup({ 2: 2, batter: 1 });   // p0 holds 3rd, p2 on 2nd
     key('r');
+    basePicker(2);                                  // SBH is the only legal steal, and F8 makes it a choice
     eq('the runner on 3rd stole home', lsInput('visiting', 0).value, '1');
     eq('the runner on 2nd stayed put', onB('visiting', 0, 1), 3);
     eq('the runner on 2nd did not advance', ab('visiting', 3, 0).bases[2], false);
     basesConsistent('visiting', 0);
+  });
+
+  /* F8 — that same shape is why the one-option shortcut had to lose the plate.
+     Men on 2nd and 3rd: the steal of 3rd is blocked, so 3rd→home is the only
+     legal option — and SB scored a run with no picker and no confirmation. A
+     scorer who taps SB with two men on almost certainly means the other one. */
+  test('a lone steal of home is offered, not applied', () => {
+    sel('visiting', 0, 0);
+    play('3B');                                     // p0 on 3rd
+    play('2B'); runnerPopup({ 2: 2, batter: 1 });   // p0 holds 3rd, p3 on 2nd
+    promptSBBase();
+    ok('the picker opened instead', visible('base-picker'));
+    eq('and nothing scored', lsInput('visiting', 0).value, '');
+    eq('the man on third is still there', onB('visiting', 0, 2), 0);
+    clickId('bp-cancel');
+    eq('cancelling leaves him there too', onB('visiting', 0, 2), 0);
+    eq('and the line clean', lsInput('visiting', 0).value, '');
+  });
+
+  /* The shortcut read as if it served the common case. It never did: every
+     stealable base also offers its +E variant, so one runner with a clear path
+     always produced two options and got a picker anyway. Pinned here so the
+     shortcut is not reintroduced on the strength of how it read. */
+  test('a steal with one runner was always a picker anyway', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    promptSBBase();
+    ok('a runner on first gets the picker', visible('base-picker'));
+    ok('because the error variant is the second option',
+      document.getElementById('base-picker').querySelectorAll('.bp-opt').length === 2);
+    basePicker(0);
+    eq('he took second', onB('visiting', 0, 1), 0);
   });
 
   test('a pickoff error into an occupied base is not offered', () => {
@@ -1562,6 +1639,7 @@
     sel('home', 0, 8);
     play('3B');
     promptSBBase();                                // only SBH is on offer
+    basePicker(2);
     eq('run scored', lsInput('home', 8).value, '1');
     ok('game recognised as over', gameOverShown);
   });
@@ -1583,6 +1661,7 @@
     sel('visiting', 0, 0);
     play('3B');
     promptSBBase();                                // SBH
+    basePicker(2);
     eq('run on the line', lsInput('visiting', 0).value, '1');
     eq('pitcher charged the run', pStat('visiting', 0, 'r'), '1');
   });
@@ -1771,6 +1850,46 @@
     sel('visiting', 9, 8);                          // any tap repaints the line
     eq('the X is gone', lsInput('home', 8).value, '');
     eq('and so is it in the state', gameState.linescore.home.innings[8], '');
+  });
+
+  /* F1 — both of those figures are derived by `fillLinescoreZeros`, whose only
+     caller was `updateSituation`, and that returns early with nothing selected.
+     A reloaded card has nothing selected, so a finished game came back reading as
+     if only its scoring innings had been played. It corrected itself on the first
+     tap, which is what made it easy to miss. `selectedCell = null` here is what a
+     reload actually starts from. */
+  test('a reloaded card keeps the zeros of its scoreless innings', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K'); play('K');
+    eq('the scoreless half reads 0', lsInput('visiting', 0).value, '0');
+    collectState();
+    selectedCell = null;
+    applyState();
+    eq('and still reads 0 after the reload', lsInput('visiting', 0).value, '0');
+    eq('with the state agreeing', gameState.linescore.visiting.innings[0], '0');
+    eq('an inning nobody batted in stays blank', lsInput('visiting', 1).value, '');
+  });
+
+  /* The X, unlike the zeros, is restored from the store on a plain reload — the
+     load path has no `updateInningRuns` to blank it with, because nobody batted in
+     that half. What it could not do before was *derive* one that isn't there: a
+     card from a build that never wrote it, or one hand-edited, stayed without it
+     until the first tap. `markUnplayedHomeHalf` runs off the tail of
+     `fillLinescoreZeros`, so it reaches the load path by the same fix. */
+  test('a reloaded home win derives the X its save never had', () => {
+    lsInput('home', 0).value = '2';
+    updateLinescoreTotals('home');
+    sel('visiting', 0, 8);
+    play('K'); play('K'); play('K');
+    eq('the X is on the line', lsInput('home', 8).value, 'X');
+    collectState();
+    gameState.linescore.home.innings[8] = '';       // the save that never held one
+    lsInput('home', 8).value = '';
+    selectedCell = null;
+    applyState();
+    eq('the reload works it out again', lsInput('home', 8).value, 'X');
+    eq('with the state agreeing', gameState.linescore.home.innings[8], 'X');
+    eq('the R total is untouched by it', rTotal('home'), '2');
   });
 
   // A figure already on the line is a scorer saying the half *was* played, with no
@@ -3009,6 +3128,58 @@
     ok('and let go of the field', sprayClickHandler === null);
   });
 
+  /* ------------------------------------------------------------------ F3 ---
+     A fresh card with the lineups in has nothing selected, and around twenty
+     entry points answered that with a bare `return`. Tapping 1B — the likeliest
+     first tap of a game — did nothing and said nothing. */
+
+  // Clears the toast first, so what it finds afterwards is this press's answer.
+  function refusesWithNoCell(label, run) {
+    selectedCell = null;
+    const toast = document.getElementById('play-reject');
+    if (toast) toast.style.display = 'none';
+    const before = JSON.stringify(gameState.teams);
+    run();
+    ok(label + ' says why it refused', visible('play-reject'));
+    ok(label + ' points at the card',
+      document.getElementById('play-reject').textContent.indexOf('cell') >= 0);
+    ok(label + ' wrote nothing', JSON.stringify(gameState.teams) === before);
+  }
+
+  test('every entry point says why it refuses with no cell selected', () => {
+    refusesWithNoCell('1B', () => applyPlay('1B'));
+    refusesWithNoCell('a pitch', () => addPitch('S'));
+    refusesWithNoCell('removing a pitch', () => removePitch());
+    refusesWithNoCell('GO', () => promptGroundout());
+    refusesWithNoCell('the strikeout popup', () => showStrikeoutPopup());
+    refusesWithNoCell('SB', () => promptSBBase());
+    refusesWithNoCell('CS', () => promptCSBase());
+    refusesWithNoCell('PK', () => promptPickoff());
+    refusesWithNoCell('WP', () => applyRunnerEvent('WP'));
+    refusesWithNoCell('SUB', () => markSub());
+    refusesWithNoCell('PR', () => markPinchRunner());
+    refusesWithNoCell('PIT', () => changePitcher());
+    refusesWithNoCell('POS', () => changeFieldPos());
+    refusesWithNoCell('Move', () => moveRunner());
+    refusesWithNoCell('Adv', () => editRunners());
+    refusesWithNoCell('Edit play', () => editPlayType());
+    refusesWithNoCell('Spray', () => editSprayChart());
+    refusesWithNoCell('RBI', () => adjustRBI(1));
+    refusesWithNoCell('ER review', () => reviewEarnedRuns());
+    refusesWithNoCell('CLR Play', () => clearPlayKeepPitches());
+    refusesWithNoCell('Clear Cell', () => clearSelectedCell());
+  });
+
+  // Deliberately still silent: this one runs on every repaint, so a toast here
+  // would fire on its own with nobody having pressed anything.
+  test('the repaint stays quiet with nothing selected', () => {
+    selectedCell = null;
+    const toast = document.getElementById('play-reject');
+    if (toast) toast.style.display = 'none';
+    updateSituation();
+    ok('no toast', !visible('play-reject'));
+  });
+
   /* =====================================================================
      Phase 9 — storage that doesn't lose things quietly
      ===================================================================== */
@@ -3200,6 +3371,52 @@
     markSub();
     ok('no question asked on the way in', !visible('sub-popup'));
     eq('the line runs to the end', subLine('visiting', 0), '011111111111111');
+  });
+
+  /* F7 — all of that was invisible. The substitution went on the card, but the row
+     holding the substitute's name is `visibility: collapse` until it has a name in
+     it, and a collapsed row refuses focus — so the field the scorer needs could not
+     be reached, and nothing pointed at "Show sub rows" as the way in. SUB was a
+     press with no toast, no mark and no next step. */
+  test('SUB opens the row it just created and puts the caret in it', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    const inp = document.querySelector('input[data-field="name"][data-team="visiting"][data-p="1"]');
+    ok('the sub row is open', inp.closest('tr').classList.contains('revealed'));
+    ok('with the caret in the name field', document.activeElement === inp);
+    ok('and the press said so', visible('play-reject'));
+    eq('as a notice, not a refusal',
+      document.getElementById('play-reject').dataset.tone, 'notice');
+  });
+
+  // Only the one slot. `show-subs` opens all eighteen, which costs about half the
+  // visible batting slots on an iPad — the reason this is per-row.
+  test('SUB does not open every other slot\'s sub row', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    const opened = document.querySelectorAll('tr.pos-sub.revealed');
+    eq('one row opened', opened.length, 1);
+    ok('and the wrap was not switched to show-subs',
+      !document.querySelector('.grid-wrap.show-subs'));
+  });
+
+  // A SUB pressed by mistake should not strand an open blank row on the card.
+  test('a SUB left without a name closes its row again', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    const inp = document.querySelector('input[data-field="name"][data-team="visiting"][data-p="1"]');
+    inp.blur();
+    ok('the empty row closed', !inp.closest('tr').classList.contains('revealed'));
+  });
+
+  test('a SUB that was named keeps its row open', () => {
+    lineupDirty = true;
+    sel('visiting', 0, 1);
+    markSub();
+    const inp = document.querySelector('input[data-field="name"][data-team="visiting"][data-p="1"]');
+    inp.value = 'Carter';
+    inp.blur();
+    ok('the named row stays open', inp.closest('tr').classList.contains('revealed'));
   });
 
   test('taking a sub out who never batted is an undo, not a re-entry', () => {
@@ -4693,6 +4910,35 @@
     } finally { window.confirm = realConfirm; clearStorage(); }
   });
 
+  /* F5 — Load and Import both weigh what is about to be lost before they ask.
+     New Game put the same mild question to an empty card and to one with an
+     inning of unsaved work on it, which is the question you stop reading. */
+  test('New Game names the unsaved work it is about to throw away', () => {
+    clearStorage();
+    const realConfirm = window.confirm;
+    let asked = '';
+    window.confirm = function (msg) { asked = msg; return false; };
+    try {
+      sel('visiting', 0, 0); play('1B');
+      newGame();
+      ok('the warning names the loss', asked.indexOf('unsaved changes') >= 0);
+      eq('and answering no left the card alone', ab('visiting', 0, 0).play, '1B');
+    } finally { window.confirm = realConfirm; clearStorage(); }
+  });
+
+  test('New Game asks the plain question of a card with nothing on it', () => {
+    clearStorage();
+    const realConfirm = window.confirm;
+    let asked = '';
+    window.confirm = function (msg) { asked = msg; return false; };
+    try {
+      ok('nothing is outstanding', !currentGameHasUnsavedChanges());
+      newGame();
+      ok('so the warning stays plain', asked.indexOf('unsaved changes') < 0);
+      ok('and it still asks', asked.indexOf('new scorecard') >= 0);
+    } finally { window.confirm = realConfirm; clearStorage(); }
+  });
+
   /* ---- M1: a cleared pitching change ---------------------------------- */
 
   // `clearSelectedCell` blanks `ab.pitcherChangeNum` (app.js:4180) and leaves
@@ -4959,6 +5205,43 @@
     pitch('S');
     eq('the first is his', lsText('ls-pitches'), '1 pitch');
     eq('and the starter keeps his three', pStat('visiting', 0, 'pc'), '3');
+  });
+
+  /* F4 — the panel names the batter and the pitcher off the inputs, not off the
+     state, but nothing repainted it as they were typed. A substitute written in
+     under the scorer's fingers left the panel naming the man he replaced until
+     the next play — after the moment it was needed. */
+  function typeInto(el, value) {
+    el.value = value;
+    el.dispatchEvent(new window.Event('input', { bubbles: true }));
+  }
+
+  test('the readout follows a substitute as his name is typed', () => {
+    lineupDirty = true;
+    const starter = document.querySelector('input[data-field="name"][data-team="visiting"][data-p="0"]');
+    typeInto(starter, 'Jung');
+    sel('visiting', 0, 0);
+    eq('the starter is at the plate', lsText('ls-batter'), 'Jung');
+    markSub();                                        // row 1 of the spot is the sub
+    const sub = document.querySelector('input[data-field="name"][data-team="visiting"][data-p="1"]');
+    typeInto(sub, 'Carter');
+    eq('and the panel has the substitute', lsText('ls-batter'), 'Carter');
+    const num = document.querySelector('input[data-field="num"][data-team="visiting"][data-p="1"]');
+    typeInto(num, '25');
+    eq('with his number as it lands', lsText('ls-batter'), '#25 Carter');
+  });
+
+  test('the readout follows a reliever as his name is typed', () => {
+    lineupDirty = true;
+    sel('visiting', 0, 0);
+    const num = document.querySelector('input[data-team="home"][data-pitcher="1"][data-field="num"]');
+    const name = document.querySelector('input[data-team="home"][data-pitcher="1"][data-field="name"]');
+    typeInto(name, 'Ramos');
+    typeInto(num, '31');
+    usePitcher(1);
+    eq('the reliever is on the mound', lsText('ls-pitcher'), '#31 Ramos');
+    typeInto(name, 'Ramirez');                        // a correction to the spelling
+    eq('and the panel follows the correction', lsText('ls-pitcher'), '#31 Ramirez');
   });
 
   test('a final card empties the matchup readout', () => {

@@ -405,6 +405,11 @@ details.info-details > summary:hover { color: var(--navy); }
 .scoring-grid tr.pos-sub:has(input[data-field="name"]:not(:placeholder-shown)),
 .scoring-grid tr.pos-sub:focus-within { visibility: visible; }
 .grid-wrap.show-subs .scoring-grid tr.pos-sub { visibility: visible; }
+/* One slot's row, opened by SUB. `:focus-within` above cannot get there by itself:
+   a collapsed row refuses focus, so the field the scorer needs is unreachable until
+   something shows the row first. Per-slot rather than `show-subs`, which opens all
+   eighteen and costs about half the visible batting slots on an iPad (F7). */
+.scoring-grid tr.pos-sub.revealed { visibility: visible; }
 /* Slot separation without a heavy rule */
 .scoring-grid tr.pos-starter > td { border-top: 2px solid var(--text); }
 .scoring-grid tbody tr.pos-sub:last-child > td { border-bottom: 1px solid var(--border-light); }

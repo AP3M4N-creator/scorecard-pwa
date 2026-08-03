@@ -1519,6 +1519,24 @@ function showPlayToast(msg, tone) {
 function showPlayReject(msg) { showPlayToast(msg, 'reject'); }
 function showPlayNotice(msg) { showPlayToast(msg, 'notice'); }
 
+/* Nothing is selected until a cell is tapped, and on a fresh card with the
+   lineups filled in that is the state the first play button meets. Around twenty
+   entry points answered it with a bare `return` — 1B, every pitch button, every
+   button in the drawer — so the likeliest first tap of a game did nothing and
+   said nothing. `applyPlay`'s own comment makes the case: a play refused in
+   silence is how a scorer ends up trusting a card that does not hold what they
+   entered. Named once, like every other refusal in the file (F3).
+
+   Two callers stay silent on purpose. `updateSituation` runs on every repaint,
+   and the global keydown handler dispatches to functions that speak for
+   themselves — toasting on every stray keypress would be worse than the gap. */
+const NO_CELL = 'Tap the batter\'s cell on the card first.';
+function requireSelection() {
+  if (selectedCell) return true;
+  showPlayReject(NO_CELL);
+  return false;
+}
+
 // Every entry path ends at the same wall once the half-inning is over, so they say
 // the same thing about it (L2). One constant, because six copies of a sentence drift.
 const INNING_OVER = 'The inning already has 3 outs — clear a play first.';
@@ -1822,7 +1840,10 @@ function playEntryReject(team, innIdx, play) {
 function applyPlay(play, target) {
   if (entryInProgress()) { showPlayReject('Finish the open entry first.'); return; }
   const t = target || currentTarget();
-  if (!t) return;
+  // Only ever a genuine no-selection tap: every internal caller passes a cell it
+  // captured, so `target` is null exactly when a play button was pressed with
+  // nothing selected — the likeliest first tap of a game (F3).
+  if (!t) { showPlayReject(NO_CELL); return; }
   const team = t.team;
   const pIdx = t.pIdx;
   const innIdx = t.innIdx;
@@ -3225,7 +3246,7 @@ function getPitchCount(pitches) {
 }
 
 function addPitch(type) {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
@@ -3265,7 +3286,7 @@ function addPitch(type) {
    one off — `takeBackPlay` for its effects on everybody else, the batter's own
    record cleared here — and `recomputeInning` derives the rest. */
 function removePitch() {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
@@ -3348,7 +3369,7 @@ function checkAutoTrigger(team, pIdx, innIdx) {
 
 function showStrikeoutPopup(target) {
   const t = target || currentTarget();
-  if (!t) return;
+  if (!t) { showPlayReject(NO_CELL); return; }
   let popup = document.getElementById('k-popup');
   if (!popup) {
     popup = document.createElement('div');
@@ -3617,7 +3638,7 @@ function renderFinalReadout() {
 /* Runner events (mid-at-bat, don't end the at-bat) */
 /* Specific SB/CS base prompts */
 function promptSBBase() {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const innIdx = parseInt(selectedCell.dataset.inn);
   const inn = getInnState(team, innIdx);
@@ -3642,7 +3663,17 @@ function promptSBBase() {
   // sentence written for it (m2). A blocked steal already explains itself through
   // applySBAtBase; a press with the bases empty used to do nothing and say nothing.
   if (options.length === 0) { showPlayReject(NOTHING_TO_MOVE.SB); return; }
-  if (options.length === 1) { applySBAtBase(team, innIdx, options[0].from, false); return; }
+  /* A lone option used to be applied straight, on the reading that one runner with
+     one base to take shouldn't cost a tap. It never meant that. Every base that can
+     be stolen also offers its +E variant, so a runner with a clear path always
+     produces *two* options — enumerating all eight occupancy combinations, the only
+     ones that come to a single option are the three where the single option is SBH
+     (3rd alone, 2nd+3rd, and loaded). So the shortcut fired for exactly one play:
+     a steal of home, the rarest thing on the list and the only one that puts a run
+     on the board. With men on 2nd and 3rd the steal of 3rd is blocked and SB scored
+     a run with no picker and no confirmation, when the scorer almost certainly meant
+     the other runner. Deleted rather than special-cased: guarding the plate would
+     have left a branch nothing can reach (F8). */
   showBasePickerPopup('Stolen Base', options, function(from, extra) { applySBAtBase(team, innIdx, from, extra === 'error'); });
 }
 
@@ -3679,7 +3710,7 @@ function applySBAtBase(team, innIdx, fromBase, withError) {
 }
 
 function promptCSBase() {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const innIdx = parseInt(selectedCell.dataset.inn);
   const inn = getInnState(team, innIdx);
@@ -3721,7 +3752,7 @@ function applyCSAtBase(team, innIdx, fromBase) {
 }
 
 function promptPickoff() {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const innIdx = parseInt(selectedCell.dataset.inn);
   const inn = getInnState(team, innIdx);
@@ -3861,7 +3892,7 @@ const RUNNER_EVENT_TITLE = {
    straight, the way promptSBBase applies its single option: he is the runner the
    event is charged for, and one base is where he goes. */
 function applyRunnerEvent(type) {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
@@ -4036,7 +4067,7 @@ function redoLastPlay() {
 
 /* Feature 2: Edit play type — swap play on completed cell, re-prompt runners */
 function editPlayType() {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
@@ -4173,7 +4204,7 @@ function editPlayType() {
    An RBI the scorer has overridden with `adjustRBI` is left alone: the count only
    replaces it when the correction actually moved somebody home. */
 function editRunners() {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
@@ -4214,7 +4245,7 @@ function editRunners() {
 
 /* Feature 4: Manual runner move — pick a runner, move to any base */
 function moveRunner() {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
@@ -4320,7 +4351,7 @@ function moveRunner() {
 
 /* Feature 5: Clear play only, keep pitches */
 function clearPlayKeepPitches() {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
@@ -4364,7 +4395,7 @@ function clearPlayKeepPitches() {
 
 /* Feature 6: Re-open spray chart to reposition hit */
 function editSprayChart() {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
@@ -4391,7 +4422,7 @@ function rbiInInning(team, realInn) {
 }
 
 function adjustRBI(delta) {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
@@ -4481,7 +4512,7 @@ function describeReach(ab) {
 let erReviewList = [];
 
 function reviewEarnedRuns() {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const innIdx = parseInt(selectedCell.dataset.inn);
   const realInn = getRealInning(team, innIdx);
@@ -4542,7 +4573,7 @@ function setRunEarnedByIndex(idx, unearned) {
 }
 
 function clearSelectedCell() {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   // The last hole in the C1 guard family. Clear is reachable past the backdrop
   // through the `c` hotkey, and it deleted the play a pending runner/outcome popup
   // was still deciding — leaving the popup up over a cell with nothing in it. Its
@@ -5205,6 +5236,17 @@ function applyState() {
   // event, so none of them has been measured against its column yet.
   refitNames();
 
+  // The line's derived figures — a 0 in every half that reached three outs, an X
+  // in a bottom half the game never needed — come from `fillLinescoreZeros`, and
+  // its only other caller is `updateSituation`, which returns early with nothing
+  // selected. A freshly loaded card has nothing selected, so a finished game read
+  // back as if only its scoring innings had been played, and a home win came back
+  // without its X, until the first tap put them there (F1). `updateInningRuns`
+  // writes '' for a scoreless inning, so the load path blanks figures the store
+  // held correctly — which is why this belongs after the recompute above, not
+  // before it. (F1)
+  fillLinescoreZeros();
+
   // Restore timer state
   if (gameState.timerRunning && gameState.timerStart) {
     document.getElementById('timer-btn').textContent = 'Stop';
@@ -5217,7 +5259,14 @@ function applyState() {
 }
 
 function newGame() {
-  if (!confirm('Clear all data and start a new scorecard?')) return;
+  // The other two doors out of a card — Load from the library and Import — both
+  // weigh what is about to be lost before they ask. This one asked the same mild
+  // question of an empty card and of one with an inning of unsaved work in it,
+  // which is the question you learn to answer without reading (F5).
+  collectState();  // capture live DOM edits before comparing
+  if (!confirm(currentGameHasUnsavedChanges()
+        ? 'This card has unsaved changes that will be lost. Start a new scorecard anyway?'
+        : 'Clear all data and start a new scorecard?')) return;
   clearTimeout(_saveTimer); _saveTimer = null;  // drop any pending save of the outgoing game
   // Stop timer if running
   if (timerInterval) clearInterval(timerInterval);
@@ -5237,7 +5286,7 @@ function showPositionPopup(prefix, placeholder, target) {
   // Capture the cell now — typing the fielders takes long enough for the scorer
   // to tap somewhere else first (#1).
   const t = target || currentTarget();
-  if (!t) return;
+  if (!t) { showPlayReject(NO_CELL); return; }
   let popup = document.getElementById('pos-popup');
   if (!popup) {
     popup = document.createElement('div');
@@ -5261,11 +5310,17 @@ function showPositionPopup(prefix, placeholder, target) {
     if (e.key === 'Enter') {
       e.preventDefault();
       const val = input.value.trim();
+      // The `6-3` in the box is the placeholder, not a value. Confirming an empty
+      // field used to close the popup and record nothing at all, without a word —
+      // and it is very reachable on iPad, where the keyboard comes up over the
+      // deck and Return is the reflex. The out just disappeared (F2). The popup
+      // stays open so the entry can be finished; Escape is still the way out.
+      if (!val) { showPlayReject('Type the fielder(s) first — e.g. 6-3.'); return; }
       closePopup(popup);
       input.blur();
       // Normalize here so only canonical codes reach state — a scorer typing
       // "GO 6-3" gets "6-3", which the rest of the app recognises as an out (#15).
-      if (val) applyPlay(normalizePlayCode(prefix + val), t);
+      applyPlay(normalizePlayCode(prefix + val), t);
     } else if (e.key === 'Escape') {
       e.preventDefault();
       closePopup(popup);
@@ -5490,7 +5545,7 @@ function updatePitcherStats(battingTeam) {
 
 /* Change Pitcher (Feature 5) */
 function changePitcher() {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const battingTeam = selectedCell.dataset.team;
   const innIdx = parseInt(selectedCell.dataset.inn);
   // Visiting batters face home pitchers, home batters face visiting pitchers
@@ -5533,7 +5588,7 @@ function changePitcher() {
    won't do any more is decide on its own. */
 
 function markSub() {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
@@ -5543,6 +5598,40 @@ function markSub() {
   }
   pushUndo(team, pIdx, innIdx);
   setSubLine(team, pIdx, innIdx, INNINGS - 1, 1);
+  // Everything above is invisible. The substitution is on the card, but the row
+  // that holds the substitute's name is `visibility: collapse` until it *has* a
+  // name — so SUB was a press with no toast, no mark and no next step, and the
+  // one way in ("Show sub rows", far right of the section bar) is not something
+  // the press points at. One tap should land the caret where the name goes (F7).
+  const nameInp = revealSubRow(team, pIdx);
+  announce('Substitute for ' + rowLabel(team, pIdx) + ' — enter his name.');
+  showPlayNotice(nameInp ? 'Enter the substitute\'s name.'
+                         : 'Substitution recorded — open Show sub rows to name him.');
+}
+
+/* Open one slot's sub row and put the caret in it.
+
+   A `visibility: collapse` row refuses focus, so the field cannot be reached
+   until the row is shown — which is the deadlock behind F7. Only the affected
+   slot's row is opened: `.show-subs` opens all eighteen, and that drops the fit
+   from 9 visible batting slots to about 4 at 1194x834. */
+function revealSubRow(team, pIdx) {
+  const slotBase = Math.floor(pIdx / ROWS_PER_POS) * ROWS_PER_POS;
+  const inp = document.querySelector(
+    `input[data-field="name"][data-team="${team}"][data-p="${slotBase + 1}"]`);
+  if (!inp) return null;
+  const tr = inp.closest('tr');
+  if (tr) tr.classList.add('revealed');
+  inp.focus();
+  if (inp.scrollIntoView) inp.scrollIntoView({ block: 'center' });
+  // A SUB pressed by mistake and left empty shouldn't strand an open blank row.
+  // Once a name is typed the `:not(:placeholder-shown)` rule holds the row open
+  // on its own, so dropping the class then costs nothing.
+  inp.addEventListener('blur', function drop() {
+    inp.removeEventListener('blur', drop);
+    if (tr && !inp.value.trim()) tr.classList.remove('revealed');
+  });
+  return inp;
 }
 
 /* PR — a pinch runner, which SUB cannot express (H2, D4).
@@ -5562,7 +5651,7 @@ function markSub() {
    Refused when the column has no play (nobody is on base to run for) or when the
    slot has no row left to put him in. */
 function markPinchRunner() {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
@@ -5964,7 +6053,7 @@ function promptDHChoice(team, spec) {
 }
 
 function changeFieldPos() {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
@@ -6034,7 +6123,7 @@ function applyFieldPos(team, starterP, pos, innLabel) {
 }
 
 function setPitcher(idx) {
-  if (!selectedCell) return;
+  if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);
   const innIdx = parseInt(selectedCell.dataset.inn);
@@ -7543,7 +7632,16 @@ document.addEventListener('input', function(e) {
    letting it disappear off the right-hand edge and reappear on blur. */
 document.addEventListener('input', function(e) {
   const t = e.target;
-  if (t && t.matches && t.matches(NAME_FIT_SELECTOR)) fitName(t);
+  if (!t || !t.matches) return;
+  if (t.matches(NAME_FIT_SELECTOR)) fitName(t);
+  // The At Bat panel names the batter and the man on the mound off these very
+  // inputs — `getActivePlayerName` and `livePitcherLabel` both read the field
+  // rather than the state — but nothing repainted it as they were typed. So a
+  // substitute written in under the scorer's fingers left the panel naming the
+  // man he replaced, and a reliever left it naming the starter, until the next
+  // play put it right: after the moment it was needed (F4). `updateSituation`
+  // no-ops with nothing selected, so it needs no guard of its own.
+  if (t.dataset.field === 'name' || t.dataset.field === 'num') updateSituation();
 });
 /* Breakpoints move the Player column, the webfont changes what a name measures,
    and clicks load games, reveal sub rows and switch teams — all of which put

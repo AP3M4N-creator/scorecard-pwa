@@ -16,14 +16,14 @@ Do **not** bump `SHELL_VERSION` in `sw.js` by hand — the pre-commit hook does 
 
 | | Fix | Severity | Size | Status |
 |---|---|---|---|---|
-| **F1** | Reloaded card loses its inning zeros and the X | data fidelity | XS | todo |
-| **F2** | Empty fielder entry silently loses the out | data loss | XS | todo |
-| **F3** | Every entry point refuses silently with no cell selected | trust | S | todo |
-| **F4** | Live readout goes stale when a name is typed | trust | XS | todo |
-| **F5** | `newGame()` skips the unsaved-changes check | data loss | XS | todo |
+| **F1** | Reloaded card loses its inning zeros and the X | data fidelity | XS | **done** |
+| **F2** | Empty fielder entry silently loses the out | data loss | XS | **done** |
+| **F3** | Every entry point refuses silently with no cell selected | trust | S | **done** |
+| **F4** | Live readout goes stale when a name is typed | trust | XS | **done** |
+| **F5** | `newGame()` skips the unsaved-changes check | data loss | XS | **done** |
 | **F6** | Popups are not modal to touch | correctness | M | **done** |
-| **F7** | `markSub()` shows nothing at all | usability | S | todo |
-| **F8** | A lone SB option auto-applies — including steal of home | correctness | XS | todo |
+| **F7** | `markSub()` shows nothing at all | usability | S | **done** |
+| **F8** | A lone SB option auto-applies — including steal of home | correctness | XS | **done** |
 | **F9** | Open drawer covers the card, nothing scrolls | iPad | M | **needs a ruling** |
 | **F10** | Fielder entry is a text field → iOS alphabetic keyboard | iPad | M | todo |
 | **F11** | Advance Runners: no defaults, no cancel, silent refusal | iPad | M | **needs a ruling** |
@@ -46,7 +46,14 @@ batch F13–F18 in one pass. F19 last, or never.
 
 These are small, independent and carry the most risk-per-byte. Do them first.
 
-### F1 — a reloaded card loses its inning zeros and the unplayed-half X
+### F1 — a reloaded card loses its inning zeros and the unplayed-half X — **done**
+
+**One correction to the finding.** The zeros are lost exactly as described. The **X is not**:
+nobody bats in that half, so the load path has no `updateInningRuns` to blank it with, and it
+comes back from the store intact. What the load path could not do was *derive* one that isn't
+there — a card from a build that never wrote it, or a hand-edited one. The test is written
+that way rather than as a plain round-trip, which would have passed without the fix.
+
 
 **Symptom.** Score a game to FINAL and reload. The linescore that read
 `2 1 0 0 0 0 0 0 0 0` now reads `2 1 · · · · · · · ·` — only the scoring innings. On a
@@ -85,7 +92,7 @@ read the line before touching anything.
 
 ---
 
-### F2 — confirming an empty fielder field silently loses the out
+### F2 — confirming an empty fielder field silently loses the out — **done**
 
 **Symptom.** Tap GO (or FO / PO / LO / DP / TP / FC / E), then confirm without typing. The
 popup closes, **no out is recorded**, and nothing is said. Very reachable on iPad: tap GO,
@@ -116,7 +123,11 @@ A second test that a real value still records and closes (guards the reorder).
 
 ---
 
-### F3 — every entry point refuses silently when no cell is selected
+### F3 — every entry point refuses silently when no cell is selected — **done**
+
+All 19 `if (!selectedCell) return;` sites plus the three `if (!t) return;` sites now speak.
+`updateSituation` and the global keydown handler stay silent, as specified. No existing test
+asserted silence on any of them. The auto-select suggestion at the end is still open.
 
 **Symptom.** On a fresh card with lineups entered, no cell is pre-selected and the readout
 reads `—`. Tapping **1B** — the likeliest first tap of a game — does nothing and says
@@ -171,7 +182,7 @@ has a lineup and no plays, so the first tap has somewhere to land.
 
 ---
 
-### F4 — the live readout goes stale when a name is typed
+### F4 — the live readout goes stale when a name is typed — **done**
 
 **Symptom.** Tap SUB, type the substitute's name, and the "At Bat" panel keeps naming the
 man he replaced (`#7 Jung` after `#25 Carter` was typed). Same for a reliever written in
@@ -208,7 +219,7 @@ coalesce on a rAF the way `refit()` does.
 
 ---
 
-### F5 — `newGame()` clears an unsaved card without saying so
+### F5 — `newGame()` clears an unsaved card without saying so — **done**
 
 **Symptom.** More → New Game asks "Clear all data and start a new scorecard?" — the same
 question whether the card is saved or has an inning of unsaved work in it.
@@ -312,7 +323,23 @@ can see them.
 
 ---
 
-### F7 — `markSub()` shows nothing at all
+### F7 — `markSub()` shows nothing at all — **done**
+
+**Built the Note's version, not the main proposal.** The CSS already reveals a sub row on
+`:focus-within` — but a `visibility: collapse` row *refuses focus* (verified in the browser:
+`inp.focus()` leaves `activeElement` unchanged), so that rule can never fire from a cold
+start. That deadlock is the whole finding. One new rule, `tr.pos-sub.revealed`, opens the
+one slot's row so the caret can land in it; the class is dropped again on blur if nothing was
+typed, so a SUB pressed by mistake leaves no stray blank row.
+
+This makes the proposed `.show-subs` route unnecessary, and with it the `ui.js` label sync —
+`app.js` never touches that class, so the button and the rows cannot disagree. It also avoids
+the cost the Note flagged: 9 batting slots stay visible instead of about 4.
+
+One harness change came with it. `markSub` now focuses an input, and the keydown handler
+ignores hotkeys while an input has focus — correct in the app, but it crossed into later
+cases and broke nine of them. `reset()` now blurs and closes any opened row.
+
 
 **Symptom.** Tap SUB. Nothing visible happens — no toast, no mark, no new row. The
 substitution *is* recorded (`subChange: 1`), but the row holding the name field is hidden,
@@ -356,7 +383,18 @@ name input. Browser: tap SUB and confirm the caret lands in the right field.
 
 ---
 
-### F8 — a lone SB option auto-applies, including a steal of home
+### F8 — a lone SB option auto-applies, including a steal of home — **done**
+
+**The shortcut was deleted, not guarded.** It never served the common case it reads as
+serving: every stealable base also offers its `+E` variant, so a runner with a clear path
+always produces *two* options. Enumerating all eight occupancy combinations against the real
+`runnerPathClear`, the only single-option states are the three whose single option is SBH
+(3rd alone, 2nd+3rd, loaded). So the shortcut fired for exactly one play — the steal of home.
+Adding `options[0].from < 2` would have left a branch nothing can reach.
+
+`promptCSBase`'s shortcut is genuine and stays: CS has no `+E` variants, so one option there
+really does mean one runner on base.
+
 
 **Symptom.** Runners on 2nd and 3rd. Tap **SB** meaning the man on 2nd. A steal of 3rd is
 blocked (occupied), so the *only* legal option is 3rd→home — and it was applied
