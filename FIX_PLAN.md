@@ -3,7 +3,8 @@
 Findings from a full-game iPad-landscape review of `485753d`. Baseline before any work:
 **350 tests passing** (`node run-tests.js`, ~45s); **402 passing** now.
 
-**Every item is settled: F1–F18 fixed, F19 won't-fix.** Nothing here is waiting on anybody.
+**Every item is settled: F1–F18 fixed, F19 won't-fix, plus F20 found while landing them.**
+Nothing here is waiting on anybody.
 Each fix carries a `(F<n>)` tag in its comment, so `grep -n "(F[0-9]" app.js` finds them all.
 Kept in the repo for the write-ups — several findings under-read their own scope, and each
 entry records where and how.
@@ -40,6 +41,7 @@ Do **not** bump `SHELL_VERSION` in `sw.js` by hand — the pre-commit hook does 
 | **F17** | Hotkey help unreachable without a keyboard | polish | XS | **done** |
 | **F18** | Details doesn't prefill today's date | polish | XS | **done** |
 | **F19** | Lineup entry is 54 taps with no reuse | feature | L | **won't fix** |
+| **F20** | A new card wears the last game's figures | trust | S | **done** |
 
 The order the work actually went in: **F1 → F2 → F5 → F4 → F3 → F8 → F7 → F6**, then
 F9/F11/F12 together (they are all "how much does entry cost per play"), then F10, then F13,
@@ -786,6 +788,36 @@ it when the team name matches; (b) "copy lineup from a saved game" in the Game L
 (c) paste a block of `12 Altuve 2B` lines and parse it. (a) is probably the best
 value-for-effort and reuses the library storage that already exists. Only worth building if
 you score the same teams repeatedly — tell me if you do.
+
+---
+
+## Tier 6 — found while landing the above
+
+### F20 — a new card wears the last game's figures — **done**
+
+Not from the review — spotted in the browser while verifying F18, on the empty card New Game
+had just made. Four pieces of the outgoing game were still on screen, all of them until the
+first tap, and all the same shape as F1 and F4: **derived display on a path that runs with no
+selection.** Fixed on a branch and merged at `43c7bc6`; the code carries `(F20)` tags.
+
+- **The selection and the lit inning.** `applyState` never cleared either, so New Game left a
+  cell of the *finished* game highlighted on an empty card with `selectedCell` still pointing
+  into it. Every caller of `applyState` — boot, New Game, Load, Import — is replacing the card
+  wholesale, so both belong to a game that is no longer on screen. This was not in the
+  original report; the session working the fix found it.
+- **The readout.** `INNING FINAL` and `BALL — STRIKE 3-4` — the last game's *final score*,
+  which is what `renderFinalReadout` puts in that slot — stood over a card with nothing on it.
+  A new `renderEmptyReadout()` writes the five slots back to what `index.html` ships. Nothing
+  had to before: on a first launch the markup is already right, and from the first tap
+  `updateSituation` owns the panel. A card that is *replaced* is the case in between.
+- **The team labels.** `if (vLabel && gameState.info.visitingTeam)` skipped the write on a
+  blank name, so "Astros" and "Rangers" stayed on the line over a Visiting/Home pair that had
+  just been cleared. Written every time now, with the `Visiting`/`Home` fallback.
+- **The backup banner.** "Game final — this card exists only on this device" survived onto the
+  empty card, asking for a backup of a game that was no longer there. `updateBackupReminder()`
+  moved above `updateLiveStatsFromState`'s `!half` return.
+
+7 new tests, **409 green**.
 
 ---
 
