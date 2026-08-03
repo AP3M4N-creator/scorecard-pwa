@@ -25,7 +25,7 @@ Do **not** bump `SHELL_VERSION` in `sw.js` by hand — the pre-commit hook does 
 | **F7** | `markSub()` shows nothing at all | usability | S | **done** |
 | **F8** | A lone SB option auto-applies — including steal of home | correctness | XS | **done** |
 | **F9** | Open drawer covers the card, nothing scrolls | iPad | M | **done** |
-| **F10** | Fielder entry is a text field → iOS alphabetic keyboard | iPad | M | todo |
+| **F10** | Fielder entry is a text field → iOS alphabetic keyboard | iPad | M | **done** |
 | **F11** | Advance Runners: no defaults, no cancel, silent refusal | iPad | M | **done** |
 | **F12** | Spray prompt fires on every hit with no way to turn it off | iPad | S | **done** (won't-fix + 2) |
 | **F13** | Jersey numbers clip at 1024px | polish | XS | todo |
@@ -482,7 +482,33 @@ but the cost is real card pixels and that is your call. Tell me which and I'll s
 
 ---
 
-### F10 — fielder entry raises the iOS alphabetic keyboard
+### F10 — fielder entry raises the iOS alphabetic keyboard — **done**
+
+**Done — both stages, in one pass.** Stage 1 alone would have left the keyboard up, so the
+keypad went in with it rather than after it.
+
+**What landed.** `showPositionPopup` now draws a 3×3 pad of fielder positions (each key its
+digit plus `P`/`C`/`1B`… from `FIELDING_POS`), a **⌫ Back**, a **Type it**, and **Cancel** /
+**DONE**. The pad writes into `#pos-input`, which is still what Enter and Done read — one
+source of truth, so all 380 existing cases keep driving the same boundary. Dashes are supplied
+by the pad (`posPadTap` inserts one after a digit), capped at `POS_MAX` = 7 = four fielders,
+since `maxlength` doesn't apply to a value set from script. Restyled from `#333` to the
+card/navy of `base-picker` and `k-popup`.
+
+**The field is `readonly`, not hidden.** That is what keeps the keyboard down — iOS raises
+nothing for a readonly field — while still taking focus and keydown, so the Magic Keyboard
+path is unchanged: `1`–`9` reach the pad, `Backspace` deletes, a typed `-` is a no-op because
+the pad already put one there, `Enter` confirms, `Escape` cancels. **Type it** clears
+`readonly`, switches `inputmode` back to `text` (a numeric keyboard would be the wrong one for
+the only case that wants a keyboard) and keeps what the pad built with the caret at the end —
+that is the way in for `6/4-3` and `3U`. A reopen hands back the keypad.
+
+**Verified.** 9 new cases (**389 green**, from 380): the pad's `6-3` / `F7` / `DP 6-4-3` reach
+`applyPlay` with the code the text path produced, Back drops the digit and its dash, the fifth
+fielder is ignored, hardware digits and the no-op dash, Cancel writes nothing, Done on an empty
+field is refused with the message, and Type it round-trips `E6/4-3` before the next entry gets
+the pad back. Browser at 1024×768: two taps give `6-3`, `readOnly` is true and the field is
+focused, the popup is 355×348 with the deck fully visible, and Cancel leaves the cell empty.
 
 **Symptom.** GO / FO / PO / LO / DP / TP / FC / E all open a text field. On iPad that
 raises the full **alphabetic** keyboard over the entire play deck, to type two digits and a

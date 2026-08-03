@@ -5,7 +5,7 @@
 //  - Fonts/icons are stale-while-revalidate: instant from cache, refreshed
 //    in the background.
 // Bump SHELL_VERSION only if you ever need to force-drop the whole cache.
-const SHELL_VERSION = 'v95';
+const SHELL_VERSION = 'v96';
 const CACHE = 'scorecard-' + SHELL_VERSION;
 
 // One file per family (per style for Source Serif): the variable ones cover

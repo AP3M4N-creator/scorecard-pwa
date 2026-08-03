@@ -5424,9 +5424,74 @@ function newGame() {
   applyState();
 }
 
-/* Position play popup input */
+/* --------------------------------------------------- position play entry ---
+   GO / FO / PO / LO / DP / TP / FC / E all ask which fielders made the play, and
+   they asked it with a text field. On iPad that raised the full *alphabetic*
+   keyboard over the entire play deck, to type two digits and a dash, for the
+   commonest out in baseball (F10). The keypad is the entry path now: 1–9 in
+   position order, tap-tap for `6-3`, no keyboard at all.
+
+   The field stays, and does two jobs. It is the echo — the value the pad is
+   building — and it is still what Enter and Done read, so there is one source of
+   truth and every existing groundout/DP test drives the same boundary it always
+   did. "Type it" hands it back for the entries a pad of digits can't spell
+   (`6/4-3`, `3U`), which is also the Magic Keyboard path. Until then it is
+   `readonly`: a readonly field doesn't raise the iOS keyboard, but it does take
+   focus and keydown, so a hardware typist's digits still reach the pad. */
+
+// The cap `maxlength` can't enforce, because a value set from script isn't
+// subject to it. Seven characters is four dashed fielders — 1-6-4-3.
+const POS_MAX = 7;
+
+// Fielders are written joined by dashes, so the pad supplies them: 6 then 3 is
+// `6-3`. A dash typed on a hardware keyboard is therefore a no-op rather than a
+// second separator (see the keydown handler).
+function posPadTap(d) {
+  const input = document.getElementById('pos-input');
+  if (!input) return;
+  const cur = input.value;
+  if (cur.length >= POS_MAX) return;
+  input.value = /[0-9]$/.test(cur) ? cur + '-' + d : cur + d;
+  posPadRefocus();
+}
+
+function posPadBack() {
+  const input = document.getElementById('pos-input');
+  if (!input) return;
+  // The dash arrived with the digit, so it leaves with it.
+  input.value = input.value.slice(0, -1).replace(/-$/, '');
+  posPadRefocus();
+}
+
+// A tap on a pad button takes focus off the field, and the field is where the
+// hardware keys are read. Put it back after every tap so the two paths stay
+// usable in the same entry.
+function posPadRefocus() {
+  const input = document.getElementById('pos-input');
+  if (input && input.focus) input.focus();
+}
+
+// Hand the field over for the codes the pad has no keys for. `inputmode` goes
+// back to text with it — a numeric keyboard would be the wrong keyboard for the
+// one case that wants a keyboard at all.
+function posPadTypeIt() {
+  const popup = document.getElementById('pos-popup');
+  const input = document.getElementById('pos-input');
+  if (!popup || !input) return;
+  popup.dataset.typed = '1';
+  input.readOnly = false;
+  input.setAttribute('inputmode', 'text');
+  // It has done its job, and the field it revealed is the affordance now.
+  const typeBtn = document.getElementById('pos-type');
+  if (typeBtn) typeBtn.style.display = 'none';
+
+  input.focus();
+  // Caret at the end of whatever the pad already built, not at the start.
+  const v = input.value; input.value = ''; input.value = v;
+}
+
 function showPositionPopup(prefix, placeholder, target) {
-  // Capture the cell now — typing the fielders takes long enough for the scorer
+  // Capture the cell now — entering the fielders takes long enough for the scorer
   // to tap somewhere else first (#1).
   const t = target || currentTarget();
   if (!t) { showPlayReject(NO_CELL); return; }
@@ -5434,40 +5499,95 @@ function showPositionPopup(prefix, placeholder, target) {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'pos-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#333;color:#fff;padding:12px 16px;border-radius:8px;z-index:200;display:flex;align-items:center;gap:8px;box-shadow:0 4px 20px rgba(0,0,0,0.3);';
-    popup.innerHTML = '<span id="pos-label" style="font-size:14px;font-weight:700;font-family:var(--mono)"></span>'
-      + '<input id="pos-input" type="text" maxlength="7" style="width:70px;font-size:16px;font-family:var(--mono);font-weight:700;padding:4px 8px;border:2px solid #888;border-radius:4px;text-align:center;text-transform:uppercase;" autocomplete="off">'
-      + '<span style="font-size:11px;opacity:0.6">Enter to confirm</span>';
+    // Was `#333` — the one dark popup in an otherwise white/navy set. This is the
+    // card/navy the base picker and the strikeout popup use.
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:14px 16px;z-index:300;display:flex;flex-direction:column;gap:8px;align-items:stretch;box-shadow:0 8px 40px rgba(26,39,68,0.4);font-family:var(--heading);';
+    const keyStyle = 'padding:6px 0;min-width:58px;min-height:46px;font-family:var(--heading);font-weight:700;background:var(--navy);color:var(--gold);border:none;border-radius:6px;cursor:pointer;line-height:1.1';
+    let keys = '<div id="pos-keypad" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">';
+    for (let i = 1; i <= POSITIONS; i++) {
+      keys += '<button class="pos-key" data-d="' + i + '" style="' + keyStyle + '">'
+        + '<span style="font-size:20px;font-family:var(--mono)">' + i + '</span>'
+        + '<br><span style="font-size:9px;letter-spacing:0.5px;opacity:0.85">' + FIELDING_POS[i - 1] + '</span>'
+        + '</button>';
+    }
+    keys += '</div>';
+    const minorStyle = 'flex:1;padding:7px 0;font-size:11px;font-family:var(--font);border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer';
+    popup.innerHTML = '<div id="pos-label" style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);text-align:center"></div>'
+      + '<input id="pos-input" type="text" inputmode="numeric" maxlength="' + POS_MAX + '" readonly'
+      + ' style="width:100%;box-sizing:border-box;font-size:22px;font-family:var(--mono);font-weight:700;padding:6px 8px;border:2px solid var(--navy);border-radius:6px;text-align:center;text-transform:uppercase;background:#fff;color:var(--navy)" autocomplete="off">'
+      + keys
+      + '<div style="display:flex;gap:6px">'
+      + '<button id="pos-back" style="' + minorStyle + '">⌫ Back</button>'
+      + '<button id="pos-type" style="' + minorStyle + '">Type it</button>'
+      + '</div>'
+      // No Done and no Cancel before: the popup could only be completed with a
+      // hardware Return and only escaped with a hardware Escape, neither of which
+      // a scorer holding an iPad has (F10).
+      + '<div style="display:flex;gap:6px">'
+      + '<button id="pos-cancel" style="' + minorStyle + '">Cancel</button>'
+      + '<button id="pos-done" style="flex:2;padding:9px 0;font-size:14px;font-weight:700;font-family:var(--heading);letter-spacing:1px;background:var(--navy);color:var(--gold);border:none;border-radius:6px;cursor:pointer">DONE</button>'
+      + '</div>';
     document.body.appendChild(popup);
+    // The pad writes into the field and closes over nothing, so it binds once.
+    // Done and Cancel close over the captured cell, so they rebind per open.
+    popup.querySelectorAll('.pos-key').forEach(btn => {
+      btn.onclick = function() { posPadTap(this.dataset.d); };
+    });
+    document.getElementById('pos-back').onclick = posPadBack;
+    document.getElementById('pos-type').onclick = posPadTypeIt;
   }
   const label = prefix === 'F' ? 'Fly:' : prefix === 'P' ? 'Pop:' : prefix === 'L' ? 'Line:' : prefix === 'E' ? 'Error:' : prefix === 'DP ' ? 'DP:' : prefix === 'FC ' ? 'FC:' : prefix === 'TP ' ? 'TP:' : 'Ground:';
   document.getElementById('pos-label').textContent = label;
   const input = document.getElementById('pos-input');
   input.value = '';
   input.placeholder = placeholder || '7';
+  // The popup is shared DOM, so an entry that reached for the keyboard last time
+  // hands back the keypad this time.
+  delete popup.dataset.typed;
+  input.readOnly = true;
+  input.setAttribute('inputmode', 'numeric');
+  document.getElementById('pos-type').style.display = 'block';
   openPopup(popup, 'flex');
   popup.dataset.prefix = prefix;
   setTimeout(() => input.focus(), 10);
 
+  // The one place the entry is read, whichever way it was built — pad, hardware
+  // keys, or the typed field.
+  function confirmPos() {
+    const val = input.value.trim();
+    // The `6-3` in the box is the placeholder, not a value. Confirming an empty
+    // field used to close the popup and record nothing at all, without a word —
+    // and it is very reachable on iPad, where the keyboard comes up over the
+    // deck and Return is the reflex. The out just disappeared (F2). The popup
+    // stays open so the entry can be finished; Cancel is the way out.
+    if (!val) { showPlayReject('Tap the fielder(s) first — e.g. 6 then 3 for 6-3.'); return; }
+    closePopup(popup);
+    input.blur();
+    // Normalize here so only canonical codes reach state — a scorer typing
+    // "GO 6-3" gets "6-3", which the rest of the app recognises as an out (#15).
+    applyPlay(normalizePlayCode(prefix + val), t);
+  }
+  function cancelPos() {
+    closePopup(popup);
+    input.blur();
+  }
+  document.getElementById('pos-done').onclick = confirmPos;
+  document.getElementById('pos-cancel').onclick = cancelPos;
+
   input.onkeydown = function(e) {
     if (e.key === 'Enter') {
       e.preventDefault();
-      const val = input.value.trim();
-      // The `6-3` in the box is the placeholder, not a value. Confirming an empty
-      // field used to close the popup and record nothing at all, without a word —
-      // and it is very reachable on iPad, where the keyboard comes up over the
-      // deck and Return is the reflex. The out just disappeared (F2). The popup
-      // stays open so the entry can be finished; Escape is still the way out.
-      if (!val) { showPlayReject('Type the fielder(s) first — e.g. 6-3.'); return; }
-      closePopup(popup);
-      input.blur();
-      // Normalize here so only canonical codes reach state — a scorer typing
-      // "GO 6-3" gets "6-3", which the rest of the app recognises as an out (#15).
-      applyPlay(normalizePlayCode(prefix + val), t);
+      confirmPos();
     } else if (e.key === 'Escape') {
       e.preventDefault();
-      closePopup(popup);
-      input.blur();
+      cancelPos();
+    } else if (!popup.dataset.typed) {
+      // Keypad mode: the field is readonly, so these keys would do nothing at
+      // all otherwise. A Magic Keyboard scorer types 6 3 and gets `6-3`; the
+      // dash they may type out of habit is already there.
+      if (/^[1-9]$/.test(e.key)) { e.preventDefault(); posPadTap(e.key); }
+      else if (e.key === 'Backspace') { e.preventDefault(); posPadBack(); }
+      else if (e.key === '-') { e.preventDefault(); }
     }
   };
 }

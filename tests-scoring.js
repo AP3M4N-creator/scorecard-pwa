@@ -326,10 +326,22 @@
     input.value = text;
     input.onkeydown({ key: 'Enter', preventDefault() {} });
   }
-  // Any other key into that popup's own handler — Escape, which is its cancel.
+  // Any other key into that popup's own handler — Escape, which is its cancel,
+  // and the digits a hardware keyboard sends to the keypad (F10).
   function keyPosPopup(k) {
     if (!visible('pos-popup')) fail('position popup is not open');
     document.getElementById('pos-input').onkeydown({ key: k, preventDefault() {} });
+  }
+  // The fielder keypad: `posPad('63')` taps 6 then 3. The value it builds is read
+  // off #pos-input, which is what Done and Enter read too.
+  function posPad(digits) {
+    if (!visible('pos-popup')) fail('position popup is not open');
+    String(digits).split('').forEach(d => {
+      const btn = document.querySelector(`#pos-keypad .pos-key[data-d="${d}"]`);
+      if (!btn) fail(`the fielder keypad has no ${d} key`);
+      btn.onclick();
+    });
+    return document.getElementById('pos-input').value;
   }
 
   // Pitching change. changePitcher() is what creates #pitcher-popup, which
@@ -750,6 +762,140 @@
     keyPosPopup('Escape');                          // and Escape is still the way out
     ok('Escape closes it', !visible('pos-popup'));
     eq('still nothing written', ab('visiting', 0, 0).play, '');
+  });
+
+  /* F10 — the fielders were typed into a text field, and on iPad that raises the
+     full alphabetic keyboard over the whole play deck to enter two digits and a
+     dash. The keypad is the entry path now. What these have to prove is that it
+     reaches `applyPlay` with the same code the text field produced, because every
+     groundout / DP / FC case in this suite still drives the text path. */
+  test('the fielder keypad builds the same code the text field did', () => {
+    sel('visiting', 0, 0);
+    promptGroundout();
+    const input = document.getElementById('pos-input');
+    ok('the keypad is on screen', visible('pos-keypad'));
+    ok('and the field is readonly, so no keyboard comes up', input.readOnly);
+    eq('the pad joins the fielders with a dash', posPad('63'), '6-3');
+    clickId('pos-done');
+    eq('the out lands', ab('visiting', 0, 0).play, '6-3');
+    eq('on the inning too', inn('visiting', 0).outs, 1);
+    ok('the popup closed behind it', !visible('pos-popup'));
+    ok('with the backdrop', !visible('popup-backdrop'));
+  });
+
+  // A single fielder takes no dash, and the prefix is still applied around it.
+  test('a one-fielder keypad entry needs no dash', () => {
+    sel('visiting', 0, 0);
+    promptPositionPlay('F');
+    eq('just the position', posPad('7'), '7');
+    clickId('pos-done');
+    eq('the fly out lands', ab('visiting', 0, 0).play, 'F7');
+    eq('outs', inn('visiting', 0).outs, 1);
+  });
+
+  // Three of them, through the whole double-play flow the typed path uses.
+  test('a three-fielder keypad entry drives a double play', () => {
+    sel('visiting', 0, 0);
+    play('1B');                                     // p0 on 1st
+    promptPositionPlay('DP ');
+    eq('two dashes', posPad('643'), '6-4-3');
+    clickId('pos-done');
+    outcomePopup({ 0: ['out', 1], batter: ['out'] });
+    eq('the play as the card holds it', ab('visiting', 3, 0).play, 'DP 6-4-3');
+    eq('both outs', inn('visiting', 0).outs, 2);
+  });
+
+  test('Back takes off the last fielder, and the dash that came with it', () => {
+    sel('visiting', 0, 0);
+    promptGroundout();
+    posPad('64');
+    clickId('pos-back');
+    eq('the 4 and its dash are gone', document.getElementById('pos-input').value, '6');
+    eq('and the next tap re-dashes', posPad('3'), '6-3');
+    clickId('pos-back');
+    clickId('pos-back');
+    eq('back to empty', document.getElementById('pos-input').value, '');
+    clickId('pos-back');                            // and Back on empty is harmless
+    eq('still empty', document.getElementById('pos-input').value, '');
+    clickId('pos-cancel');
+  });
+
+  // Four dashed fielders is the whole field the code can hold (1-6-4-3); a fifth
+  // tap would push past it, and `maxlength` doesn't apply to a value set by script.
+  test('the keypad stops at four fielders', () => {
+    sel('visiting', 0, 0);
+    promptGroundout();
+    eq('four fit', posPad('1643'), '1-6-4-3');
+    eq('the fifth is ignored', posPad('2'), '1-6-4-3');
+    clickId('pos-cancel');
+  });
+
+  /* The Magic Keyboard path. The field is readonly, so these keys would do
+     nothing at all if the popup didn't read them itself. */
+  test('hardware digits drive the keypad, and a typed dash is a no-op', () => {
+    sel('visiting', 0, 0);
+    promptGroundout();
+    keyPosPopup('6');
+    keyPosPopup('-');                               // the reflex, already supplied
+    keyPosPopup('3');
+    eq('one dash, not two', document.getElementById('pos-input').value, '6-3');
+    keyPosPopup('Backspace');
+    eq('Backspace works there too', document.getElementById('pos-input').value, '6');
+    keyPosPopup('3');
+    keyPosPopup('Enter');                           // Enter still confirms
+    eq('the out lands', ab('visiting', 0, 0).play, '6-3');
+  });
+
+  /* Before F10 the popup could only be completed with a hardware Return and only
+     escaped with a hardware Escape — neither of which a scorer holding an iPad
+     has. Both are buttons now. */
+  test('Cancel closes the fielder popup and writes nothing', () => {
+    sel('visiting', 0, 0);
+    promptGroundout();
+    posPad('63');
+    clickId('pos-cancel');
+    ok('the popup closed', !visible('pos-popup'));
+    ok('and the backdrop with it', !visible('popup-backdrop'));
+    eq('no play was written', ab('visiting', 0, 0).play, '');
+    eq('no out either', inn('visiting', 0).outs, 0);
+  });
+
+  test('Done with nothing tapped is refused, not lost', () => {
+    sel('visiting', 0, 0);
+    promptGroundout();
+    clickId('pos-done');
+    eq('no play was written', ab('visiting', 0, 0).play, '');
+    ok('the popup is still open to finish', visible('pos-popup'));
+    ok('and it says why', visible('play-reject'));
+    ok('naming what to tap',
+      document.getElementById('play-reject').textContent.indexOf('6-3') >= 0);
+    posPad('63');
+    clickId('pos-done');                            // finishing it still works
+    eq('the out lands', ab('visiting', 0, 0).play, '6-3');
+  });
+
+  /* "Type it" is the way in for the codes a pad of digits can't spell — `6/4-3`,
+     `3U` — and it is the only path that should ever raise a keyboard. */
+  test('"Type it" hands back the field, and the next entry gets the keypad again', () => {
+    sel('visiting', 0, 0);
+    promptPositionPlay('E');
+    const input = document.getElementById('pos-input');
+    posPad('6');
+    clickId('pos-type');
+    ok('the field takes typing now', !input.readOnly);
+    eq('a keyboard, not a number pad', input.getAttribute('inputmode'), 'text');
+    eq('what the pad built is still there', input.value, '6');
+    input.value = '6/4-3';                          // what a keyboard is for
+    keyPosPopup('Enter');
+    eq('the typed code lands whole', ab('visiting', 0, 0).play, 'E6/4-3');
+
+    sel('visiting', 3, 0);
+    promptGroundout();
+    ok('the next entry is readonly again', input.readOnly);
+    eq('and numeric again', input.getAttribute('inputmode'), 'numeric');
+    ok('with Type it back on offer', visible('pos-type'));
+    eq('and the pad still builds codes', posPad('63'), '6-3');
+    clickId('pos-cancel');
   });
 
   // #4
