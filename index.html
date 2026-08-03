@@ -82,6 +82,7 @@
         <div class="hdr-menu-panel">
           <button data-act="showGameSummary">Summary</button>
           <button data-act="openGameLibrary">Games</button>
+          <button data-act="showHotkeyModal">Shortcuts</button>
           <button class="danger" data-act="newGame">New Game</button>
         </div>
       </div>
@@ -194,7 +195,7 @@
             <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="WP">WP<small>n</small></button>
             <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="PB">PB</button>
             <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="BK">BK</button>
-            <button class="quick-btn runner" data-act="promptPickoff">PO<small>o</small></button>
+            <button class="quick-btn runner" data-act="promptPickoff">PK<small>o</small></button>
             <button class="quick-btn runner" data-act="moveRunner">Move</button>
           </div>
           <div class="qbg-panel" data-group="subs">
@@ -211,9 +212,9 @@
             <button class="quick-btn" data-act="adjustRBI" data-argnum="1">RBI+</button>
             <button class="quick-btn" data-act="adjustRBI" data-argnum="-1">RBI−</button>
             <button class="quick-btn" data-act="reviewEarnedRuns" title="Review earned/unearned runs for this inning">E/UE</button>
-            <span class="qb-sep"></span>
-            <button class="quick-btn" style="color:var(--accent)" data-act="clearPlayKeepPitches">CLR Play</button>
-            <button class="quick-btn" style="color:var(--accent)" data-act="clearSelectedCell">CLR All<small>c</small></button>
+            <span class="qb-label">Clear</span>
+            <button class="quick-btn" style="color:var(--accent)" data-act="clearPlayKeepPitches" aria-label="Clear play">Play</button>
+            <button class="quick-btn" style="color:var(--accent)" data-act="clearSelectedCell" aria-label="Clear cell">Cell<small>c</small></button>
           </div>
         </div>
       </div>
@@ -309,7 +310,7 @@
             <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="WP">WP<small>n</small></button>
             <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="PB">PB</button>
             <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="BK">BK</button>
-            <button class="quick-btn runner" data-act="promptPickoff">PO<small>o</small></button>
+            <button class="quick-btn runner" data-act="promptPickoff">PK<small>o</small></button>
             <button class="quick-btn runner" data-act="moveRunner">Move</button>
           </div>
           <div class="qbg-panel" data-group="subs">
@@ -326,9 +327,9 @@
             <button class="quick-btn" data-act="adjustRBI" data-argnum="1">RBI+</button>
             <button class="quick-btn" data-act="adjustRBI" data-argnum="-1">RBI−</button>
             <button class="quick-btn" data-act="reviewEarnedRuns" title="Review earned/unearned runs for this inning">E/UE</button>
-            <span class="qb-sep"></span>
-            <button class="quick-btn" style="color:var(--accent)" data-act="clearPlayKeepPitches">CLR Play</button>
-            <button class="quick-btn" style="color:var(--accent)" data-act="clearSelectedCell">CLR All<small>c</small></button>
+            <span class="qb-label">Clear</span>
+            <button class="quick-btn" style="color:var(--accent)" data-act="clearPlayKeepPitches" aria-label="Clear play">Play</button>
+            <button class="quick-btn" style="color:var(--accent)" data-act="clearSelectedCell" aria-label="Clear cell">Cell<small>c</small></button>
           </div>
         </div>
       </div>
@@ -439,14 +440,14 @@
     <table class="hk-table">
       <tr><td>R</td><td>Stolen base (SB)</td><td>Pick runner — includes SB+E</td></tr>
       <tr><td>J</td><td>Caught stealing (CS)</td><td>Pick which runner, out recorded</td></tr>
-      <tr><td>O</td><td>Pickoff (PO)</td><td>Pick base — Out or Error</td></tr>
+      <tr><td>O</td><td>Pickoff (PK)</td><td>Pick base — Out or Error</td></tr>
       <tr><td>N</td><td>Wild pitch / Passed ball</td><td>All runners advance 1</td></tr>
     </table>
     <h3>Game Management</h3>
     <table class="hk-table">
-      <tr><td>U</td><td>Undo</td><td>Pitches, plays, SB, CS, WP, PB, PO, subs</td></tr>
+      <tr><td>U</td><td>Undo</td><td>Pitches, plays, SB, CS, WP, PB, PK, subs</td></tr>
       <tr><td>Y</td><td>Redo</td><td>Unlimited redo depth</td></tr>
-      <tr><td>C</td><td>Clear all</td><td>Wipes entire cell</td></tr>
+      <tr><td>C</td><td>Clear cell</td><td>Wipes the selected cell</td></tr>
       <tr><td>?</td><td>Show this guide</td><td></td></tr>
       <tr><td>↑↓←→</td><td>Navigate cells</td><td>Arrow keys move selection</td></tr>
       <tr><td>Esc</td><td>Close popups</td><td></td></tr>
@@ -455,7 +456,7 @@
     <table class="hk-table">
       <tr><td>T</td><td>Edit play type</td><td>Change 1B→2B etc. — keeps pitches</td></tr>
       <tr><td>M</td><td>Edit runners</td><td>Re-open runner popup</td></tr>
-      <tr><td>BTN</td><td>CLR Play</td><td>Clear play result only, keep pitch count</td></tr>
+      <tr><td>BTN</td><td>Clear Play</td><td>Clear play result only, keep pitch count</td></tr>
       <tr><td>BTN</td><td>Move</td><td>Manually move a runner to any base</td></tr>
       <tr><td>BTN</td><td>Spray</td><td>Re-open spray chart to reposition hit</td></tr>
       <tr><td>BTN</td><td>RBI+ / RBI−</td><td>Manually adjust RBI count</td></tr>
@@ -474,7 +475,7 @@
       <tr><td>BTN</td><td>P.Chg — pitcher change</td><td>Red line on cell</td></tr>
       <tr><td>BTN</td><td>SUB — substitution</td><td>Vertical red line on cell</td></tr>
     </table>
-    <div class="hotkey-hint">Press ? or Esc to close</div>
+    <div class="hotkey-hint">Tap outside, or press ? or Esc, to close</div>
   </div>
 </div>
 <script src="ui.js"></script>

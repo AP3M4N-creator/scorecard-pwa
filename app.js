@@ -217,11 +217,21 @@ function stateForStorage(state) {
   return out;
 }
 
+/* A card is nearly always opened on the day it is being scored, and the Date
+   field started empty. Same format `saveGame` has always used for a library
+   entry with no date of its own, and still a plain text field — a card written
+   up after the fact is typed over the top of it (F18). A card *loaded* from a
+   save keeps whatever date it holds, including none: mergeStateDefaults only
+   fills whole missing keys, so this never backdates someone else's card. */
+function todayForCard() {
+  return new Date().toLocaleDateString();
+}
+
 function createEmptyState() {
   const makeAtBat = makeEmptyAtBat;
   const makeInning = () => ({ outs:0, bases:[null,null,null], currentPitcher:0, lob:0, outsLog:[], lastPA:null });
   return {
-    info: { date:'', startTime:'', timeOfGame:'', visitingTeam:'', homeTeam:'', weather:'', attendance:'' },
+    info: { date:todayForCard(), startTime:'', timeOfGame:'', visitingTeam:'', homeTeam:'', weather:'', attendance:'' },
     umpires: { hp:'', '1b':'', '2b':'', '3b':'' },
     notes: '',
     currentGameId: null,
@@ -1034,7 +1044,11 @@ function writeTeamLOB(team) {
   const total = teamLOB(team);
   gameState.linescore[team].lob = total;
   const inp = document.querySelector(`input[data-ls="${team}"][data-stat="lob"]`);
-  if (inp) inp.value = total || '';
+  // A total of nothing is a figure, not an absence: the Game Summary's own
+  // linescore has always printed 0 here, and a paper card is written the same
+  // way. Only the R/H/E/LOB totals — the per-inning cells stay blank until the
+  // half is played, which is fillLinescoreZeros's job (F16).
+  if (inp) inp.value = String(total);
 }
 
 // Which row is occupying the slot in this column — the starter's, or the sub's
@@ -3048,7 +3062,7 @@ function updateLinescoreHits(team) {
     }
   }
   const hInp = document.querySelector(`input[data-ls="${team}"][data-stat="h"]`);
-  if (hInp) hInp.value = totalHits || '';
+  if (hInp) hInp.value = String(totalHits);   // 0 is a figure, not an absence (F16)
   if (gameState.linescore[team]) gameState.linescore[team].h = totalHits;
 }
 
@@ -3083,8 +3097,8 @@ function updateLinescoreErrors() {
   ['visiting', 'home'].forEach(team => {
     const e = countErrorSignals(other[team]);
     const inp = document.querySelector(`input[data-ls="${team}"][data-stat="e"]`);
-    if (inp) inp.value = e || '';
-    if (gameState.linescore[team]) gameState.linescore[team].e = e ? String(e) : '';
+    if (inp) inp.value = String(e);   // 0 is a figure, not an absence (F16)
+    if (gameState.linescore[team]) gameState.linescore[team].e = String(e);
   });
 }
 
@@ -4895,7 +4909,7 @@ function updateLinescoreTotals(team) {
     r += val;
   }
   const rInp = document.querySelector(`input[data-ls="${team}"][data-stat="r"]`);
-  if (rInp) rInp.value = r || '';
+  if (rInp) rInp.value = String(r);   // 0 is a figure, not an absence (F16)
   gameState.linescore[team].r = r;
   updateLinescoreHits(team);
   updateLinescoreErrors();
@@ -7787,7 +7801,7 @@ function renderManualWinProbChart(containerId) {
 document.addEventListener('keydown', function(e) {
   const inInput = document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'SELECT');
   if (inInput) return;
-  if (e.key === '?' || (e.key === '/' && !e.shiftKey)) { e.preventDefault(); document.getElementById('hotkey-modal').classList.toggle('active'); return; }
+  if (e.key === '?' || (e.key === '/' && !e.shiftKey)) { e.preventDefault(); toggleHotkeyModal(); return; }
   if (e.key === 'Escape') {
     document.getElementById('hotkey-modal')?.classList.remove('active');
     document.getElementById('game-summary-modal')?.classList.remove('active');
@@ -7841,7 +7855,7 @@ document.addEventListener('keydown', function(e) {
     else if (key === 't') { editPlayType(); return; }
     else if (key === 'm') { editRunners(); return; }
     else if (key === 'c') clearSelectedCell();
-    else if (key === '?' || key === '/') { document.getElementById('hotkey-modal').classList.toggle('active'); return; }
+    else if (key === '?' || key === '/') { toggleHotkeyModal(); return; }
     return;
   }
 
@@ -7883,6 +7897,17 @@ function applyFieldPosFromEl(el) {
   applyFieldPos(el.dataset.team, Number(el.dataset.p), el.dataset.pos, el.dataset.inn);
 }
 
+/* The hotkey guide — 46 rows over 8 sections, including the buttons that have no
+   hotkey at all — is the only documentation the app has, and `?` / `/` was the
+   only way to open it. On an iPad with no hardware keyboard there was no way in.
+   The More menu has it now; the keyboard path still toggles, which is what `?`
+   has always done (F17). */
+function showHotkeyModal() {
+  document.getElementById('hotkey-modal').classList.add('active');
+}
+function toggleHotkeyModal() {
+  document.getElementById('hotkey-modal').classList.toggle('active');
+}
 function closeHotkeyModal() {
   document.getElementById('hotkey-modal').classList.remove('active');
 }

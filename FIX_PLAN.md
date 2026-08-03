@@ -30,10 +30,10 @@ Do **not** bump `SHELL_VERSION` in `sw.js` by hand — the pre-commit hook does 
 | **F12** | Spray prompt fires on every hit with no way to turn it off | iPad | S | **done** (won't-fix + 2) |
 | **F13** | Jersey numbers clip at 1024px | polish | XS | **done** |
 | **F14** | Win-probability chart never re-themed | polish | S | **done** |
-| **F15** | "PO" collision and "CLR All" mislabel | polish | XS | todo |
-| **F16** | Zero prints blank in one linescore, `0` in the other | polish | XS | todo |
-| **F17** | Hotkey help unreachable without a keyboard | polish | XS | todo |
-| **F18** | Details doesn't prefill today's date | polish | XS | todo |
+| **F15** | "PO" collision and "CLR All" mislabel | polish | XS | **done** |
+| **F16** | Zero prints blank in one linescore, `0` in the other | polish | XS | **done** |
+| **F17** | Hotkey help unreachable without a keyboard | polish | XS | **done** |
+| **F18** | Details doesn't prefill today's date | polish | XS | **done** |
 | **F19** | Lineup entry is 54 taps with no reuse | feature | L | **needs a ruling** |
 
 Suggested order: **F1 → F2 → F5 → F4 → F3 → F8 → F7 → F6**, then decide F9/F11/F12
@@ -677,29 +677,92 @@ Fix in `renderWinProbSVG` (app.js:7218): navy/`--text-light` labels against the 
 ground, and make the width fluid (`width="100%"` +
 `preserveAspectRatio="xMidYMid meet"`, or compute the viewBox from the container).
 
-### F15 — "PO" collision and "CLR All" mislabel
-**PO** means *pop out* in the core deck and *pickoff* in the Runners group, both visible at
+### F15 — "PO" collision and "CLR All" mislabel — **done**
+
+**One thing the finding did not price: spelling the clear buttons out in full cost the flat
+drawer a whole third row.** `Clear Play` + `Clear Cell` render 120 + 129px where `CLR Play` +
+`CLR All` were ~88 + 90, and that ~71px spilled a row: measured at 1194×834, `.quick-bar`
+went 177px → **229px**, `--cell-h` hit its 44px floor and `pageScroll` went to 98px. That is
+F9's ruling being spent — Adam took the two-row drawer at 177px with the numbers in front of
+him, and a rename is not the place to give them back.
+
+So the pair takes the deck's own label idiom instead: a `qb-label` reading **Clear** followed
+by **Play** and **Cell**, exactly the way `Pitch` sits over `S F B` in the row below. It says
+every word the finding asked for and is *narrower than the abbreviations it replaced* — back
+to `.quick-bar` 177px, two drawer rows, slot 8 visible. `aria-label="Clear play"` /
+`"Clear cell"` carry the full name for a screen reader, since a bare "Cell" is not something
+you can act on. The dupe check is written as a scan of every label in the deck rather than a
+spot check on PO, so the next collision fails in the suite instead of at the park.
+
+**Left alone deliberately:** the `PO` that `applyPickoff` writes into `advReason` (app.js:3950)
+and onto the diamond. It is standard scorebook notation, it is **persisted in saved cards**,
+and renaming it would make old and new cards disagree about the same play. The collision the
+finding is about was two buttons side by side, and that is gone.
+
+**The finding as filed.** **PO** means *pop out* in the core deck and *pickoff* in the Runners group, both visible at
 once (index.html:161 and 197). Rename the pickoff one to **PK** — the `o` hotkey and the
 `promptPickoff` action stay as they are. And **CLR All** (`clearSelectedCell`, app.js:4449)
 clears only the *selected cell*, not the card; next to "CLR Play" and in accent red it reads
 like a full wipe. Rename to **Clear Cell** / **Clear Play**.
 
-### F16 — zero prints blank in one linescore and `0` in the other
-The main linescore leaves E and LOB blank at 0 (`updateLinescoreErrors` app.js:2842 writes
+### F16 — zero prints blank in one linescore and `0` in the other — **done**
+
+All four totals print, not just the two named: `updateLinescoreTotals` (R) and
+`updateLinescoreHits` (H) had the same `|| ''`, and R blank on a scoreless card is the same
+tell. Per-inning cells are untouched — they stay blank until the half is played (F1's job).
+
+**`updateLinescoreErrors` also persists `'0'` now, not `''`,** because E is re-derived on every
+load and `applyState` writes `gameState.linescore[team].e` into the field before re-deriving.
+Leaving the state at `''` while the DOM said `0` would have been F1's bug over again. Checked:
+the derived value round-trips (save `'0'` → load derives `'0'`), so a card saved by this build
+is stable. A card saved by an *older* build carries `e: ''` and re-derives to `'0'` on load,
+which counts as a difference against its library snapshot — but that drift already existed for
+`r`/`h`/`lob`, which `applyState` has always re-derived as numbers over stored strings.
+
+**24 existing assertions expected the blank** and were updated, not worked around — every one
+of them means "no run scored" / "no error" / "nobody left on", which `'0'` says as well as
+`''` did. Two test names that claimed the figure was "nothing" now say it reads 0.
+
+**Worth a look before you keep it:** a card with nothing on it now reads `0 0 0 0` in the red
+totals boxes with the inning cells still blank. It is honest and it matches the summary, but it
+is the one place this change is visible before a pitch is thrown. Screenshot in the session.
+
+**The finding as filed.** The main linescore leaves E and LOB blank at 0 (`updateLinescoreErrors` app.js:2842 writes
 `''`; `writeTeamLOB` app.js:1033), while the Game Summary's own linescore prints `0`. Pick
 one — printing `0` matches a paper scorecard and is what the summary already does. Note the
 per-inning cells are correctly blank until played (that is F1's job) — this is only about
 the R/H/E/LOB totals.
 
-### F17 — hotkey help is unreachable without a keyboard
-The hotkey modal (46 rows, 8 sections, including "Buttons with no hotkey") is the app's only
+### F17 — hotkey help is unreachable without a keyboard — **done**
+
+**Shortcuts** sits in the More menu between Games and New Game. It opens with a new
+`showHotkeyModal()` rather than the existing toggle — a menu item that closes the thing it was
+asked to show on a second tap is a worse bug than the one being fixed — and the two keyboard
+sites now call `toggleHotkeyModal()`, so `?` behaves exactly as it always has.
+
+**Two things the way *out* needed, since it can now be opened by finger.** The footer read
+"Press ? or Esc to close", which is the same keyboard-only assumption one line further down; it
+now reads "Tap outside, or press ? or Esc, to close" (tapping the backdrop already worked —
+`#hotkey-modal` carries `closeModalOnBackdrop`). And `.hotkey-close` was the bare `×` glyph at
+about 17×26px; it is 44×44 now, measured.
+
+**The finding as filed.** The hotkey modal (46 rows, 8 sections, including "Buttons with no hotkey") is the app's only
 documentation and opens **only** on `?` or `/` (app.js:7307). On an iPad with no hardware
 keyboard there is no way in. Add **Shortcuts** to the More menu (index.html:82) — it is
 genuinely useful with a Magic Keyboard, which is a common iPad setup.
 
-### F18 — Details doesn't prefill today's date
-A new card opens with an empty Date. Prefill `createEmptyState()` with today in the format
-the field expects, and leave it editable for scoring a card after the fact.
+### F18 — Details doesn't prefill today's date — **done**
+
+`createEmptyState().info.date` is `todayForCard()` — `new Date().toLocaleDateString()`, which is
+the format `saveGame` has always used for a library entry with no date of its own. Still a plain
+text field, so a card written up after the fact is typed over the top of it.
+
+**It cannot backdate somebody else's card.** `mergeStateDefaults` only fills whole missing
+top-level keys, so a save carrying `info.date: ''` keeps it, and `applyState` writes what the
+card holds. Verified in the browser on the fixture: New Game gave `8/3/2026`, and loading the
+fixture back gave its own `2026-08-03` — two visibly different formats, which is what makes that
+check worth anything. `cardHasContent()` does not look at `info.date`, so a prefilled date does
+not make an untouched card read as unsaved work (that would have broken F5).
 
 ---
 

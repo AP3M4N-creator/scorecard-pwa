@@ -653,7 +653,10 @@ details.info-details > summary:hover { color: var(--navy); }
 }
 .hk-table td:nth-child(3) { color: var(--text-light); font-size: 12px; }
 .hotkey-close {
-  position: absolute; top: 14px; right: 18px; font-size: 26px; line-height: 1;
+  /* Reachable from the More menu now (F17), so it is closed by finger as often
+     as by Escape — the glyph alone was a ~17x26 target. */
+  position: absolute; top: 6px; right: 10px; font-size: 26px; line-height: 1;
+  min-width: 44px; min-height: 44px;
   cursor: pointer; color: var(--text-light); background: none; border: none;
 }
 .hotkey-close:hover { color: var(--accent); }

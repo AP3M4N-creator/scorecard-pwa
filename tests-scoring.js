@@ -394,7 +394,7 @@
         for (let p = 0; p < PLAYERS; p++) eq(`${team} p${p} col${col} play`, ab(team, p, col).play, '');
       }
     }
-    eq('visiting R', rTotal('visiting'), '');
+    eq('visiting R', rTotal('visiting'), '0');
     eq('selected cell', selectedCell, null);
   });
 
@@ -409,7 +409,7 @@
     eq('batter reached 1st', ab('visiting', 0, 0).bases[0], true);
     eq('result pitch recorded', ab('visiting', 0, 0).pitches.length, 1);
     eq('next batter selected', curP(), 3);
-    eq('no run scored', rTotal('visiting'), '');
+    eq('no run scored', rTotal('visiting'), '0');
   });
 
   test('three strikeouts end the half-inning with numbered outs', () => {
@@ -522,7 +522,7 @@
     basePicker(0, '');                 // SB2 (1st -> 2nd), no error
     eq('1st empty', onB('visiting', 0, 0), null);
     eq('runner on 2nd', onB('visiting', 0, 1), 0);
-    eq('R total', rTotal('visiting'), '');
+    eq('R total', rTotal('visiting'), '0');
   });
 
   test('caught stealing records an out and clears the base', () => {
@@ -593,7 +593,7 @@
     play('3B'); play('K'); play('K'); play('K'); // 3 outs, runner stranded on 3rd
     key('r');                                    // only SBH is offered — and since F8 it is offered, not taken
     basePicker(2);
-    eq('R total', rTotal('visiting'), '');
+    eq('R total', rTotal('visiting'), '0');
     eq('runner did not reach home', ab('visiting', 0, 0).bases[3], false);
     ok('and the refusal says so (L2)', visible('play-reject'));
   });
@@ -1813,7 +1813,7 @@
     play('3B');                                    // p0 on 3rd
     play('1B'); runnerPopup({ 2: 2, batter: 0 });   // p0 holds 3rd, p2 on 1st
     play('BB');
-    eq('no run scored', rTotal('visiting'), '');
+    eq('no run scored', rTotal('visiting'), '0');
     eq('runner still on 3rd', onB('visiting', 0, 2), 0);
     eq('forced runner on 2nd', onB('visiting', 0, 1), 3);
     eq('batter on 1st', onB('visiting', 0, 0), 6);
@@ -1952,11 +1952,11 @@
   // had reached and not scored, in innings still being played, so it climbed as
   // runners reached and dropped as they scored. Nobody is left on base until the
   // half-inning is over.
-  test('LOB is nothing until the half-inning ends', () => {
+  test('LOB stays 0 until the half-inning ends', () => {
     sel('visiting', 0, 0);
     play('1B');
     eq('no LOB with a man on and the inning live', inn('visiting', 0).lob, 0);
-    eq('no LOB on the linescore either', lobTotal('visiting'), '');
+    eq('and 0 on the linescore', lobTotal('visiting'), '0');
     play('1B'); runnerPopup({ 0: 1, batter: 0 });
     eq('still none with two on', inn('visiting', 0).lob, 0);
     play('K'); play('K'); play('K');
@@ -2009,7 +2009,7 @@
     play('1B'); runnerPopup({ 2: 3, batter: 0 });   // 1-1, batter on 1st
     ok('game still going', !gameOverShown);
     eq('nobody is left on yet', inn('home', 8).lob, 0);
-    eq('nor on the line', lobTotal('home'), '');
+    eq('nor on the line', lobTotal('home'), '0');
   });
 
   // The walk-off clause is the home half's alone: the visiting team going ahead in
@@ -2072,7 +2072,7 @@
     eq('final', document.getElementById('ls-inning').textContent, 'FINAL');
     sel('home', 0, 8);                              // back onto the home run itself
     clearSelectedCell();
-    eq('no runs left', rTotal('home'), '');
+    eq('no runs left', rTotal('home'), '0');
     eq('the panel is live again', document.getElementById('ls-inning').textContent, '▼ 9');
   });
 
@@ -2275,13 +2275,13 @@
     sel('visiting', 0, 0);
     play('E5');
     eq('the home fielders wear it', eTotal('home'), '1');
-    eq('the batting team has none', eTotal('visiting'), '');
+    eq('the batting team has none', eTotal('visiting'), '0');
   });
 
-  test('E is nothing until an error happens', () => {
+  test('E reads 0 until an error happens', () => {
     sel('visiting', 0, 0);
     play('1B');
-    eq('a clean single charges nobody', eTotal('home'), '');
+    eq('a clean single charges nobody', eTotal('home'), '0');
   });
 
   test('E adds up across errors and innings', () => {
@@ -2335,7 +2335,7 @@
     eq('charged', eTotal('home'), '1');
     sel('visiting', 0, 0);                          // the play advanced the batter
     clearSelectedCell();
-    eq('and back off', eTotal('home'), '');
+    eq('and back off', eTotal('home'), '0');
   });
 
   test('the derived E is what gets persisted', () => {
@@ -2346,7 +2346,7 @@
       flushSave();
       const back = mergeStateDefaults(JSON.parse(safeStorage.getItem(CURRENT_GAME_KEY)));
       eq('charged to the fielders in storage', back.linescore.home.e, '1');
-      eq('and not to the batting team', back.linescore.visiting.e, '');
+      eq('and not to the batting team', back.linescore.visiting.e, '0');
     } finally { clearStorage(); }
   });
 
@@ -4406,13 +4406,13 @@
     sel('visiting', 0, 0);
     play('3B');                                     // p0 on 3rd
     play('1B'); runnerPopup({ 2: 2, batter: 0 });    // he holds — no run yet
-    eq('no run yet', rTotal('visiting'), '');
+    eq('no run yet', rTotal('visiting'), '0');
     sel('visiting', 3, 0);
     editRunners(); runnerPopup({ 2: 3, 0: 0 });      // the single did drive him in
     eq('the run is on the line', rTotal('visiting'), '1');
     eq('the single is credited the RBI', ab('visiting', 3, 0).rbi, 1);
     clearSelectedCell();
-    eq('taking the single back takes the run with it', rTotal('visiting'), '');
+    eq('taking the single back takes the run with it', rTotal('visiting'), '0');
   });
 
   // M1 — `moveRunner` skipped the tail too: no updatePitcherStats, so a run it
@@ -4433,7 +4433,7 @@
     sel('visiting', 9, 0);
     play('K');                                       // the third out, nobody on
     flushTimers();
-    eq('and nobody is left on', lobTotal('visiting'), '');
+    eq('and nobody is left on', lobTotal('visiting'), '0');
   });
 
   // M5 — `applyChosenAdvancements` cleared the runner off the base whether or not
@@ -4519,7 +4519,7 @@
     play('1B'); runnerPopup({ 2: 2, batter: 0 });    // p0 holds 3rd, p3 on 1st
     play('DP 6-4-3');
     clickId('oc-confirm');                           // the scorer accepts the defaults
-    eq('no run scored', rTotal('visiting'), '');
+    eq('no run scored', rTotal('visiting'), '0');
     eq('the runner is still on 3rd', onB('visiting', 0, 2), 0);
     eq('two outs', inn('visiting', 0).outs, 2);
   });
@@ -4647,7 +4647,7 @@
     eq('and shown on his own cell', ab('visiting', 0, 0).out, 1);
     eq('out at home', ab('visiting', 0, 0).outOnBase, 3);
     eq('the trailing runner took 2nd', onB('visiting', 0, 1), 3);
-    eq('no run', rTotal('visiting'), '');
+    eq('no run', rTotal('visiting'), '0');
   });
 
   // The snapshot is pushed inside the callback, once the choices are in, so it has
@@ -4659,7 +4659,7 @@
     key('n'); runnerPopup({ 2: 3, 0: 1 });             // both move: run in, p3 to 2nd
     eq('the run is on the line', rTotal('visiting'), '1');
     undoLastPlay();
-    eq('the run came off', rTotal('visiting'), '');
+    eq('the run came off', rTotal('visiting'), '0');
     eq('the man is back on 3rd', onB('visiting', 0, 2), 0);
     eq('and the other back on 1st', onB('visiting', 0, 0), 3);
     eq('with no base marked on the wild pitch', ab('visiting', 3, 0).bases[1], false);
@@ -4814,7 +4814,7 @@
 
     sel('visiting', 0, 0);
     moveRunner(); mrClick(0, 3);                     // Move → Home
-    eq('no run on the line', rTotal('visiting'), '');
+    eq('no run on the line', rTotal('visiting'), '0');
     eq('nothing charged to the pitcher', pStat('visiting', 0, 'r'), '');
     eq('no run on the batter either', bStat('visiting', 0, 'r'), '');
     eq('he is still on 1st', onB('visiting', 0, 0), 0);
@@ -4826,7 +4826,7 @@
     sel('visiting', 0, 0);
     editRunners();                                   // Rnrs, the other path in
     ok('a dead half-inning is refused before the popup opens', !visible('runner-popup'));
-    eq('still no run', rTotal('visiting'), '');
+    eq('still no run', rTotal('visiting'), '0');
     eq('still left on base', lobTotal('visiting'), '1');
   });
 
@@ -5025,7 +5025,7 @@
     const home = homeBtn(2);
     ok('the popup will not send him home', !!home && isOptionBlocked(home));
     runnerPopup({ 2: 2 });
-    eq('no run', rTotal('visiting'), '');
+    eq('no run', rTotal('visiting'), '0');
     eq('no RBI', ab('visiting', 9, 0).rbi, 0);
     // #17's other side: a sacrifice that achieved nothing is an ordinary out.
     eq('the sacrifice is charged as an at-bat', bStat('visiting', 9, 'ab'), '1');
@@ -5040,7 +5040,7 @@
     const home = homeBtn(2);
     ok('the popup will not send him home', !!home && isOptionBlocked(home));
     runnerPopup({ 2: 2 });
-    eq('no run', rTotal('visiting'), '');
+    eq('no run', rTotal('visiting'), '0');
     eq('no RBI', ab('visiting', 9, 0).rbi, 0);
   });
 
@@ -5058,7 +5058,7 @@
       .querySelector('.oc-btn[data-base="2"][data-action="safe"][data-dest="3"]');
     ok('the popup will not send him home', !!home && isOptionBlocked(home));
     outcomePopup({ 0: ['out', 1], batter: ['out'] });
-    eq('no run', rTotal('visiting'), '');
+    eq('no run', rTotal('visiting'), '0');
     eq('three outs', inn('visiting', 0).outs, 3);
   });
 
@@ -5100,7 +5100,7 @@
     positionPopup('5');
     outcomePopup({ 2: ['safe', 3], batter: ['out'] });
     ok('it says why', visible('play-reject'));
-    eq('no run', rTotal('visiting'), '');
+    eq('no run', rTotal('visiting'), '0');
     eq('he is still on 3rd, and left there', lobTotal('visiting'), '1');
     eq('three outs', inn('visiting', 0).outs, 3);
   });
@@ -5123,7 +5123,7 @@
     a.play = 'DP';
     applyRunnerOutcomes('visiting', 9, 0, a, inn('visiting', 0), 'DP',
       { 2: { action: 'safe', dest: 3 }, batter: { action: 'out' } });
-    eq('no run', rTotal('visiting'), '');
+    eq('no run', rTotal('visiting'), '0');
     eq('he keeps the base he was on', onB('visiting', 0, 2), 6);
   });
 
@@ -5597,6 +5597,103 @@
     eq('the name made no elements', box.querySelectorAll('script,b').length, 0);
     ok('and it is still printed as typed', box.textContent.indexOf('Ran<b>gers win%') >= 0);
     box.remove();
+  });
+
+  /* F15 — "PO" was pop out in the core deck and pickoff in the Runners group,
+     both on screen at once. The pickoff button is PK now; the `o` hotkey and
+     `promptPickoff` are untouched. Written as a scan rather than a spot check so
+     the next button to collide fails here instead of at the park. */
+  test('no two buttons in the deck carry the same label', () => {
+    const labels = Array.from(document.querySelectorAll('#qb-visiting .quick-btn'))
+      .map(b => Array.from(b.childNodes)
+        .filter(n => n.nodeType === 3)          // the hotkey lives in a <small>
+        .map(n => n.textContent).join('').trim());
+    const dupes = labels.filter((l, i) => labels.indexOf(l) !== i);
+    eq('every label is its own', dupes.join(','), '');
+    ok('pop out keeps PO', labels.indexOf('PO') >= 0);
+    ok('and the pickoff is PK', labels.indexOf('PK') >= 0);
+  });
+
+  /* "CLR All" sat next to "CLR Play" in accent red and cleared one cell. Spelling
+     both out in full cost the flat drawer a whole third row (measured: `.quick-bar`
+     229px against F9's 177, `--cell-h` on its 44px floor), so they take the deck's
+     existing label idiom — `Clear` over `Play` / `Cell`, the way `Pitch` sits over
+     `S F B` — which says the same words in less room than the abbreviations did. */
+  test('the clear buttons say what they clear', () => {
+    const btn = act => document.querySelector(`#qb-visiting .quick-btn[data-act="${act}"]`);
+    const group = btn('clearSelectedCell').closest('.qbg-panel');
+    const label = group.querySelector('.qb-label');
+    ok('the pair is captioned', !!label);
+    eq('with the verb', label.textContent.trim(), 'Clear');
+    eq('the cell one names the cell', btn('clearSelectedCell').firstChild.textContent.trim(), 'Cell');
+    eq('and the play one the play', btn('clearPlayKeepPitches').textContent.trim(), 'Play');
+    // Read out of context — by a screen reader, or in the hotkey guide — a bare
+    // "Cell" is not a thing you can act on.
+    eq('the cell button carries the whole name', btn('clearSelectedCell').getAttribute('aria-label'), 'Clear cell');
+    eq('and so does the play button', btn('clearPlayKeepPitches').getAttribute('aria-label'), 'Clear play');
+    ok('and neither still reads as a full wipe', !group.textContent.includes('All'));
+  });
+
+  /* F16 — the main line left R/H/E/LOB blank at 0 while the Game Summary's own
+     linescore printed 0 for the same figure. */
+  test('a scoreless card prints 0 on the line, not a blank', () => {
+    sel('visiting', 0, 0); play('K');
+    sel('visiting', 3, 0); play('K');
+    sel('visiting', 6, 0); play('K');            // a clean, scoreless half
+    flushTimers();
+    eq('no runs is 0 runs', rTotal('visiting'), '0');
+    eq('no hits is 0 hits', document.querySelector('input[data-ls="visiting"][data-stat="h"]').value, '0');
+    eq('no errors is 0 errors', eTotal('home'), '0');
+    eq('nobody left on is 0 left on', lobTotal('visiting'), '0');
+  });
+
+  test('the printed 0 survives a round-trip through the store', () => {
+    sel('visiting', 0, 0); play('1B');
+    const back = JSON.parse(JSON.stringify(gameState));
+    applyState();
+    eq('the fielding side still reads 0', eTotal('home'), '0');
+    eq('and so does the state it came back from', back.linescore.home.e, '0');
+  });
+
+  /* F17 — the hotkey guide is the app's only documentation and `?` / `/` was the
+     only way in, so an iPad with no hardware keyboard could not open it. */
+  test('the hotkey guide can be opened without a keyboard', () => {
+    const modal = document.getElementById('hotkey-modal');
+    modal.classList.remove('active');
+    const entry = document.querySelector('.hdr-menu-panel [data-act="showHotkeyModal"]');
+    ok('the More menu offers it', !!entry);
+    eq('under a name a scorer would look for', entry.textContent.trim(), 'Shortcuts');
+    entry.click();
+    ok('and tapping it opens the guide', modal.classList.contains('active'));
+    // Opening it from a menu means it must not be a toggle: a second tap on the
+    // menu item would otherwise close the thing it was asked to show.
+    entry.click();
+    ok('a second tap leaves it open', modal.classList.contains('active'));
+    document.querySelector('.hotkey-close').click();
+    ok('and the close button shuts it', !modal.classList.contains('active'));
+    toggleHotkeyModal();
+    ok('the keyboard path still toggles open', modal.classList.contains('active'));
+    toggleHotkeyModal();
+    ok('and toggles shut', !modal.classList.contains('active'));
+  });
+
+  /* F18 — a new card opened with an empty Date every time. */
+  test('a new card opens on today', () => {
+    const today = new Date().toLocaleDateString();
+    eq('the empty state carries the date', createEmptyState().info.date, today);
+    const realConfirm = window.confirm;
+    window.confirm = function () { return true; };
+    try {
+      newGame();
+      eq('and New Game puts it in the field', document.getElementById('info-date').value, today);
+    } finally { window.confirm = realConfirm; clearStorage(); }
+  });
+
+  test('a card scored after the fact keeps the date it was given', () => {
+    gameState.info.date = '4/18/1923';
+    applyState();
+    eq('the field holds what the card says', document.getElementById('info-date').value, '4/18/1923');
+    ok('and today has not been written over it', gameState.info.date !== new Date().toLocaleDateString());
   });
 
   test('the game summary draws the chart it wires up', () => {
