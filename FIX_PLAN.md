@@ -24,10 +24,10 @@ Do **not** bump `SHELL_VERSION` in `sw.js` by hand — the pre-commit hook does 
 | **F6** | Popups are not modal to touch | correctness | M | **done** |
 | **F7** | `markSub()` shows nothing at all | usability | S | **done** |
 | **F8** | A lone SB option auto-applies — including steal of home | correctness | XS | **done** |
-| **F9** | Open drawer covers the card, nothing scrolls | iPad | M | **needs a ruling** |
+| **F9** | Open drawer covers the card, nothing scrolls | iPad | M | ruled: **B+A** |
 | **F10** | Fielder entry is a text field → iOS alphabetic keyboard | iPad | M | todo |
-| **F11** | Advance Runners: no defaults, no cancel, silent refusal | iPad | M | **needs a ruling** |
-| **F12** | Spray prompt fires on every hit with no way to turn it off | iPad | S | **needs a ruling** |
+| **F11** | Advance Runners: no defaults, no cancel, silent refusal | iPad | M | **done** |
+| **F12** | Spray prompt fires on every hit with no way to turn it off | iPad | S | **done** (won't-fix + 2) |
 | **F13** | Jersey numbers clip at 1024px | polish | XS | todo |
 | **F14** | Win-probability chart never re-themed | polish | S | todo |
 | **F15** | "PO" collision and "CLR All" mislabel | polish | XS | todo |
@@ -426,7 +426,9 @@ and no run scored. Existing single-runner tests must still auto-apply.
 
 ## Tier 3 — iPad ergonomics (three of these want a decision first)
 
-### F9 — the open drawer covers the card and nothing scrolls  ← **needs a ruling**
+### F9 — the open drawer covers the card and nothing scrolls  ← ruled 2026-08-03: **B + A**
+
+**Adam:** B at ≥1100px (flat two-row drawer, no accordion), with A as the fallback below it.
 
 **Measured at 1194×834.** Drawer open: grid bottom 753 vs deck top 657 — batting slots 8
 and 9 are behind the deck, and `pageScroll` is **0**, so they cannot be brought into view.
@@ -483,7 +485,19 @@ keyboard appears and the deck stays visible.
 
 ---
 
-### F11 — Advance Runners: no defaults, no cancel, silent refusal  ← **needs a ruling**
+### F11 — Advance Runners: no defaults, no cancel, silent refusal  ← ruled 2026-08-03
+
+**Done.** One thing the build turned up that the finding did not: a pre-selected force also
+*blocks*, because the collision check reads every choice that is set. With men on 1st and 2nd
+the lead runner's own base came up greyed out — the trailing runner's *default* was already
+pointing at it — so "he held at 2nd" could only be entered by changing the other man first.
+A row that has not been tapped is therefore left out of the collision check, and a default the
+scorer invalidates by answering another row is dropped rather than left standing behind a
+greyed-out button. Confirm validates the real set, defaults included.
+
+**Adam on F11c:** the middle path — pre-select only when *every* runner is forced, so no
+judgement is ever pre-recorded. Any unforced runner and the popup reverts to always-ask with
+nothing selected. F11a and F11b go in as written.
 
 **Symptom.** The most frequent popup in the app. On a routine single with a man on first
 it is three taps (runner, batter, Confirm) plus the spray prompt. Nothing is pre-selected —
@@ -516,7 +530,11 @@ between two popups doing the same job is the sharpest part of this finding.
 
 ---
 
-### F12 — the spray prompt fires on every hit  ← **needs a ruling**
+### F12 — the spray prompt fires on every hit  ← ruled 2026-08-03: **leave it**
+
+**Adam:** no preference, no change to when it fires. Only the two things the finding says to
+fix regardless — label the field diagram (LF/CF/RF/infield) and stop the popup covering the
+row of the batter just recorded.
 
 **Symptom.** "Where was it hit?" opens automatically after every hit and every error, with
 Skip as the only dismissal. Scoring pitch-by-pitch live that is one extra modal per hit —

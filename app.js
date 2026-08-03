@@ -1475,7 +1475,35 @@ function setOptionBlocked(btn, blocked) {
     btn.style.borderColor = '#ccc';
     btn.style.background = '#f0f0f0';
     btn.style.color = '#999';
+  } else if (btn.dataset.style) {
+    // Put back the look it should be wearing. Unblocking used to reset the opacity
+    // and the cursor and nothing else, so an option greyed out by one choice and
+    // made legal again by the next stayed grey — including, since F11c, a
+    // pre-selected force whose chosen state would silently disappear while
+    // `choices` went on holding it.
+    btn.style.cssText = btn.dataset.style;
   }
+}
+
+/* The three states an advancement button can be in, in one place, so the force
+   pre-selected at render time and the same button tapped at click time cannot drift
+   apart. The chosen state was a pale blue tint a shade off the unchosen one; on a
+   popup whose whole job is to show you what you have answered, it needs to be
+   unmistakable (F11b). */
+function rpBtnStyle(active, isOut) {
+  const base = 'padding:3px 8px;font-size:11px;font-weight:600;border-radius:4px;cursor:pointer;opacity:1;font-family:var(--mono);border:1.5px solid ';
+  if (active && isOut) return base + 'var(--accent);background:var(--accent);color:#fff';
+  if (active) return base + 'var(--navy);background:var(--navy);color:var(--gold)';
+  if (isOut) return base + '#ccc;background:#fff;color:var(--accent)';
+  return base + '#ccc;background:#fff;color:#555';
+}
+
+// Applied through here rather than assigned, so `setOptionBlocked` has something to
+// restore the button to when it stops being blocked.
+function paintRpBtn(btn, active) {
+  const css = rpBtnStyle(active, btn.classList.contains('rp-out'));
+  btn.dataset.style = css;
+  if (!isOptionBlocked(btn)) btn.style.cssText = css;
 }
 
 function isOptionBlocked(btn) {
@@ -1901,6 +1929,16 @@ function applyPlay(play, target) {
 
   applyPlayEffects(team, pIdx, innIdx, play, prev, function() {
     finishPlay(team, pIdx, innIdx, snapshot);
+  }, function() {
+    // Cancel from the advancement popup. `prev` was captured before `ab.play` and the
+    // result pitch went on, and `finishPlay` — which is what pushes the undo entry —
+    // has not run, so putting the inning back is the whole rollback: the card is as
+    // it was before the button was pressed, with nothing on the undo stack to
+    // explain (F11b).
+    restoreInning(team, prev);
+    renderInning(team, prev);
+    updateSituation();
+    autoSave();
   });
 }
 
@@ -1914,7 +1952,7 @@ function applyPlay(play, target) {
    to do a fraction of it: it adjusted the batter's own bases and outs and never
    asked where the runners went (#22). Rewriting a single as a double left them
    standing where the single had put them. */
-function applyPlayEffects(team, pIdx, innIdx, play, prev, done) {
+function applyPlayEffects(team, pIdx, innIdx, play, prev, done, onCancel) {
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   const inn = getInnState(team, innIdx);
   const src = { pIdx, col: innIdx };
@@ -1957,7 +1995,7 @@ function applyPlayEffects(team, pIdx, innIdx, play, prev, done) {
         // pitch, not off the bat (#12).
         ab.rbi = 0;
         done();
-      }, { batterTakesBase: true, batterPIdx: pIdx });
+      }, { batterTakesBase: true, batterPIdx: pIdx, onCancel });
       return;
     }
 
@@ -1990,7 +2028,7 @@ function applyPlayEffects(team, pIdx, innIdx, play, prev, done) {
         ab.rbi = countRunnersScored(team, prev);
       }
       done();
-    }, { batterTakesBase: isHitOrError, batterPIdx: pIdx, batterRetired });
+    }, { batterTakesBase: isHitOrError, batterPIdx: pIdx, batterRetired, onCancel });
     return;
   }
 
@@ -2132,6 +2170,31 @@ function releaseSprayClick() {
   sprayClickHandler = null;
 }
 
+/* Slide the popup to the side the batter's cell is *not* on.
+
+   It renders dead centre, and the hit it is asking about is on the card behind it —
+   often directly behind it, since the middle of the grid is where a mid-order batter
+   in a middle inning sits (F12). Centred vertically it will always cross the row, but
+   at ~336px of a 1194px viewport it need not cover the cell: pinned to the far side it
+   leaves the cell, its diamond and the whole player column in view. Falls back to
+   centred when there is no cell to read or no room to move. */
+function keepSprayPopupOffCell(popup, team, pIdx, innIdx) {
+  popup.style.left = '';
+  popup.style.right = '';
+  popup.style.transform = 'translate(-50%,-50%)';
+  const cell = document.querySelector(
+    `.at-bat-cell[data-team="${team}"][data-p="${pIdx}"][data-inn="${innIdx}"]`);
+  if (!cell || !cell.getBoundingClientRect || !window.innerWidth) return;
+  const r = cell.getBoundingClientRect();
+  if (!r.width && !r.height) return;                 // not laid out (headless)
+  const w = popup.offsetWidth || 336;
+  if (window.innerWidth < w * 2 + 48) return;        // no room to take a side
+  const cellIsLeft = (r.left + r.right) / 2 < window.innerWidth / 2;
+  popup.style.transform = 'translateY(-50%)';
+  if (cellIsLeft) { popup.style.left = 'auto'; popup.style.right = '24px'; }
+  else { popup.style.left = '24px'; popup.style.right = 'auto'; }
+}
+
 function showSprayChart(team, pIdx, innIdx) {
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   const play = ab.play;
@@ -2145,6 +2208,7 @@ function showSprayChart(team, pIdx, innIdx) {
   marker.setAttribute('fill', HIT_COLORS[colorKey] || 'red');
   releaseSprayClick();
   openPopup(popup);
+  keepSprayPopupOffCell(popup, team, pIdx, innIdx);
 
   sprayClickHandler = function handleClick(e) {
     const pt = svg.createSVGPoint();
@@ -2710,7 +2774,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     runners.push({ base: b, pIdx: rn.p, name, fromLabel: baseNames[b], minDest, defaultDest: undefined });
   }
 
-  // Never skip — always ask
+  // Nobody on: nothing to ask.
   if (runners.length === 0) {
     callback({});
     return;
@@ -2720,7 +2784,10 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'runner-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border:2px solid #333;border-radius:8px;padding:14px 18px;z-index:300;box-shadow:0 6px 30px rgba(0,0,0,0.35);min-width:260px;font-family:var(--font);';
+    // Was white-and-#333, the one popup in the set still wearing the old chrome —
+    // and it does the same job as the DP/FC outcome popup, which wears the app's
+    // navy. Two popups asking the same question should not look like two apps (F11b).
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:300;box-shadow:0 8px 40px rgba(26,39,68,0.4);min-width:300px;font-family:var(--font);';
     document.body.appendChild(popup);
   }
 
@@ -2728,7 +2795,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
   // pitch or a passed ball is asking a narrower question than "advance runners", and
   // a scorer answering it should be able to see which event he is answering for (m1).
   const title = (opts && opts.title) || 'Advance Runners';
-  let html = '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;color:#333">' + escapeHtml(title) + '</div>';
+  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;color:var(--navy);font-family:var(--heading)">' + escapeHtml(title) + '</div>';
   // Rule 5.08(a) — see NO_RUN_508A. `opts.batterRetired` is the caller saying this
   // play puts the batter out; with two already gone that out is the third, so Home
   // comes off the board for everybody. Said in words as well as greyed out, because
@@ -2739,18 +2806,39 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
   }
   const choices = {};
 
+  /* F11c — what may be filled in for the scorer, and what may not.
+
+     "Never skip — always ask" was here so the card never records an advance nobody
+     chose, and that rule holds for anything involving judgement: a man on 2nd when a
+     single is hit may score or may be held at 3rd, and only the scorer saw it. But a
+     *forced* runner has no such choice — the batter is on his way to the base behind
+     him and he must vacate it — so pre-selecting a force records nothing the rules
+     had not already decided. Adam's ruling: defaults only when every runner is forced,
+     otherwise the popup stays blank and asks.
+
+     Both conditions are narrow on purpose. The batter must end on **first**: on a
+     double the man on 1st is forced out of 1st but where he stops is judgement, and
+     his forced base is the one the batter is taking. And the occupied bases must run
+     in an unbroken chain from 1st — with men on 1st and 3rd only the man on 1st is
+     forced, so nothing is pre-selected there either. */
+  const batterOnFirst = !!(opts && opts.batterTakesBase) && defaultAdv === 1;
+  const occupied = [0, 1, 2].filter(b => inn.bases[b] !== null);
+  const everyRunnerForced = batterOnFirst &&
+    occupied.every((b, i) => b === i);           // an unbroken chain from 1st
+  const forcedDest = r => (everyRunnerForced ? r.base + 1 : undefined);
+
   runners.forEach(r => {
-    choices[r.base] = undefined;
+    choices[r.base] = forcedDest(r);
     html += `<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">`;
     html += `<span style="font-size:11px;font-weight:600;min-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(r.name)}</span>`;
-    html += `<span style="font-size:10px;color:#999;min-width:24px">${r.fromLabel}→</span>`;
+    html += `<span style="font-size:10px;color:var(--text-light);min-width:24px">${r.fromLabel}→</span>`;
     html += `<div style="display:flex;gap:3px;flex-wrap:wrap">`;
     for (let d = r.minDest; d <= 3; d++) {
       const label = d === r.base ? 'Hold' : baseNames[d];
-      html += `<button class="rp-btn" data-base="${r.base}" data-dest="${d}" style="padding:3px 8px;font-size:11px;font-weight:600;border:1.5px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;color:#555;font-family:var(--mono)">${label}</button>`;
+      html += `<button class="rp-btn" data-base="${r.base}" data-dest="${d}" style="${rpBtnStyle(d === choices[r.base], false)}">${label}</button>`;
     }
     for (let d = r.base + 1; d <= 3; d++) {
-      html += `<button class="rp-btn rp-out" data-base="${r.base}" data-dest="-${d}" style="padding:3px 8px;font-size:11px;font-weight:600;border:1.5px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;color:var(--accent);font-family:var(--mono)">Out ${baseNames[d]}</button>`;
+      html += `<button class="rp-btn rp-out" data-base="${r.base}" data-dest="-${d}" style="${rpBtnStyle(false, true)}">Out ${baseNames[d]}</button>`;
     }
     html += `</div></div>`;
   });
@@ -2764,21 +2852,36 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
   const batterTakesBase = !!(opts && opts.batterTakesBase);
   const batterDefaultBase = batterTakesBase && defaultAdv > 0 && defaultAdv <= 3 ? defaultAdv - 1 : -1;
   if (batterDefaultBase >= 0 && batterDefaultBase < 3) {
-    choices.batterDest = undefined;
+    // The batter's own base is forced whenever the runners' are — he is the reason
+    // they are.
+    choices.batterDest = everyRunnerForced ? batterDefaultBase : undefined;
     const batterName = (opts && opts.batterPIdx !== undefined)
       ? getActivePlayerName(team, opts.batterPIdx, innIdx)
       : (selectedCell ? getActivePlayerName(selectedCell.dataset.team, parseInt(selectedCell.dataset.p), parseInt(selectedCell.dataset.inn)) : 'Batter');
-    html += `<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid #ddd;padding-top:8px">`;
+    html += `<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid var(--border-light,#ddd);padding-top:8px">`;
     html += `<span style="font-size:11px;font-weight:600;min-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(batterName)}</span>`;
-    html += `<span style="font-size:10px;color:#999;min-width:24px">Batter→</span>`;
+    html += `<span style="font-size:10px;color:var(--text-light);min-width:24px">Batter→</span>`;
     html += `<div style="display:flex;gap:3px;flex-wrap:wrap">`;
     for (let d = batterDefaultBase; d <= 2; d++) {
-      html += `<button class="rp-btn" data-base="batter" data-dest="${d}" style="padding:3px 8px;font-size:11px;font-weight:600;border:1.5px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;color:#555;font-family:var(--mono)">${baseNames[d]}</button>`;
+      html += `<button class="rp-btn" data-base="batter" data-dest="${d}" style="${rpBtnStyle(d === choices.batterDest, false)}">${baseNames[d]}</button>`;
     }
     html += `</div></div>`;
   }
 
-  html += `<button id="rp-confirm" style="margin-top:6px;width:100%;padding:6px;font-size:12px;font-weight:700;background:#333;color:#fff;border:none;border-radius:4px;cursor:pointer">Confirm</button>`;
+  if (everyRunnerForced) {
+    html += '<div style="font-size:10px;color:var(--text-light);margin:2px 0 8px;line-height:1.4">Every runner is forced, so the card has filled them in. Tap a base to change one.</div>';
+  }
+
+  html += `<div style="display:flex;gap:6px;margin-top:6px">`;
+  html += `<button id="rp-confirm" style="flex:1;padding:7px;font-size:12px;font-weight:700;background:var(--navy);color:var(--gold);border:none;border-radius:4px;cursor:pointer;font-family:var(--heading);letter-spacing:0.5px;text-transform:uppercase">Confirm</button>`;
+  // There was no way out of this popup at all — no Cancel, and Escape did nothing —
+  // so a play button pressed by mistake meant completing a wrong entry and then
+  // undoing it. What Cancel has to take back depends on the caller: the two inside
+  // `applyPlay` have already written the play and its result pitch, and hand in a
+  // rollback; a wild pitch or an Advance Runners edit writes nothing until Confirm,
+  // so for those closing is enough (F11b).
+  html += `<button id="rp-cancel" style="padding:7px 12px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer;font-family:var(--font)">Cancel</button>`;
+  html += `</div>`;
   popup.innerHTML = html;
   openPopup(popup);
 
@@ -2786,11 +2889,26 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
   // (negative dest) leaves the ordering: the base he was heading for is free for the
   // man behind him. The batter counts as starting from behind 1st.
   const inPopup = new Set(runners.map(r => r.pIdx));
-  function rpParties(assume) {
+  /* A pre-selected force is an offer, not an answer, and it must not stand in the way
+     of the scorer choosing something else. Left in the collision check it did exactly
+     that: with men on 1st and 2nd and a single, the lead runner's own base came up
+     greyed out — because the trailing runner's *default* was already pointing at it —
+     so "he held at 2nd" could only be entered by changing the other man first.
+
+     A row that has not been tapped is therefore left out of the check, and every base
+     stays reachable until the scorer commits to one. Confirm still validates the
+     finished set, so a combination that really does collide is refused there. Before
+     F11c nothing was pre-selected, so `userPicked` and "is not undefined" agreed on
+     every row and this changes nothing for a popup with no defaults. */
+  const userPicked = new Set();
+  // `committed` is Confirm's mode: it has to validate what it is about to apply, so
+  // it counts every choice including the defaults. The greying-out above is the only
+  // caller that ignores them.
+  function rpParties(assume, committed) {
     const list = runners.map(r => ({
       key: r.base,
       from: r.base,
-      dest: choices[r.base] !== undefined && choices[r.base] >= 0 ? choices[r.base] : undefined
+      dest: (committed || userPicked.has(r.base)) && choices[r.base] >= 0 ? choices[r.base] : undefined
     }));
     // A runner this play already placed and who isn't up for a decision here holds
     // his base — nobody in the popup may be sent to it.
@@ -2806,6 +2924,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
   }
 
   function refreshRunnerAvailability() {
+    const invalidated = [];
     popup.querySelectorAll('.rp-btn').forEach(btn => {
       const dest = parseInt(btn.dataset.dest);
       if (dest < 0) return;   // "Out at" never collides with anyone
@@ -2813,8 +2932,20 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
       // The 5.08(a) bar goes through here rather than being painted once at render
       // time, or the collision refresh below would open the plate back up on the
       // next click. The batter's own row tops out at 3rd, so this is the runners.
-      if (runBarred && dest === 3) { setOptionBlocked(btn, true); return; }
-      setOptionBlocked(btn, runnerOrderConflicts(rpParties({ key, dest })).has(key));
+      const blocked = (runBarred && dest === 3) ||
+        runnerOrderConflicts(rpParties({ key, dest })).has(key);
+      setOptionBlocked(btn, blocked);
+      // A pre-selected force that the scorer has just made impossible by answering
+      // another row is dropped, not left standing behind a greyed-out button where
+      // only Confirm would find it. The row goes back to unanswered, which is what
+      // it now is, and Confirm asks for it by name (F11c).
+      if (blocked && key !== 'batter' && !userPicked.has(key) && choices[key] === dest) {
+        invalidated.push(key);
+      }
+    });
+    invalidated.forEach(key => {
+      choices[key] = undefined;
+      popup.querySelectorAll(`.rp-btn[data-base="${key}"]`).forEach(b => paintRpBtn(b, false));
     });
   }
 
@@ -2828,17 +2959,20 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
         choices.batterDest = dest;
       } else {
         choices[parseInt(baseKey)] = dest;
+        userPicked.add(parseInt(baseKey));
       }
       this.parentElement.querySelectorAll('.rp-btn').forEach(b => {
-        const bDest = parseInt(b.dataset.dest);
-        const isActive = bDest === dest;
-        const isOut = bDest < 0;
-        b.style.borderColor = isActive ? (isOut ? 'var(--accent)' : '#1565c0') : '#ccc';
-        b.style.background = isActive ? (isOut ? '#fce4ec' : '#e3f2fd') : '#fff';
-        b.style.color = isActive ? (isOut ? 'var(--accent)' : '#1565c0') : (isOut ? 'var(--accent)' : '#555');
+        paintRpBtn(b, parseInt(b.dataset.dest) === dest);
       });
       refreshRunnerAvailability();   // last: it repaints whatever it blocks
     };
+  });
+
+  // Seed each button's restore style from the state it was rendered in, so a
+  // pre-selected force that gets blocked and then unblocked comes back chosen.
+  popup.querySelectorAll('.rp-btn').forEach(btn => {
+    const key = btn.dataset.base === 'batter' ? 'batterDest' : parseInt(btn.dataset.base);
+    paintRpBtn(btn, parseInt(btn.dataset.dest) === choices[key]);
   });
 
   refreshRunnerAvailability();
@@ -2848,6 +2982,11 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     if (row) { row.style.outline = '2px solid var(--accent)'; setTimeout(() => row.style.outline = '', 800); }
   }
 
+  document.getElementById('rp-cancel').onclick = function() {
+    closePopup(popup);
+    if (opts && opts.onCancel) opts.onCancel();
+  };
+
   document.getElementById('rp-confirm').onclick = function() {
     // Check all runners have a selection
     const allSelected = runners.every(r => choices[r.base] !== undefined);
@@ -2856,6 +2995,10 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
       runners.forEach(r => {
         if (choices[r.base] === undefined) flashRow(r.base);
       });
+      // An 800ms outline and nothing else was the whole answer here, on the popup a
+      // scorer meets more often than any other. The collision refusal two blocks
+      // below has always spoken; this one is the same kind of no (F11a).
+      showPlayReject('Pick a base for every runner.');
       return;
     }
 
@@ -2865,7 +3008,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     // marked up on his at-bat, but unable to score. The colliding options are
     // greyed out as choices are made; this catches the rest, including the batter
     // row left on its default.
-    const parties = rpParties();
+    const parties = rpParties(null, true);
     const bad = runnerOrderConflicts(parties);
     if (bad.size) {
       bad.forEach(k => flashRow(k));

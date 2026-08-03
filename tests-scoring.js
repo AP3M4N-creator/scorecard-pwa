@@ -1253,6 +1253,120 @@
     basesConsistent('visiting', 0);
   });
 
+  /* ----------------------------------------------------------------- F11 ---
+     The app's most frequent popup. It pre-selected nothing, refused an empty
+     Confirm with an 800ms outline and no words, and had no way out at all.
+
+     F11c's ruling: fill in the runners only when every one of them is *forced* —
+     the batter is on his way to the base behind him and he must vacate it, so
+     nothing is being guessed. Any judgement in the play and it goes back to
+     asking. Two conditions: the batter ends on first, and the occupied bases run
+     in an unbroken chain from 1st. */
+
+  test('a single with a man on first fills the force in', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    clickId('spray-skip');
+    play('1B');                                     // forced: 1st→2nd, batter→1st
+    ok('the popup still opens', visible('runner-popup'));
+    clickId('rp-confirm');                          // answered without touching a row
+    eq('the forced runner took second', onB('visiting', 0, 1), 0);
+    eq('and the batter has first', onB('visiting', 0, 0), 3);
+    clickId('spray-skip');
+    basesConsistent('visiting', 0);
+  });
+
+  test('bases loaded, a single forces the man on third home', () => {
+    sel('visiting', 0, 0);
+    play('1B'); clickId('spray-skip');
+    play('1B'); clickId('rp-confirm'); clickId('spray-skip');
+    play('1B'); clickId('rp-confirm'); clickId('spray-skip');   // loaded
+    eq('the bases are loaded', occupants('visiting', 0).length, 3);
+    play('1B');
+    clickId('rp-confirm');
+    eq('the run is forced in', lsInput('visiting', 0).value, '1');
+    clickId('spray-skip');
+    basesConsistent('visiting', 0);
+  });
+
+  // A man on 2nd may score or may hold at 3rd, and only the scorer saw which.
+  test('a single with a man on second only is still asked', () => {
+    sel('visiting', 0, 0);
+    play('2B');
+    clickId('spray-skip');
+    play('1B');
+    ok('the popup is open', visible('runner-popup'));
+    clickId('rp-confirm');
+    ok('an empty Confirm is refused', visible('runner-popup'));
+    ok('and says so in words', visible('play-reject'));
+    ok('naming what it wants',
+      document.getElementById('play-reject').textContent.indexOf('base for every runner') >= 0);
+    eq('nothing was written', onB('visiting', 0, 1), 0);
+  });
+
+  // On a double the man on 1st is forced out of 1st, but where he stops is
+  // judgement — and his forced base is the one the batter is taking.
+  test('a double with a man on first is not filled in', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    clickId('spray-skip');
+    play('2B');
+    clickId('rp-confirm');
+    ok('an empty Confirm is refused', visible('runner-popup'));
+    runnerPopup({ 0: 2, batter: 1 });
+    clickId('spray-skip');
+  });
+
+  // First and third: only the man on 1st is forced, so neither is filled in.
+  test('a broken chain of runners is not filled in', () => {
+    sel('visiting', 0, 0);
+    play('3B');
+    clickId('spray-skip');
+    play('1B');
+    runnerPopup({ 2: 2, batter: 0 });               // man holds 3rd, batter to 1st
+    clickId('spray-skip');
+    eq('first and third', onB('visiting', 0, 0), 3);
+    eq('with 2nd empty', onB('visiting', 0, 1), null);
+    play('1B');
+    clickId('rp-confirm');
+    ok('an empty Confirm is refused', visible('runner-popup'));
+    runnerPopup({ 0: 1, 2: 3, batter: 0 });
+    clickId('spray-skip');
+  });
+
+  /* F11b — there was no way out: no Cancel, and Escape did nothing. `ab.play` and
+     its result pitch are committed before the popup opens, so a play button pressed
+     by mistake meant completing a wrong entry and then undoing it. */
+  test('Cancel takes the play back off the card', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    clickId('spray-skip');
+    sel('visiting', 3, 0);
+    play('2B');                                     // the wrong button
+    ok('the popup is open', visible('runner-popup'));
+    clickId('rp-cancel');
+    ok('the popup closed', !visible('runner-popup'));
+    eq('the double came off the card', ab('visiting', 3, 0).play, '');
+    eq('and its result pitch with it', (ab('visiting', 3, 0).pitches || []).length, 0);
+    eq('the runner is where he was', onB('visiting', 0, 0), 0);
+    eq('and nothing was left on the undo stack', playHistory.length, 1);
+  });
+
+  // A wild pitch writes nothing until Confirm, so its Cancel has nothing to undo —
+  // it must not reach for a rollback that does not belong to it.
+  test('Cancel on a wild pitch leaves the card alone', () => {
+    sel('visiting', 0, 0);
+    play('1B'); clickId('spray-skip');
+    play('1B'); clickId('rp-confirm'); clickId('spray-skip');
+    const depth = playHistory.length;
+    key('n');                                       // wild pitch, two men on
+    ok('the popup is open', visible('runner-popup'));
+    clickId('rp-cancel');
+    ok('the popup closed', !visible('runner-popup'));
+    eq('both runners stayed', occupants('visiting', 0).length, 2);
+    eq('and the undo stack is untouched', playHistory.length, depth);
+  });
+
   test('two runners can both score without tripping the order check', () => {
     sel('visiting', 0, 0);
     play('2B');

@@ -368,6 +368,15 @@
   <h3>Where was it hit?</h3>
   <svg id="spray-field" viewBox="0 0 300 300" width="300" height="300">
     <image href="field.png" x="0" y="0" width="300" height="300" preserveAspectRatio="xMidYMid meet"></image>
+    <!-- The diagram was an unmarked shape, so "where was it hit?" had to be answered
+         against nothing (F12). `pointer-events="none"` so a label can never swallow the
+         tap that records the location, and drawn before the marker so it stays on top. -->
+    <g pointer-events="none" font-family="var(--heading)" font-weight="700" text-anchor="middle">
+      <text x="64" y="112" font-size="12" letter-spacing="1" fill="#fff" fill-opacity="0.8">LF</text>
+      <text x="150" y="50" font-size="12" letter-spacing="1" fill="#fff" fill-opacity="0.8">CF</text>
+      <text x="240" y="112" font-size="12" letter-spacing="1" fill="#fff" fill-opacity="0.8">RF</text>
+      <text x="152" y="196" font-size="9" letter-spacing="0.8" fill="#2b1d10" fill-opacity="0.9">INFIELD</text>
+    </g>
     <circle id="spray-marker" cx="0" cy="0" r="8" fill="#c0111f" stroke="#fff" stroke-width="2" display="none"></circle>
   </svg>
   <div class="spray-hint">Tap where the ball was hit</div>
