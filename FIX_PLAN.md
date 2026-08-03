@@ -1,7 +1,12 @@
-# FIX_PLAN — review of 2026-08-03
+# FIX_PLAN — review of 2026-08-03  ·  **closed**
 
 Findings from a full-game iPad-landscape review of `485753d`. Baseline before any work:
-**350 tests passing** (`node run-tests.js`, ~45s).
+**350 tests passing** (`node run-tests.js`, ~45s); **402 passing** now.
+
+**Every item is settled: F1–F18 fixed, F19 won't-fix.** Nothing here is waiting on anybody.
+Each fix carries a `(F<n>)` tag in its comment, so `grep -n "(F[0-9]" app.js` finds them all.
+Kept in the repo for the write-ups — several findings under-read their own scope, and each
+entry records where and how.
 
 Read this file first. Each item is self-contained — root cause, exact edit sites, and how
 to prove it — so a session can open with "start F4" and need nothing else. Tick the
@@ -34,11 +39,11 @@ Do **not** bump `SHELL_VERSION` in `sw.js` by hand — the pre-commit hook does 
 | **F16** | Zero prints blank in one linescore, `0` in the other | polish | XS | **done** |
 | **F17** | Hotkey help unreachable without a keyboard | polish | XS | **done** |
 | **F18** | Details doesn't prefill today's date | polish | XS | **done** |
-| **F19** | Lineup entry is 54 taps with no reuse | feature | L | **needs a ruling** |
+| **F19** | Lineup entry is 54 taps with no reuse | feature | L | **won't fix** |
 
-Suggested order: **F1 → F2 → F5 → F4 → F3 → F8 → F7 → F6**, then decide F9/F11/F12
-together (they are all "how much does entry cost per play"), then F10, then the polish
-batch F13–F18 in one pass. F19 last, or never.
+The order the work actually went in: **F1 → F2 → F5 → F4 → F3 → F8 → F7 → F6**, then
+F9/F11/F12 together (they are all "how much does entry cost per play"), then F10, then F13,
+F14 on its own, and F15–F18 in one pass.
 
 ---
 
@@ -768,8 +773,13 @@ not make an untouched card read as unsaved work (that would have broken F5).
 
 ## Tier 5 — feature
 
-### F19 — lineup entry is 54 taps  ← **needs a ruling**
-Two lineups is 18 numbers, 18 names and 18 position selects before first pitch, every game,
+### F19 — lineup entry is 54 taps  ← ruled 2026-08-03: **won't fix**
+
+**Adam: not needed.** Nothing built, nothing left half-done — the finding is closed, not
+parked. Don't re-raise it in a later review, and don't build lineup reuse as a side effect of
+something else. If it ever comes back it starts from (a) below.
+
+**The finding as filed.** Two lineups is 18 numbers, 18 names and 18 position selects before first pitch, every game,
 with no reuse — and it is the one part of the app you do under time pressure at the park.
 Options, cheapest first: (a) save/load a **roster** per team name in `localStorage` and offer
 it when the team name matches; (b) "copy lineup from a saved game" in the Game Library;
