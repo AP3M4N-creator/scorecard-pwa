@@ -1563,9 +1563,51 @@ function barRunsAfterBatterOut(team, innIdx, choices) {
 // half-inning transition used to meet the same wall and blame the 3 outs (M1).
 const CARD_FULL = 'The card is full — no column left for this inning.';
 
-// Popups that own the current entry get a backdrop, so a tap meant for the popup
-// can't land on the grid and move the selection underneath it (#1, #29).
-const BACKDROP_GUARDED = ['k-popup', 'pos-popup', 'runner-popup', 'outcome-popup'];
+/* ------------------------------------------------------- popup modality ---
+   A popup drawn over the card is not modal to touch unless something takes the
+   card's taps: without a backdrop the grid underneath stays live, so a tap meant
+   for the popup lands on a cell, a tab or a play button. Tapping the Visiting tab
+   behind the pickoff picker switched the card under it, and the picker then
+   applied against the half-inning it had captured when it opened (F6).
+
+   Four popups had one. `BACKDROP_GUARDED` was its own hand-written list, and it
+   drifted away from `PENDING_ENTRY_POPUPS` below — the popups in the gap were
+   exactly the ones you could tap the card behind. It is derived now, so the two
+   cannot come apart again. `PENDING_ENTRY_POPUPS` is declared further down; this
+   is a function rather than a const so the order doesn't matter.
+
+   These four write nothing until they are answered, so undo has nothing to race
+   and they stay off the pending list — but a tap behind them still reaches the
+   card, and `setPitcher` reads the *live* selection when its button is pressed,
+   so a cell tapped behind Select Pitcher took the pitching change. */
+const ALSO_GUARDED = ['spray-popup', 'pitcher-popup', 'pos-change-popup', 'decision-popup'];
+function backdropGuarded() { return PENDING_ENTRY_POPUPS.concat(ALSO_GUARDED); }
+
+/* The three that cannot simply be dismissed. Two own an entry that is already
+   half-written, so there is no state to go back to without answering them (C1).
+   The third is asking which of two readings of an illegal lineup the card should
+   record — the illegal one is already on the card, which is why it opened, so
+   closing it unanswered leaves exactly what it exists to resolve. Its own options
+   include the undo, so it is not a trap.
+
+   Derived, and a function for the same reason as `backdropGuarded` — both of the
+   lists it is built from are declared below. */
+function mustAnswerPopups() { return ENTRY_IN_PROGRESS_POPUPS.concat(['dh-popup']); }
+const MUST_ANSWER_WHY = {
+  'dh-popup': 'Answer the DH question first — the lineup stays illegal until you do.'
+};
+// The open popup that has to be answered before anything else, and why, or null.
+function blockingPopup() {
+  const must = mustAnswerPopups();
+  return openGuardedPopups().find(id => must.includes(id)) || null;
+}
+
+function popupIsOpen(id) {
+  if (typeof document === 'undefined') return false;
+  const p = document.getElementById(id);
+  return !!(p && p.style.display && p.style.display !== 'none');
+}
+function openGuardedPopups() { return backdropGuarded().filter(popupIsOpen); }
 
 function showPopupBackdrop() {
   if (typeof document === 'undefined') return;
@@ -1576,16 +1618,19 @@ function showPopupBackdrop() {
     bd.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:180;background:rgba(26,39,68,0.15);';
     bd.onclick = function(e) {
       if (e && e.stopPropagation) e.stopPropagation();
-      // Swallow the tap. If whatever it was guarding is already gone, get out of
-      // the way rather than leaving the app unclickable.
-      const stillOpen = BACKDROP_GUARDED.some(id => {
-        const p = document.getElementById(id);
-        return p && p.style.display && p.style.display !== 'none';
-      });
-      if (!stillOpen) hidePopupBackdrop();
-      // A swallowed tap with no explanation reads as a dead app. The two entry
-      // popups can only be answered, not dismissed, so say so (C1).
-      else if (entryInProgress()) showPlayReject('Finish the open entry first.');
+      const open = openGuardedPopups();
+      // Nothing left to guard: get out of the way rather than leaving the app
+      // unclickable.
+      if (!open.length) { hidePopupBackdrop(); return; }
+      // A swallowed tap with no explanation reads as a dead app, so the popups
+      // that can only be answered say so (C1).
+      const stuck = blockingPopup();
+      if (stuck) { showPlayReject(MUST_ANSWER_WHY[stuck] || 'Finish the open entry first.'); return; }
+      // Every other guarded popup has a Cancel of its own and writes nothing
+      // until it is answered, so a tap outside is the same act as pressing it.
+      // Making them modal without this would trade a popup you can tap past for
+      // one you can see past but not dismiss (F6).
+      open.forEach(closePopupById);
     };
     document.body.appendChild(bd);
   }
@@ -1596,6 +1641,36 @@ function hidePopupBackdrop() {
   if (typeof document === 'undefined') return;
   const bd = document.getElementById('popup-backdrop');
   if (bd) bd.style.display = 'none';
+}
+
+/* The backdrop follows the popups instead of being raised and dropped by hand at
+   each call site. Pairing it by hand is what left four popups without one and
+   what makes a missed close path leave the backdrop over a card with nothing
+   behind it; this re-reads the DOM on every open and close, so the worst a missed
+   call can do is leave it up until the next one. */
+function syncPopupBackdrop() {
+  if (openGuardedPopups().length) showPopupBackdrop();
+  else hidePopupBackdrop();
+}
+
+function openPopup(el, display) {
+  if (el) el.style.display = display || 'block';
+  syncPopupBackdrop();
+}
+
+function closePopup(el) {
+  if (el) {
+    el.style.display = 'none';
+    // The spray popup's click handler lives on the SVG rather than on the popup,
+    // so closing it any other way than through Skip used to leave the handler
+    // attached and the next hit's location landed on this at-bat.
+    if (el.id === 'spray-popup') releaseSprayClick();
+  }
+  syncPopupBackdrop();
+}
+
+function closePopupById(id) {
+  closePopup(typeof document === 'undefined' ? null : document.getElementById(id));
 }
 
 // Popups whose Confirm writes to an at-bat and an inning captured when they
@@ -1643,9 +1718,7 @@ function entryInProgress() {
 }
 
 function dismissSprayPopup() {
-  if (typeof document === 'undefined') return;
-  const p = document.getElementById('spray-popup');
-  if (p) p.style.display = 'none';
+  closePopupById('spray-popup');
 }
 
 /* ------------------------------------------------ undo: the whole inning ---
@@ -2026,6 +2099,18 @@ function applyChosenAdvancements(team, innIdx, choices, reason, src) {
 /* Spray Chart */
 const HIT_COLORS = { '1B':'#1565c0', '2B':'#2e7d32', '3B':'#e65100', 'HR':'#c62828', 'E':'#777' };
 
+/* The one handler currently listening on the field, so that every way of closing
+   this popup takes it off — the backdrop tap and undo's `dismissSprayPopup` as
+   well as Skip. A handler left attached belongs to a previous at-bat and would
+   write the next hit's location onto it. */
+let sprayClickHandler = null;
+function releaseSprayClick() {
+  if (!sprayClickHandler) return;
+  const svg = typeof document === 'undefined' ? null : document.getElementById('spray-field');
+  if (svg) svg.removeEventListener('click', sprayClickHandler);
+  sprayClickHandler = null;
+}
+
 function showSprayChart(team, pIdx, innIdx) {
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   const play = ab.play;
@@ -2037,9 +2122,10 @@ function showSprayChart(team, pIdx, innIdx) {
   marker.setAttribute('display', 'none');
   const colorKey = isErrorPlay(play) ? 'E' : play;
   marker.setAttribute('fill', HIT_COLORS[colorKey] || 'red');
-  popup.style.display = 'block';
+  releaseSprayClick();
+  openPopup(popup);
 
-  function handleClick(e) {
+  sprayClickHandler = function handleClick(e) {
     const pt = svg.createSVGPoint();
     pt.x = e.clientX; pt.y = e.clientY;
     const svgPt = pt.matrixTransform(svg.getScreenCTM().inverse());
@@ -2047,14 +2133,13 @@ function showSprayChart(team, pIdx, innIdx) {
     marker.setAttribute('cy', svgPt.y);
     marker.setAttribute('display', 'block');
     ab.hitLoc = { x: Math.round(svgPt.x * 10) / 10, y: Math.round(svgPt.y * 10) / 10 };
-    svg.removeEventListener('click', handleClick);
-    setTimeout(() => { popup.style.display = 'none'; updateSprayMini(); autoSave(); }, 400);
-  }
-  svg.addEventListener('click', handleClick);
+    releaseSprayClick();
+    setTimeout(() => { closePopup(popup); updateSprayMini(); autoSave(); }, 400);
+  };
+  svg.addEventListener('click', sprayClickHandler);
 
   document.getElementById('spray-skip').onclick = function() {
-    svg.removeEventListener('click', handleClick);
-    popup.style.display = 'none';
+    closePopup(popup);
   };
 }
 
@@ -2218,8 +2303,7 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
   html += `<div id="oc-508a" style="display:none;font-size:10px;color:var(--accent);margin:2px 0 6px;line-height:1.4">${escapeHtml(NO_RUN_508A)}</div>`;
   html += `<button id="oc-confirm" style="margin-top:6px;width:100%;padding:7px;font-size:12px;font-weight:700;background:var(--navy);color:var(--gold);border:none;border-radius:4px;cursor:pointer;font-family:var(--heading);letter-spacing:0.5px;text-transform:uppercase">Confirm</button>`;
   popup.innerHTML = html;
-  showPopupBackdrop();
-  popup.style.display = 'block';
+  openPopup(popup);
 
   // Every runner still on a base after the play, plus the batter if he ends up on
   // one, as `runnerOrderConflicts` wants them. A runner who is out drops out of the
@@ -2403,8 +2487,7 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
         return;
       }
     }
-    popup.style.display = 'none';
-    hidePopupBackdrop();
+    closePopup(popup);
     callback(outcomes);
   };
 }
@@ -2676,8 +2759,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
 
   html += `<button id="rp-confirm" style="margin-top:6px;width:100%;padding:6px;font-size:12px;font-weight:700;background:#333;color:#fff;border:none;border-radius:4px;cursor:pointer">Confirm</button>`;
   popup.innerHTML = html;
-  showPopupBackdrop();
-  popup.style.display = 'block';
+  openPopup(popup);
 
   // Where everyone ends up, as `runnerOrderConflicts` wants it. A runner thrown out
   // (negative dest) leaves the ordering: the base he was heading for is free for the
@@ -2770,8 +2852,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
       return;
     }
 
-    popup.style.display = 'none';
-    hidePopupBackdrop();
+    closePopup(popup);
     callback(choices);
   };
 }
@@ -3277,19 +3358,27 @@ function showStrikeoutPopup(target) {
       + '<div style="display:flex;gap:12px;justify-content:center">'
       + '<button id="k-swinging" style="padding:10px 24px;font-size:16px;font-weight:700;font-family:var(--heading);background:var(--navy);color:var(--gold);border:none;border-radius:6px;cursor:pointer;letter-spacing:1px">K<br><span style=font-size:10px>SWINGING</span></button>'
       + '<button id="k-looking" style="padding:10px 24px;font-size:16px;font-weight:700;font-family:var(--heading);background:var(--navy);color:var(--gold);border:none;border-radius:6px;cursor:pointer;letter-spacing:1px">ꓘ<br><span style=font-size:10px>LOOKING</span></button>'
-      + '</div>';
+      + '</div>'
+      // This popup opens by itself at the third strike and offered only the two
+      // ways an at-bat ends there — and being on the pending list it disables the
+      // undo that would otherwise be the way out. A foul tip the catcher held, a
+      // dropped third strike, a miscounted pitch: all of them left the scorer
+      // with a popup and no exit (F6).
+      + '<button id="k-cancel" style="margin-top:12px;width:100%;padding:6px;font-size:11px;font-family:var(--font);border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel — not a strikeout</button>';
     document.body.appendChild(popup);
   }
   // Rebound on every open so the handlers apply to the batter captured above,
   // not to whatever cell is selected when the button is finally pressed (#1).
   document.getElementById('k-swinging').onclick = function() {
-    popup.style.display = 'none'; hidePopupBackdrop(); applyPlay('K', t);
+    closePopup(popup); applyPlay('K', t);
   };
   document.getElementById('k-looking').onclick = function() {
-    popup.style.display = 'none'; hidePopupBackdrop(); applyPlay('ꓘ', t);
+    closePopup(popup); applyPlay('ꓘ', t);
   };
-  showPopupBackdrop();
-  popup.style.display = 'block';
+  // Nothing is written, so the count stays at three strikes and the at-bat is
+  // still the scorer's to finish however it actually ended.
+  document.getElementById('k-cancel').onclick = function() { closePopup(popup); };
+  openPopup(popup);
 }
 
 /* The pitcher's name as the card has him right now, the way `getActivePlayerName`
@@ -3709,14 +3798,21 @@ function showBasePickerPopup(title, options, callback) {
     html += '<button class="bp-opt" data-from="' + o.from + '" data-extra="' + (o.extra || '') + '" style="padding:8px 20px;font-size:13px;font-weight:600;font-family:var(--heading);background:' + bg + ';color:' + fg + ';border:none;border-radius:5px;cursor:pointer;letter-spacing:0.5px">' + o.label + '</button>';
   });
   html += '</div>';
+  // SB, CS and PK all come through here, and none of them had a way out: the
+  // picker offered only the bases and rendered with no backdrop, so the way to
+  // escape a mis-tapped SB was to tap the card behind it — which is the tap that
+  // switched the half-inning under the picker in the first place (F6).
+  html += '<button id="bp-cancel" style="margin-top:10px;width:100%;padding:6px;font-size:11px;font-family:var(--font);border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button>';
   popup.innerHTML = html;
-  popup.style.display = 'block';
+  openPopup(popup);
   popup.querySelectorAll('.bp-opt').forEach(btn => {
     btn.onclick = function() {
-      popup.style.display = 'none';
+      closePopup(popup);
       callback(parseInt(this.dataset.from), this.dataset.extra || '');
     };
   });
+  // No callback: the picker writes nothing until a base is chosen.
+  document.getElementById('bp-cancel').onclick = function() { closePopup(popup); };
 }
 
 /* Why each of these needs somebody on base, in the words a scorer would use. Rule
@@ -3968,7 +4064,7 @@ function editPlayType() {
   html += '<div style="display:flex;gap:6px"><button id="ep-confirm" style="flex:1;padding:6px;font-size:12px;font-weight:700;background:var(--navy);color:var(--gold);border:none;border-radius:4px;cursor:pointer;font-family:var(--heading);text-transform:uppercase">Apply</button>';
   html += '<button id="ep-cancel" style="padding:6px 12px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button></div>';
   popup.innerHTML = html;
-  popup.style.display = 'block';
+  openPopup(popup);
   let chosen = ab.play;
   popup.querySelectorAll('.ep-btn').forEach(btn => {
     btn.onclick = function() {
@@ -3978,12 +4074,12 @@ function editPlayType() {
       this.style.borderColor = 'var(--navy)'; this.style.background = 'var(--navy)'; this.style.color = 'var(--gold)';
     };
   });
-  document.getElementById('ep-cancel').onclick = function() { popup.style.display = 'none'; };
+  document.getElementById('ep-cancel').onclick = function() { closePopup(popup); };
   document.getElementById('ep-confirm').onclick = function() {
     // Normalize a typed "GO 6-3" the same way the position popup does (#15).
     const custom = normalizePlayCode(document.getElementById('ep-custom').value.trim());
     const newPlay = custom || chosen;
-    if (!newPlay || newPlay === ab.play) { popup.style.display = 'none'; return; }
+    if (!newPlay || newPlay === ab.play) { closePopup(popup); return; }
     const realInn = getRealInning(team, innIdx);
     const inn = getInnState(team, innIdx);
     const nowOut = isOutPlay(newPlay) || newPlay === 'K' || newPlay === 'ꓘ';
@@ -3996,7 +4092,7 @@ function editPlayType() {
       showPlayReject(INNING_OVER);
       return;
     }
-    popup.style.display = 'none';
+    closePopup(popup);
     pushUndo(team, pIdx, innIdx);
     const prev = captureInning(team, innIdx);
 
@@ -4160,7 +4256,7 @@ function moveRunner() {
   });
   html += '<button data-act="hidePopupById" data-arg="move-runner-popup" style="margin-top:4px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Close</button>';
   popup.innerHTML = html;
-  popup.style.display = 'block';
+  openPopup(popup);
   popup.querySelectorAll('.mr-btn').forEach(btn => {
     btn.onclick = function() {
       const from = parseInt(this.dataset.from);
@@ -4208,7 +4304,7 @@ function moveRunner() {
       }
       renderDiamond(team, rn.p, rn.col);
       renderOut(team, rn.p, rn.col);
-      popup.style.display = 'none';
+      closePopup(popup);
       // The same tail every other mutator ends in (M1). This used to run
       // `updateInningRuns` and two of the updates by hand, and so a runner moved
       // home reached the linescore and the batter's own R without ever reaching
@@ -4429,7 +4525,7 @@ function reviewEarnedRuns() {
   html += '<button data-act="hidePopupById" data-arg="er-review-popup" style="margin-top:10px;width:100%;padding:6px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Done</button>';
 
   popup.innerHTML = html;
-  popup.style.display = 'block';
+  openPopup(popup);
 }
 
 function setRunEarnedByIndex(idx, unearned) {
@@ -5157,8 +5253,7 @@ function showPositionPopup(prefix, placeholder, target) {
   const input = document.getElementById('pos-input');
   input.value = '';
   input.placeholder = placeholder || '7';
-  showPopupBackdrop();
-  popup.style.display = 'flex';
+  openPopup(popup, 'flex');
   popup.dataset.prefix = prefix;
   setTimeout(() => input.focus(), 10);
 
@@ -5166,16 +5261,14 @@ function showPositionPopup(prefix, placeholder, target) {
     if (e.key === 'Enter') {
       e.preventDefault();
       const val = input.value.trim();
-      popup.style.display = 'none';
-      hidePopupBackdrop();
+      closePopup(popup);
       input.blur();
       // Normalize here so only canonical codes reach state — a scorer typing
       // "GO 6-3" gets "6-3", which the rest of the app recognises as an out (#15).
       if (val) applyPlay(normalizePlayCode(prefix + val), t);
     } else if (e.key === 'Escape') {
       e.preventDefault();
-      popup.style.display = 'none';
-      hidePopupBackdrop();
+      closePopup(popup);
       input.blur();
     }
   };
@@ -5423,7 +5516,7 @@ function changePitcher() {
   });
   html += '<button data-act="hidePopupById" data-arg="pitcher-popup" style="margin-top:6px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button>';
   popup.innerHTML = html;
-  popup.style.display = 'block';
+  openPopup(popup);
 }
 
 /* ------------------------------------------------------- substitutions ---
@@ -5665,14 +5758,14 @@ function promptSubRemoval(team, pIdx, innIdx) {
   }
   html += '<button class="sub-opt" data-key="cancel" style="display:block;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer;font-family:var(--font)">Cancel</button>';
   popup.innerHTML = html;
-  popup.style.display = 'block';
+  openPopup(popup);
 
   popup.querySelectorAll('.sub-opt').forEach(btn => {
     btn.onclick = function () {
       const key = this.dataset.key;
       const box = document.getElementById('sub-allow-reentry');
       const nowAllowed = !!(box && box.checked);
-      popup.style.display = 'none';
+      closePopup(popup);
       if (key === 'cancel') return;
       if (nowAllowed) {
         if (!gameState.rules) gameState.rules = { allowReentry: false };
@@ -5860,11 +5953,11 @@ function promptDHChoice(team, spec) {
       '</button>';
   });
   popup.innerHTML = html;
-  popup.style.display = 'block';
+  openPopup(popup);
   popup.querySelectorAll('.dh-opt').forEach(btn => {
     btn.onclick = function () {
       const opt = spec.options[parseInt(this.dataset.idx)];
-      popup.style.display = 'none';
+      closePopup(popup);
       if (opt && opt.run) opt.run();
     };
   });
@@ -5902,7 +5995,7 @@ function changeFieldPos() {
   html += '</div>';
   html += '<button data-act="hidePopupById" data-arg="pos-change-popup" style="margin-top:10px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button>';
   popup.innerHTML = html;
-  popup.style.display = 'block';
+  openPopup(popup);
 }
 
 function applyFieldPos(team, starterP, pos, innLabel) {
@@ -5931,11 +6024,10 @@ function applyFieldPos(team, starterP, pos, innLabel) {
     if (prevEntry >= 0) existing.changes.splice(prevEntry, 1);
     existing.changes.push({ pIdx: starterP, fromPos: oldPos, toPos: pos, name: displayName });
   }
-  // L5: the popup that builds it lazily is this function's only caller, so the
-  // dereference is latent — but it is one line from a crash that would take the
-  // position change with it, and m6 guarded the identical shape in `setPitcher`.
-  const popup = document.getElementById('pos-change-popup');
-  if (popup) popup.style.display = 'none';
+  // L5: the popup that builds it lazily is this function's only caller, so a bare
+  // dereference here is one line from a crash that would take the position change
+  // with it. `closePopupById` carries the null check, and the backdrop with it.
+  closePopupById('pos-change-popup');
   autoSave();
   // After the popup is down, so a DH question doesn't open behind it.
   if (oldPos !== pos) checkDHRules(team, starterP, oldPos, pos, innLabel);
@@ -5958,9 +6050,9 @@ function setPitcher(idx) {
   renderPitcherChange(team, pIdx, innIdx);
   // changePitcher builds #pitcher-popup lazily, so it exists only because the popup
   // is this function's only caller. Guarded rather than relying on that (m6) — every
-  // other popup in the file is dismissed through a null check or hidePopupById.
-  const popup = document.getElementById('pitcher-popup');
-  if (popup) popup.style.display = 'none';
+  // popup in the file is now dismissed through closePopup, which carries both the
+  // null check and the backdrop.
+  closePopupById('pitcher-popup');
   // The panel names the man on the mound now, so the handover has to reach it here
   // — otherwise it keeps naming the pitcher who just left until the next pitch.
   updateSituation();
@@ -6122,9 +6214,9 @@ function recomputePitcherAssignments() {
     html += '<button id="rc-cancel" style="padding:7px 12px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button></div>';
   }
   popup.innerHTML = html;
-  popup.style.display = 'block';
+  openPopup(popup);
   const cancel = document.getElementById('rc-cancel');
-  if (cancel) cancel.onclick = () => { popup.style.display = 'none'; };
+  if (cancel) cancel.onclick = () => { closePopup(popup); };
   const apply = document.getElementById('rc-apply');
   if (apply) apply.onclick = () => {
     // The outs are worked out against the attribution the plan is replacing, so
@@ -6135,7 +6227,7 @@ function recomputePitcherAssignments() {
     updatePitcherStats('visiting');
     updatePitcherStats('home');
     autoSave();
-    popup.style.display = 'none';
+    closePopup(popup);
   };
 }
 
@@ -6768,14 +6860,18 @@ function promptPitcherDecision(which) {
     html += '<button class="dp-opt" data-idx="none" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-bottom:4px;border:1.5px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-family:var(--font)">No save</button>';
   }
   html += '<button class="dp-opt" data-idx="auto" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-top:6px;border:1.5px solid var(--navy);border-radius:4px;background:var(--cream);cursor:pointer;font-size:12px;font-weight:700;font-family:var(--font)">Auto (apply the rules)</button>';
+  html += '<button id="dp-cancel" style="display:block;width:100%;margin-top:6px;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer;font-family:var(--font)">Cancel</button>';
   popup.innerHTML = html;
-  popup.style.display = 'block';
+  openPopup(popup);
   popup.querySelectorAll('.dp-opt').forEach(btn => {
     btn.onclick = function() {
-      popup.style.display = 'none';
+      closePopup(popup);
       setPitcherDecision(which, this.dataset.idx);
     };
   });
+  // "Auto" is the way back to the rules; this is the way out without touching the
+  // override at all, which is not the same thing once one has been set.
+  document.getElementById('dp-cancel').onclick = function() { closePopup(popup); };
 }
 
 function setPitcherDecision(which, raw) {
@@ -7305,7 +7401,17 @@ document.addEventListener('keydown', function(e) {
   const inInput = document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'SELECT');
   if (inInput) return;
   if (e.key === '?' || (e.key === '/' && !e.shiftKey)) { e.preventDefault(); document.getElementById('hotkey-modal').classList.toggle('active'); return; }
-  if (e.key === 'Escape') { document.getElementById('hotkey-modal')?.classList.remove('active'); document.getElementById('game-summary-modal')?.classList.remove('active'); return; }
+  if (e.key === 'Escape') {
+    document.getElementById('hotkey-modal')?.classList.remove('active');
+    document.getElementById('game-summary-modal')?.classList.remove('active');
+    // Escape closed the two modals and nothing else, so on a Magic Keyboard the
+    // popups were as inescapable as they were under a finger. Same rule as the
+    // backdrop: what can be cancelled is cancelled, what must be answered says so.
+    const stuck = blockingPopup();
+    if (stuck) showPlayReject(MUST_ANSWER_WHY[stuck] || 'Finish the open entry first.');
+    else openGuardedPopups().forEach(closePopupById);
+    return;
+  }
   if (!selectedCell) return;
 
   const team = selectedCell.dataset.team;
@@ -7373,8 +7479,10 @@ document.addEventListener('keydown', function(e) {
 // The generated popups dispatch through the same listener, so their buttons
 // need named actions too rather than expressions in an attribute.
 function hidePopupById(id) {
-  const el = document.getElementById(id);
-  if (el) el.style.display = 'none';
+  // Through closePopup so the backdrop comes down with the popup — six of the
+  // eight buttons wired to this action are the Cancel of a popup that had no
+  // backdrop at all before F6.
+  closePopupById(id);
 }
 function closeGameSummary() {
   const el = document.getElementById('game-summary-modal');

@@ -2875,14 +2875,18 @@
   });
 
   // Both entry popups get a backdrop, so the tap never reaches the grid in the
-  // first place — the guards above are the belt to its braces.
+  // first place — the guards above are the belt to its braces. The spray popup
+  // that opens behind the answered runner popup keeps the backdrop up: it is
+  // guarded too since F6, and this is the two-popups-in-a-row path.
   test('the entry popups draw a backdrop over the card', () => {
     sel('visiting', 0, 0);
     play('1B');
     play('2B');
     ok('the backdrop is up with the runner popup', visible('popup-backdrop'));
     runnerPopup({ 0: 2, batter: 1 });
-    ok('and gone once it is answered', !visible('popup-backdrop'));
+    ok('the spray popup takes it over', visible('spray-popup'));
+    clickId('spray-skip');
+    ok('and it is gone once nothing is open', !visible('popup-backdrop'));
   });
 
   // The spray popup opens by itself after every hit and only writes hitLoc, so
@@ -2894,6 +2898,115 @@
     key('u');
     eq('the single is gone', ab('visiting', 0, 0).play, '');
     ok('and the spray popup went with it', !visible('spray-popup'));
+    ok('and the backdrop went with it too', !visible('popup-backdrop'));
+  });
+
+  /* ------------------------------------------------------------------ F6 ---
+     A popup drawn over the card with no backdrop leaves the card live under it.
+     The review reproduced the damage by touch: open the pickoff picker, tap the
+     Visiting tab behind it, and the picker applied against the half-inning it
+     had captured when it opened. Eleven popups render over the card; four had a
+     backdrop. */
+
+  // The guard list is derived rather than written out a second time, which is
+  // how it came to be missing seven of the popups it names.
+  test('every popup that renders over the card raises the backdrop', () => {
+    const guarded = backdropGuarded();
+    ['spray-popup', 'base-picker', 'edit-play-popup', 'move-runner-popup',
+     'er-review-popup', 'recompute-popup', 'sub-popup', 'dh-popup',
+     'pitcher-popup', 'pos-change-popup', 'decision-popup'].forEach(id => {
+      ok(id + ' is guarded', guarded.indexOf(id) >= 0);
+    });
+  });
+
+  test('the base picker raises the backdrop and drops it again', () => {
+    sel('visiting', 0, 0);
+    play('3B');
+    clickId('spray-skip');
+    sel('visiting', 3, 0);
+    play('1B');
+    runnerPopup({ 2: 2, batter: 0 });               // holds third, batter to first
+    clickId('spray-skip');
+    // First and third, so SB has two bases to offer rather than applying straight.
+    promptSBBase();
+    ok('the picker is open', visible('base-picker'));
+    ok('and the backdrop with it', visible('popup-backdrop'));
+    clickId('bp-cancel');
+    ok('Cancel closes it', !visible('base-picker'));
+    ok('and takes the backdrop down', !visible('popup-backdrop'));
+    eq('the man on first stayed there', onB('visiting', 0, 0), 3);
+    eq('and the man on third with him', onB('visiting', 0, 2), 0);
+  });
+
+  // The tap the review used to switch the card under the picker now lands on the
+  // backdrop, and the backdrop closes the picker rather than swallowing in silence.
+  test('a tap behind the base picker closes it instead of reaching the card', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    clickId('spray-skip');
+    promptPickoff();
+    ok('the picker is open', visible('base-picker'));
+    clickId('popup-backdrop');
+    ok('the tap closed the picker', !visible('base-picker'));
+    ok('and the backdrop went with it', !visible('popup-backdrop'));
+    eq('the runner is still on first', onB('visiting', 0,0), 0);
+    eq('and no out was recorded', inn('visiting', 0).outs, 0);
+  });
+
+  // The strikeout popup opens by itself at three strikes and is on the pending
+  // list, so it disabled the undo that would have been the way out of it.
+  test('the strikeout popup can be cancelled', () => {
+    sel('visiting', 0, 0);
+    pitch('S'); pitch('S'); pitch('S');
+    ok('the popup opened by itself', visible('k-popup'));
+    ok('behind a backdrop', visible('popup-backdrop'));
+    clickId('k-cancel');
+    ok('Cancel closes it', !visible('k-popup'));
+    ok('and drops the backdrop', !visible('popup-backdrop'));
+    eq('no strikeout was written', ab('visiting', 0, 0).play, '');
+    eq('and the count is where it was', getPitchCount(ab('visiting', 0, 0).pitches).strikes, 3);
+  });
+
+  // The two that own a half-written entry are the exception: a tap outside says
+  // so rather than dismissing them.
+  test('a tap behind the runner popup is refused, not obeyed', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    clickId('spray-skip');
+    sel('visiting', 3, 0);
+    play('2B');
+    ok('the runner popup is open', visible('runner-popup'));
+    clickId('popup-backdrop');
+    ok('it is still open', visible('runner-popup'));
+    ok('and the tap was answered', visible('play-reject'));
+    ok('with the reason',
+      document.getElementById('play-reject').textContent.indexOf('Finish the open entry') >= 0);
+    runnerPopup({ 0: 3, batter: 2 });
+    clickId('spray-skip');
+  });
+
+  // Escape closed the two modals and nothing else, so a Magic Keyboard was no
+  // better off than a finger.
+  test('Escape closes a popup that can be cancelled', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    ok('the spray popup is up', visible('spray-popup'));
+    key('Escape');
+    ok('Escape closed it', !visible('spray-popup'));
+    ok('and the backdrop with it', !visible('popup-backdrop'));
+  });
+
+  // The spray handler lives on the SVG, not on the popup, so every close path has
+  // to take it off — a handler left attached belongs to the previous at-bat and
+  // would write the next hit's location onto it. Asserted on the binding rather
+  // than by clicking the field: jsdom has no SVG geometry to click with.
+  test('a spray popup closed from outside releases the field', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    ok('the field is listening', sprayClickHandler !== null);
+    clickId('popup-backdrop');
+    ok('the popup closed', !visible('spray-popup'));
+    ok('and let go of the field', sprayClickHandler === null);
   });
 
   /* =====================================================================
