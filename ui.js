@@ -51,16 +51,10 @@ document.addEventListener('keydown', function (e) {
   document.querySelectorAll('details.info-details[open]').forEach(function (d) { d.open = false; });
 });
 
-/* app.js's toggleQBDrawer() rewrites the drawer button to '···' / '∧'.
-   Put the words back after it runs. */
-document.addEventListener('click', function (e) {
-  if (!(e.target.closest && e.target.closest('.qb-more-btn'))) return;
-  setTimeout(function () {
-    document.querySelectorAll('.qb-more-btn').forEach(function (btn) {
-      btn.textContent = btn.classList.contains('open') ? 'Fewer plays' : 'More plays';
-    });
-  }, 0);
-});
+/* The drawer button's words used to be put back here, on its own click listener,
+   after app.js's toggleQBDrawer() rewrote it to '···' / '∧'. It lives in `fit()` now
+   — see the note there — because the label has to be right at rest, not just after a
+   press, and `fit()` is the thing that already runs on load and on every resize. */
 
 /* ---------------------------------------------------------------
    One Notes box, both team tabs.
@@ -141,6 +135,21 @@ document.addEventListener('click', function (e) {
        Reserving only `.qb-core` there would leave 98px of buttons sitting over the
        bottom of the order permanently, which is F9 made worse rather than fixed. */
     var flat = window.innerWidth >= FLAT_DRAWER;
+
+    /* The button's words, derived from the drawer rather than flipped on the press.
+       app.js writes '···' / '∧' synchronously; this puts the words back, and does it
+       on load and on every resize as well — which matters because laid flat the deck
+       starts *showing*, so a button that only ever changed on a press sat there
+       reading "More plays" over two rows of plays already on screen. That is the F15
+       mislabel over again. `refit()` runs on every `[data-act]` click, so the press is
+       covered by the same call. (F21) */
+    var d = document.querySelector('.tab-content.active .qb-drawer');
+    var showing = !!d && (flat ? !d.classList.contains('collapsed') : d.classList.contains('open'));
+    document.querySelectorAll('.qb-more-btn').forEach(function (btn) {
+      btn.classList.toggle('open', showing);
+      btn.textContent = showing ? 'Fewer plays' : 'More plays';
+    });
+
     var box = document.querySelector(
       '.tab-content.active ' + (flat ? '.quick-bar' : '.qb-core'));
     var deck = box ? Math.ceil(box.getBoundingClientRect().height) : 0;
@@ -198,6 +207,13 @@ document.addEventListener('click', function (e) {
      scorer's fingers rather than on a press. Coalesced to one measurement
      per frame, so a whole name costs one. */
   document.addEventListener('input', refit);
+  /* Laid flat the deck's height is reserved, so folding it away hands ~114px back to
+     the batting rows — but the click above measures on the next frame, 200ms before
+     the padding has finished animating, and would bake in a stale height. Measure
+     again when it settles. Fires once per property; refit coalesces them. (F21) */
+  document.addEventListener('transitionend', function (e) {
+    if (e.target.classList && e.target.classList.contains('qb-drawer')) refit();
+  });
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit);
   window.addEventListener('load', refit);
   refit();

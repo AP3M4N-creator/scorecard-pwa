@@ -1314,8 +1314,15 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
   }
   .qb-drawer .qbg-tabs { display: none; }
   .qb-drawer .qbg-panel { display: contents; }
-  /* Nothing left to open. */
-  .qb-more-btn { display: none; }
+
+  /* Flat is the resting state, so the button folds the two rows *away* rather than
+     revealing them — the inverse of what `.open` means below this width, which is why
+     it keys off its own class. Worth having: `fit()` measures the whole `.quick-bar`
+     up here, so collapsing hands its ~114px straight back to the batting rows. The
+     button is no longer hidden; there is something to close. (F21) */
+  .tab-content.active .qb-drawer.collapsed {
+    max-height: 0; opacity: 0; overflow: hidden; padding: 0; border-bottom: none;
+  }
 }
 
 /* Below that the drawer still opens over the card, and its height is still not

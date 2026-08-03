@@ -5696,6 +5696,80 @@
     ok('and today has not been written over it', gameState.info.date !== new Date().toLocaleDateString());
   });
 
+  /* F21 — F9-B laid the extra plays flat at ≥1100px and hid the toggle ("nothing left
+     to open"), which also meant the deck's 114px could never be given back. Adam asked
+     for it collapsible. The two modes default opposite ways, so the button toggles
+     `.collapsed` up there and `.open` below — and that inversion is the thing to guard:
+     get it backwards and every card comes up with its deck folded shut. */
+  function atWidth(w, fn) {
+    const real = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { value: w, configurable: true });
+    try { fn(); } finally {
+      Object.defineProperty(window, 'innerWidth', { value: real, configurable: true });
+      document.querySelectorAll('.qb-drawer').forEach(d => d.classList.remove('open', 'collapsed'));
+      document.querySelectorAll('.qb-more-btn').forEach(b => b.classList.remove('open'));
+      document.body.classList.remove('drawer-open');
+    }
+  }
+  const drawer = () => document.querySelector('#tab-visiting .qb-drawer');
+  const moreBtn = () => document.querySelector('#tab-visiting .qb-more-btn');
+
+  test('laid flat, the deck starts open and the button folds it away', () => {
+    atWidth(1194, () => {                            // iPad landscape
+      ok('nothing is collapsed to begin with', !drawer().classList.contains('collapsed'));
+      toggleQBDrawer();
+      ok('one press folds it away', drawer().classList.contains('collapsed'));
+      ok('and the button stops reading as open', !moreBtn().classList.contains('open'));
+      // Its height is reserved up here, so the card is never behind it — the grid must
+      // not take the overlay scroll F9-A gives the narrow drawer.
+      ok('the grid keeps the page scroll', !document.body.classList.contains('drawer-open'));
+      toggleQBDrawer();
+      ok('and a second press brings it back', !drawer().classList.contains('collapsed'));
+      ok('with the button open again', moreBtn().classList.contains('open'));
+    });
+  });
+
+  test('below that width it is still a drawer that starts shut', () => {
+    atWidth(834, () => {                             // iPad portrait
+      ok('shut to begin with', !drawer().classList.contains('open'));
+      toggleQBDrawer();
+      ok('one press opens it', drawer().classList.contains('open'));
+      ok('it never uses the flat class', !drawer().classList.contains('collapsed'));
+      // It opens *over* the card down here, so the rows behind it need their own scroll.
+      ok('the grid takes its own scroll', document.body.classList.contains('drawer-open'));
+      toggleQBDrawer();
+      ok('and a second press shuts it', !drawer().classList.contains('open'));
+      ok('releasing the grid scroll with it', !document.body.classList.contains('drawer-open'));
+    });
+  });
+
+  /* Only one of the two classes is ever set, or turning the iPad shows you the
+     leftovers of a press you made in the other orientation. */
+  test('turning the iPad does not leave the other mode\'s state behind', () => {
+    const real = window.innerWidth;
+    const width = w => Object.defineProperty(window, 'innerWidth', { value: w, configurable: true });
+    try {
+      width(1194);
+      toggleQBDrawer();                              // folded away in landscape
+      ok('folded', drawer().classList.contains('collapsed'));
+      width(834);
+      ok('turning it does not spring the drawer open', !drawer().classList.contains('open'));
+      toggleQBDrawer();
+      ok('the portrait press opens it', drawer().classList.contains('open'));
+      ok('and drops the landscape fold with it', !drawer().classList.contains('collapsed'));
+      width(1194);
+      ok('so turning back shows the deck, not a fold', !drawer().classList.contains('collapsed'));
+      toggleQBDrawer();
+      ok('folding again works from there', drawer().classList.contains('collapsed'));
+      ok('and drops the portrait open state', !drawer().classList.contains('open'));
+    } finally {
+      width(real);
+      document.querySelectorAll('.qb-drawer').forEach(d => d.classList.remove('open', 'collapsed'));
+      document.querySelectorAll('.qb-more-btn').forEach(b => b.classList.remove('open'));
+      document.body.classList.remove('drawer-open');
+    }
+  });
+
   test('the game summary draws the chart it wires up', () => {
     gameState.info.visitingTeam = 'Astros';
     gameState.info.homeTeam = 'Rangers';

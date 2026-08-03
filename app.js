@@ -6655,18 +6655,44 @@ function recomputePitcherAssignments() {
 }
 
 /* Play-by-Play Log (Feature 7) */
+/* Keep in step with the `min-width: 1100px` block in styles.css and `FLAT_DRAWER`
+   in ui.js — all three have to agree on where the drawer stops being a drawer. */
+const FLAT_DRAWER = 1100;
+
+/* Two modes that default opposite ways, which is the whole reason this branches on
+   width. Below FLAT_DRAWER the extra plays are a drawer: shut by default, opening
+   *over* the card. At and above it the stylesheet lays them flat on the deck and open
+   is the resting state (F9-B), so what the button does up there is fold them away
+   again — and it has to toggle the inverted class, or every card would come up with
+   its deck collapsed. `showing` is the one question both modes answer, so the button's
+   own state and label stay identical either way. (F21) */
 function toggleQBDrawer() {
   const drawers = document.querySelectorAll('.qb-drawer');
   const btns = document.querySelectorAll('.qb-more-btn');
-  const isOpen = drawers[0] && drawers[0].classList.contains('open');
-  drawers.forEach(d => d.classList.toggle('open', !isOpen));
-  btns.forEach(b => { b.classList.toggle('open', !isOpen); b.textContent = isOpen ? '···' : '∧'; });
-  // Below the width at which the drawer is laid flat it opens *over* the card, and
-  // its height is deliberately not reserved — so the grid needs its own scroll while
-  // it is open, and the cell being scored may already be behind the deck. The class
-  // is what the stylesheet keys that scroll off; `fit()` supplies the height (F9-A).
-  document.body.classList.toggle('drawer-open', !isOpen);
-  if (!isOpen && selectedCell && selectedCell.scrollIntoView) {
+  if (!drawers.length) return;
+  const flat = window.innerWidth >= FLAT_DRAWER;
+  const showing = flat
+    ? !drawers[0].classList.contains('collapsed')
+    : drawers[0].classList.contains('open');
+  const show = !showing;                       // what this press is asking for
+
+  // Only ever one of the two set, so rotating the iPad is predictable: the other
+  // mode's class is stale the moment this one is pressed. Leaving both on meant
+  // opening it in portrait and turning to landscape showed a folded deck, because
+  // `.collapsed` from an earlier landscape press was still sitting there. Cleared,
+  // each mode falls back to its own resting state — which is what "I last asked to
+  // see them" and "I last asked to hide them" should both mean after a turn. (F21)
+  drawers.forEach(d => {
+    d.classList.toggle('collapsed', flat && !show);
+    d.classList.toggle('open', !flat && show);
+  });
+  btns.forEach(b => { b.classList.toggle('open', show); b.textContent = show ? '∧' : '···'; });
+  // Only the overlaying drawer needs the grid to take its own scroll: laid flat its
+  // height is reserved, so the card is never behind it and the cell being scored
+  // cannot be hidden by it. The class is what the stylesheet keys that scroll off;
+  // `fit()` supplies the height (F9-A).
+  document.body.classList.toggle('drawer-open', !flat && show);
+  if (!flat && show && selectedCell && selectedCell.scrollIntoView) {
     // After `fit()`, which runs on the same click and is what makes the grid
     // scrollable in the first place — there is nowhere to scroll to before it.
     requestAnimationFrame(() => requestAnimationFrame(() => {

@@ -42,6 +42,7 @@ Do **not** bump `SHELL_VERSION` in `sw.js` by hand — the pre-commit hook does 
 | **F18** | Details doesn't prefill today's date | polish | XS | **done** |
 | **F19** | Lineup entry is 54 taps with no reuse | feature | L | **won't fix** |
 | **F20** | A new card wears the last game's figures | trust | S | **done** |
+| **F21** | Flat deck can't be collapsed, so its 111px never come back | iPad | S | **done** |
 
 The order the work actually went in: **F1 → F2 → F5 → F4 → F3 → F8 → F7 → F6**, then
 F9/F11/F12 together (they are all "how much does entry cost per play"), then F10, then F13,
@@ -435,6 +436,10 @@ and no run scored. Existing single-runner tests must still auto-apply.
 
 ### F9 — the open drawer covers the card and nothing scrolls  ← ruled 2026-08-03: **B + A**
 
+> **Revised by F21.** B hid the toggle at ≥1100px on the grounds that there was nothing
+> left to open. True, but it also meant the 111px B costs could never be handed back.
+> The flat deck is collapsible now; B is otherwise unchanged.
+
 **Adam:** B at ≥ 1100px (flat two-row drawer, no accordion), with A as the fallback below it.
 
 **Measured before building, and the option text was wrong.** The preview said `--cell-h` would
@@ -818,6 +823,45 @@ selection.** Fixed on a branch and merged at `43c7bc6`; the code carries `(F20)`
   moved above `updateLiveStatsFromState`'s `!half` return.
 
 7 new tests, **409 green**.
+
+### F21 — the flat deck cannot be collapsed — **done**
+
+Adam, using it: "on the desktop version you can no longer collapse or open the actions on
+the bottom." Not a regression — F9-B hid `.qb-more-btn` at ≥1100px because with all 33
+buttons on the deck there was nothing left to *reveal*. What that missed is the other
+direction: B costs 111px of card permanently (`.quick-bar` 66px → 177px, which pins
+`--cell-h` to its 44px floor), and with no toggle there was no way to get them back.
+
+**Both modes stay, but they default opposite ways**, which is the whole design problem.
+Below 1100px the extra plays are a drawer: shut at rest, opening *over* the card, and the
+button reveals them. At and above it they are flat on the deck and *showing* at rest, so the
+button folds them away — so the press has to toggle an inverted class (`.collapsed`), or
+every card would come up with its deck shut. `showing` is the one question both modes
+answer, which keeps the button's own state and label identical either way.
+
+Measured at 1194×834, folding the deck away: `.quick-bar` **177px → 66px**, `--cell-h`
+**44px → 55px** (off the floor, a 25% taller row), page scroll **1px → 0**. `fit()` already
+measures the whole `.quick-bar` at that width, so the reclaimed height goes to the batting
+rows on its own.
+
+**Three things this turned up that the request did not mention:**
+
+- **The label was wrong at rest.** ui.js flipped it on the press, so at flat width it sat
+  reading "More plays" over two rows of plays already on screen — the F15 mislabel again. It
+  is derived from the drawer state inside `fit()` now, which runs on load and on every
+  resize, and the separate click listener is gone (`refit()` already fires on any
+  `[data-act]` click). It reads "Fewer plays" at rest in landscape.
+- **`fit()` measured mid-animation.** The click-driven refit runs one frame later, ~200ms
+  before the padding transition ends, so it baked in a stale deck height. A `transitionend`
+  listener on `.qb-drawer` re-measures when it settles.
+- **The two classes could both be set.** Folding in landscape then opening in portrait left
+  `.collapsed` sitting there, so turning back to landscape showed a folded deck instead of
+  the flat default. Each press now clears the other mode's class, so a turn lands on
+  whichever resting state you last asked for.
+
+F9-A is untouched: below 1100px the drawer still opens over the card and still takes the grid
+scroll (`body.drawer-open` is only set when not flat, since the flat deck's height is
+reserved and never covers a cell). 4 new tests, **412 green**.
 
 ---
 
