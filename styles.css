@@ -896,6 +896,29 @@ details.info-details > summary:hover { color: var(--navy); }
   --text-light: rgba(0,50,120,0.72);
   --rule: var(--line-soft);
 
+  /* The five notable plays. These are the only colours on the card that are *not*
+     one of the three brand values tinted — green, gold and purple step outside the
+     skin on purpose, because five plays need five colours a glance can tell apart
+     and navy/red/white cannot supply that many. The assignments are the scorer's
+     own: any hit green, home run gold, strikeout red, walk navy, double play
+     purple. Routine outs get no colour of their own (see .play-go) — most plate
+     appearances are outs, and colouring them would leave the five nothing to stand
+     out against.
+     Translucent, and the alphas are not arbitrary: the card's ink stays navy on
+     every one of them, so each hue is set as bold as it can go while the smallest
+     thing painted over it still clears 4.5:1. The binding constraint is never the
+     15px play text (it has 5.8:1 to spare here) but the 6-7px pitch marks, which
+     is the same reason these started life at 4-14%. Each value below is that
+     ceiling: navy ink lands at 5.81-5.86:1 and a strike mark at 4.50-4.54:1 on all
+     four of the dark hues. Solid fills were tried and abandoned — they force the
+     basepaths, the diamond and the pitch marks to white, and the scorer reads the
+     baserunning off those lines. */
+  --play-hit: rgba(23,105,58,0.40);
+  --play-hr:  rgba(242,194,0,0.40);
+  --play-k:   rgba(192,17,31,0.34);
+  --play-bb:  rgba(0,50,120,0.32);
+  --play-dp:  rgba(106,27,154,0.33);
+
   /* Graduate is the varsity face; the broadsheet fonts stay on as the
      fallback so a missing woff2 degrades to the old skin rather than to
      system-ui. `font-src 'self'` — never link fonts.googleapis.com. */
@@ -1040,32 +1063,40 @@ details.info-details > summary::before { color: var(--rb-red); }
 .at-bat-cell .play-text { color: var(--rb-blue); text-shadow: 0 0 4px #fff, 0 0 8px rgba(255,255,255,.95); }
 .at-bat-cell .out-num.active { color: var(--rb-blue); }
 
-.at-bat-cell.play-hit { background: rgba(0,50,120,0.12) !important; }
-.at-bat-cell.play-hr  { background: var(--rb-red) !important; }
-.at-bat-cell.play-k   { background: rgba(192,17,31,0.14) !important; }
-.at-bat-cell.play-bb  { background: rgba(0,50,120,0.07) !important; }
-.at-bat-cell.play-dp  { background: rgba(192,17,31,0.09) !important; }
+/* The home run used to be the only cell with real colour in it and the other four
+   were 7-14% tints of the two brand values, which put hit, walk and double play in
+   the same navy-or-red family and left the card with one loud cell and four quiet
+   ones. All five now carry their own hue at roughly three times that strength —
+   see the --play-* block for why those particular alphas. */
+.at-bat-cell.play-hit { background: var(--play-hit) !important; }
+.at-bat-cell.play-hr  { background: var(--play-hr)  !important; }
+.at-bat-cell.play-k   { background: var(--play-k)   !important; }
+.at-bat-cell.play-bb  { background: var(--play-bb)  !important; }
+.at-bat-cell.play-dp  { background: var(--play-dp)  !important; }
 .at-bat-cell.play-go  { background: rgba(0,50,120,0.04) !important; }
 
-/* The brand red is 4.42:1 on a .play-k cell and 4.50:1 on .play-hit — the same
-   composite-over-paper grounds the foul mark hits below, and at 6px this is the
-   swing count, not trim. #ae0f18 is the Rangers red taken down ~7%: 5.12:1 on the
-   worst of those grounds, 7.29:1 on a plain cell, and indistinguishable from
-   --rb-red at this size, so a strike still reads red against the foul's navy.
-   Local to the mark on purpose — --rb-red itself stays the brand value, since
-   everywhere else it paints (buttons, the masthead rule, the HR cell) it is either
-   a large solid or a background, and darkening it there would dull the card. */
-.pitch-mark.strike { color: #ae0f18; }
+/* A strike mark is 6px, and it is the smallest thing on the card that has to
+   survive a play colour — so it, not the play text, is what sets how bold those
+   colours can be. #ae0f18 (the brand red taken down ~7%) held 5.12:1 on the old
+   4-14% tints but only 3.06:1 on the strengthened ones, which would have capped
+   every hue at about half its current value. #8f0c14 is the same red darkened
+   again and buys that strength back: 4.50:1 on the green hit, 4.53:1 on the red
+   strikeout, 4.50:1 on the navy walk, 4.54:1 on the purple double play, 7.04:1 on
+   the gold homer, 7.78:1 on a .play-go cell. Still unmistakably red against the
+   foul's navy, which is the distinction that matters at this size. Local to the
+   mark on purpose — --rb-red itself stays the brand value, since everywhere else
+   it paints (buttons, the masthead rule) it is a large solid or a background, and
+   darkening it there would dull the card. */
+.pitch-mark.strike { color: #8f0c14; }
 /* 0.5 measured 2.65:1, and a foul mark is scoring data read at 6-7px in daylight,
-   not decoration. The tinted cells are the hard case: .play-k and .play-hit set a
-   translucent background, which drops the cell's opaque --rb-white and composites
-   over the --paper underneath instead, so a mark there sits on #e8d3da/#d1dbe9 and
-   not on the white the plain cells give it. --text-light's 0.72 only reaches 4.48:1
-   there. 0.78 clears it on every ground measured in-page: 5.19:1 on those two,
-   5.29:1 on a selected cell, 6.47:1 on a plain one. Still lighter than a ball, and
-   the two never share a column anyway — the ball is a ● and the foul an ✕. A homer
-   keeps its own white-on-red override further down. */
-.pitch-mark.foul { color: rgba(0,50,120,0.78); }
+   not decoration. Same story as the strike above: a play colour is now the hard
+   ground rather than the paper, and 0.78 fell to 4.30:1 on the strongest of them.
+   0.88 clears every one — 4.77:1 on the green hit, 4.85:1 on the red strikeout,
+   4.72:1 on the navy walk, 4.76:1 on the purple double play, 7.01:1 on the gold
+   homer. Deliberately short of the full navy a ball gets, because a foul reading
+   lighter than a ball is the only colour cue separating them; the glyphs carry the
+   rest — the ball is a ● and the foul an ✕. */
+.pitch-mark.foul { color: rgba(0,50,120,0.88); }
 .pitch-mark.ball { color: var(--rb-blue); }
 .rbi-dot-mark { background: var(--rb-red); }
 
@@ -1079,25 +1110,32 @@ details.info-details > summary::before { color: var(--rb-red); }
 .diamond-svg.scored .diamond-fill { fill: var(--rb-blue); opacity: .9; }
 .diamond-svg .out-on-path, .diamond-svg .out-on-cross { stroke: var(--rb-blue); }
 .diamond-svg .adv-label { fill: var(--rb-blue); }
-.diamond-wrap:has(.diamond-svg.scored) ~ .play-text { color: var(--rb-white); text-shadow: none; }
+/* Was `color: var(--rb-white)`, and that was only ever right on the home run. The
+   rule reads as "text sitting on a scored diamond's navy fill needs white ink", but
+   it cannot be doing that: the centred text is `.play-text.play-out`, which
+   renderPlay adds only for an out play, and a batter who is out never touches all
+   four bases — so .scored and .play-out cannot co-occur. What it actually catches
+   is every time `.play-on` (bottom-right, clear of the diamond) sits on the cell's
+   own ground, where white is wrong. On the old 7-14% tints that was white on
+   near-white: every single or walk that later scored had an invisible label, and
+   nobody saw it because the homer — the one solid cell — was the only place the
+   rule looked correct. Navy on the strengthened tints: 5.81:1 on the green hit
+   through 9.09:1 on the gold homer. The glow has to be restated rather than just
+   dropped: the base-block copy of this same selector sets `text-shadow: none` and
+   outweighs `.play-text.play-on` four classes to two, so leaving it out here would
+   single these labels out as the only unglowed ones on the card. */
+.diamond-wrap:has(.diamond-svg.scored) ~ .play-text {
+  color: var(--rb-blue); text-shadow: 0 0 3px #fff;
+}
 
-/* A home run inverts the whole cell — white marks on red. This has to sit
-   after the diamond rules above: on a homer every segment carries .reached
-   and the diamond is .scored, and `.diamond-svg .seg.reached .base-line`
-   ties this block on specificity, so source order is what decides. Put it
-   any earlier and the basepaths stay navy on the red ground. */
-.at-bat-cell.play-hr .play-text,
-.at-bat-cell.play-hr .out-num.active { color: var(--rb-white); text-shadow: none; }
-.at-bat-cell.play-hr .diamond-svg .base-line,
-.at-bat-cell.play-hr .diamond-svg .seg.reached .base-line,
-.at-bat-cell.play-hr .diamond-svg.scored .base-line { stroke: var(--rb-white); }
-.at-bat-cell.play-hr .diamond-svg .base-dot,
-.at-bat-cell.play-hr .diamond-svg .seg.reached .base-dot,
-.at-bat-cell.play-hr .diamond-svg .home-dot,
-.at-bat-cell.play-hr .diamond-svg .seg.reached ~ .home-dot { fill: var(--rb-white); }
-.at-bat-cell.play-hr .diamond-svg.scored .diamond-fill { fill: var(--rb-white); opacity: .95; }
-.at-bat-cell.play-hr .diamond-svg .adv-label { fill: var(--rb-white); }
-.at-bat-cell.play-hr .pitch-mark { color: var(--rb-white); }
+/* The UE glyph carries `fill="var(--accent)"` as a presentation attribute, so this
+   rule outweighs it. It renders only on a runner who *scored* (the
+   `scored && reachedOnError` test in renderDiamond), and .scored fills the diamond
+   navy, so the glyph is always on navy and never on the cell ground — where its own
+   red measures 1.93:1 and has never been legible. White is 12.16:1. Unrelated to
+   the tints above; found while checking them and fixed here because it is one line
+   and the same misreading of what the ink sits on. */
+.diamond-svg.scored .ue-mark { fill: var(--rb-white); }
 
 /* ---------- Pitchers, notes, modals ---------- */
 .pitcher-grid th {

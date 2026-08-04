@@ -358,7 +358,7 @@ function diamondSVG(team, playerIdx, innIdx) {
     <g id="oob-${id}-1" display="none"><line class="out-on-path" x1="52" y1="30" x2="38" y2="16"/><line class="out-on-cross" x1="42" y1="12" x2="34" y2="20"/></g>
     <g id="oob-${id}-2" display="none"><line class="out-on-path" x1="30" y1="8" x2="16" y2="22"/><line class="out-on-cross" x1="12" y1="18" x2="20" y2="26"/></g>
     <g id="oob-${id}-3" display="none"><line class="out-on-path" x1="8" y1="30" x2="22" y2="44"/><line class="out-on-cross" x1="18" y1="48" x2="26" y2="40"/></g>
-    <text id="ue-${id}" display="none" x="30" y="31" text-anchor="middle" dominant-baseline="middle" font-size="9" font-weight="800" font-family="var(--mono)" fill="var(--accent)">UE</text>
+    <text class="ue-mark" id="ue-${id}" display="none" x="30" y="31" text-anchor="middle" dominant-baseline="middle" font-size="9" font-weight="800" font-family="var(--mono)" fill="var(--accent)">UE</text>
   </svg>`;
 }
 
