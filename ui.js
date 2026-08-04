@@ -147,12 +147,14 @@ document.addEventListener('keydown', function (e) {
      only shrinks the pitch marks, which size off --cell-h and are already down
      to 6-7px on the iPad. (44px would put a seven-mark column at 5.6px.) */
   var PHONE_MIN = 48;
-  /* Kept verbatim in step with the two phone blocks at the end of styles.css.
-     Asking matchMedia rather than comparing innerWidth/innerHeight here is the
-     whole point: if the CSS and this file disagree about what a phone is, the
-     layout reserves space for one deck and paints another. */
+  /* Kept verbatim in step with the two phone blocks at the end of styles.css —
+     the 740px floor included, which is there because an SE in landscape is 667px
+     and too narrow for that layout. Asking matchMedia rather than comparing
+     innerWidth/innerHeight here is the whole point: if the CSS and this file
+     disagree about what a phone is, the layout reserves space for one deck and
+     paints another. */
   var PHONE_PORTRAIT = '(max-width: 560px)';
-  var PHONE_LANDSCAPE = '(orientation: landscape) and (max-height: 500px) and (min-width: 561px)';
+  var PHONE_LANDSCAPE = '(orientation: landscape) and (max-height: 500px) and (min-width: 740px)';
   function phoneMode() {
     if (window.matchMedia(PHONE_PORTRAIT).matches) return 'portrait';
     if (window.matchMedia(PHONE_LANDSCAPE).matches) return 'landscape';

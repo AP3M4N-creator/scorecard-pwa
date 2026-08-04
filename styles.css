@@ -1417,8 +1417,17 @@ body.drawer-open .tab-content.active .grid-wrap {
    wide a phone in landscape was matching the `min-width: 835px`
    iPad block, which budgets its whole layout against 834px of
    height and was handed 440. No iPad is under 768px tall, so 500px
-   keeps them apart; the min-width keeps a narrow-but-short window
-   in the portrait block, where it belongs.
+   keeps them apart.
+
+   The 740px floor is the other half of that. Landscape only earns
+   its own layout on a phone wide enough to hold the strip and the
+   deck on one row each — a Pro Max is 956 and a 15/16 Pro is 852 to
+   874, but an SE is 667, and at that width the one-row strip, the
+   section bar and the deck all wrap and the batting order is left
+   with the head row and nothing else. Below 740 it falls through to
+   the stacked `max-width: 834px` layout, which is what it had before
+   any of this and which at least scrolls honestly. A short window
+   narrower still belongs to the portrait block.
    ============================================================ */
 
 :root {
@@ -1444,7 +1453,7 @@ body.drawer-open .tab-content.active .grid-wrap {
 
 /* ---------- Phone, both orientations ---------- */
 @media (max-width: 560px),
-       (orientation: landscape) and (max-height: 500px) and (min-width: 561px) {
+       (orientation: landscape) and (max-height: 500px) and (min-width: 740px) {
 
   /* --- The grid --- */
   /* AVG / AB / H / R / RBI / BB are 145px and not one of them is written to
@@ -1682,7 +1691,7 @@ body.drawer-open .tab-content.active .grid-wrap {
 
 
 /* ---------- Phone, landscape ---------- */
-@media (orientation: landscape) and (max-height: 500px) and (min-width: 561px) {
+@media (orientation: landscape) and (max-height: 500px) and (min-width: 740px) {
 
   /* --- Masthead: 56px -> 45px, one row. There is width to spare here. --- */
   /* The side insets are 59px each on a Pro Max in landscape — the sensor
@@ -1726,16 +1735,62 @@ body.drawer-open .tab-content.active .grid-wrap {
   /* --- The grid --- */
   .scoring-grid thead th.inn-col { font-size: 13px; }
 
+  /* All nine innings across, which is the entire point of the landscape layout
+     and was not actually true on the device. --cell-w was left at the 1024px
+     ladder's 75px, so the table wanted 168 + 9x75 = 843px against 798px of grid
+     box and clipped the ninth inning — measured at 956px with no insets, where
+     the table happened to fill the box exactly, and so missed.
+
+     Derived rather than picked, because the number depends on insets this
+     stylesheet cannot see: 100vw is the whole screen including them, so taking
+     both insets and .app's two 20px gutters off it gives the real grid box, and
+     what is left after the 168px frozen block divides by nine. Self-correcting
+     for any landscape phone — 70px on a Pro Max (with or without the insets
+     applied, which is the same 630px of innings either way), 74px on a 16, 51px
+     on an SE.
+
+     The 20px is the grid's own vertical scrollbar, which 100vw does not know
+     about: it takes layout width on a desktop (15px on macOS, 17 on Windows)
+     and none on iOS, where it overlays. Without the allowance the table came out
+     at 799px against a 783px content box here, and would have landed on exactly
+     798 of 798 on the device — no slack for a rounding error in either. 20px
+     covers the widest of them and costs two thirds of a pixel per inning.
+
+     Clamped because the arithmetic has no floor of its own: 52px is the
+     diamond's own width, below which the cell would clip it, and 82px stops a
+     wide short window from inflating the cells past the iPad's own ceiling.
+     Extra innings overflow and scroll, as everywhere else. */
+  :root {
+    --cell-w: clamp(52px, calc((100vw - var(--sa-l) - var(--sa-r) - 40px - 168px - 20px) / 9), 82px);
+  }
+
   /* --- The deck --- */
-  /* One row, not two. At the shared 46px button the thirteen keys plus the
-     label and the separators come to ~947px against 901px of deck, so
-     More-plays wrapped — and a second row costs 52px of a screen that has 145px
-     for the batting order. Tightened to fit: 40px keys, which is the same
-     44x40 target the 835px block calls the .quick-btn standard. */
+  /* One row, not two. A second row costs 45px of a screen that has ~150px for
+     the batting order — it is the difference between three slots and one.
+
+     The width to fit is 798px, not 956px: the deck bleeds to both screen edges
+     and so pays both side insets back in its own padding, and on a Pro Max in
+     landscape those are 59px each. (Which makes an 838px-wide desktop window an
+     exact stand-in for the device, insets being zero there — the deck comes out
+     at 798px either way.)
+
+     Against that, at the shared 46px button, line one came to 816px — and the
+     18px it was over by was entirely the three separators' 4px side margins,
+     which is why an earlier count of the button widths said it fit. Three things
+     were shaved rather than one, so the fit is not resting on any single
+     measurement being exactly right: 40px keys (the same 44x40 target the 835px
+     block calls the .quick-btn standard), 1px separator margins, and a 4px flex
+     gap. Line one measures 774px against the 798px box — 24px of slack, which
+     the self-hosted woff2 faces should not move by more than a pixel or two.
+
+     `flex-wrap: wrap` deliberately stays. If some future combination does
+     overflow, a second row is ugly; a clipped row with unreachable play buttons
+     is worse. */
   .qb-core { padding: 6px 0; }
   .quick-btn { min-height: 40px; min-width: 40px; padding: 5px 8px; font-size: 14px; }
-  .qb-more-btn { min-height: 40px; padding: 5px 10px; font-size: 12px; }
-  .qb-core, .qb-drawer { gap: 5px; }
+  .qb-more-btn { min-height: 40px; padding: 5px 8px; font-size: 11px; }
+  .qb-core, .qb-drawer { gap: 4px; }
+  .qb-sep { margin: 0 1px; }
   .qbg-tab { min-height: 30px; }
   .tab-content.active .quick-bar {
     max-height: 88vh;
