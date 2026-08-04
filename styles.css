@@ -1590,6 +1590,37 @@ body.drawer-open .tab-content.active .grid-wrap {
 
   /* --- Chrome common to both --- */
   .masthead .kicker { display: none; }
+  /* The Details panel hangs `right: 0` off its own summary button. On an iPad
+     that button is at the right end of a wide masthead, so the panel opens
+     leftward into the bar and there is room. On a phone it is not: in portrait
+     the button is mid-row, its right edge 305px in from the left, and a panel
+     408px wide (its own `max-width: calc(100vw - 32px)`) ran from -103px with
+     every field label off the left edge of the screen. Landscape was the same
+     bug 2px deep — 680px of panel anchored 678px in.
+
+     Which used to be survivable and is not any more: the page does not scroll on
+     a phone now, so anything outside the viewport is unreachable rather than
+     merely off the fold.
+
+     So the panel is anchored to the masthead rather than to the button.
+     `.game-info-card` stops being the containing block and `.header-bar` becomes
+     it, which is the right box on both counts: it spans the whole screen (its
+     negative margins bleed it past .app's gutters), so the horizontal rules per
+     orientation below can hold the panel inside the safe area without knowing
+     where the button is; and `top: 100%` is its own height, so the panel sits
+     under the bar at whatever height it settles — 45px in landscape, 74px in
+     portrait, ~110px if the actions wrap. */
+  .header-bar { position: relative; }
+  .game-info-card { position: static; }
+  .info-body { top: calc(100% + 6px); }
+
+  /* Fixed content — eight fields and four umpires, ~298px — so this never bites
+     today. It is here because the panel is the one piece of chrome whose height
+     is not budgeted anywhere, and the page no longer scrolls to rescue it. `vh`
+     first for the rare engine without `dvh`. */
+  .info-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .info-body { max-height: calc(100vh - 130px); }
+  .info-body { max-height: calc(100dvh - 130px); }
   .live-cell .live-label { font-size: 8px; letter-spacing: .08em; }
   .ls-out-dot { width: 9px; height: 9px; }
   /* Same trade the iPad deck makes at 835px: "Score by Innings" is what a
@@ -1632,6 +1663,11 @@ body.drawer-open .tab-content.active .grid-wrap {
     padding: 6px 10px; min-height: 38px; font-size: 12px; letter-spacing: .04em;
   }
   .game-timer .timer-display { min-width: 38px; font-size: 12px; }
+
+  /* Both gutters, so the panel spans the screen — see the anchoring note in the
+     shared block. There is no width to spare in portrait for it to be narrower
+     and still hold twelve fields. */
+  .info-body { left: 12px; right: 12px; width: auto; max-width: none; }
 
   /* --- Scoreboard strip: 197px -> 127px --- */
   .linescore-wrap { padding: 8px 10px; margin: 8px 0 0; }
@@ -1710,6 +1746,16 @@ body.drawer-open .tab-content.active .grid-wrap {
     padding: 5px 10px; min-height: 34px; font-size: 12px;
   }
   .game-timer .timer-display { min-width: 38px; font-size: 12px; }
+
+  /* Right-aligned to the safe gutter, and the base rule's 680px cap goes with it
+     — which is worth more than it looks. Landscape is the orientation with 440px
+     of height and none to spare, and the full 798px lets the twelve fields lay
+     out in fewer rows: the panel is 160px tall instead of the 193px it was at
+     680. The insets are in the cap so the sensor housing cannot take a corner. */
+  .info-body {
+    left: auto; right: calc(20px + var(--sa-r));
+    max-width: calc(100vw - 40px - var(--sa-l) - var(--sa-r));
+  }
 
   /* --- Strip: 97px -> 71px. Stays one row, as it is above 835px. --- */
   .linescore-wrap { padding: 5px 10px; margin: 5px 0 0; gap: 10px; }
