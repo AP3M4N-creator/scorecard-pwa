@@ -217,6 +217,10 @@
             <button class="quick-btn" style="color:var(--accent)" data-act="clearSelectedCell" aria-label="Clear cell">Cell<small>c</small></button>
           </div>
         </div>
+        <!-- Phone only — folds the docked deck away so the whole card can be
+             read. Last child on purpose: the docked deck is `column-reverse`,
+             so this lays out at its top edge. See the deck-handle note in ui.js. -->
+        <button class="deck-handle" data-ui-act="deck" aria-expanded="true">Hide entry</button>
       </div>
 
       <div class="sec-bar">
@@ -332,6 +336,10 @@
             <button class="quick-btn" style="color:var(--accent)" data-act="clearSelectedCell" aria-label="Clear cell">Cell<small>c</small></button>
           </div>
         </div>
+        <!-- Phone only — folds the docked deck away so the whole card can be
+             read. Last child on purpose: the docked deck is `column-reverse`,
+             so this lays out at its top edge. See the deck-handle note in ui.js. -->
+        <button class="deck-handle" data-ui-act="deck" aria-expanded="true">Hide entry</button>
       </div>
 
       <div class="sec-bar">

@@ -25,6 +25,26 @@ document.addEventListener('click', function (e) {
     if (!menu) return;
     var open = menu.classList.toggle('open');
     el.setAttribute('aria-expanded', open ? 'true' : 'false');
+  } else if (act === 'deck') {
+    /* The deck handle — phone only.
+
+       The docked entry deck rests at 174px on a 440px-wide phone, which is
+       three of the nine batting slots, and there is no arrangement of the
+       chrome that gives back enough to show the whole card with it open. So it
+       folds: 174px down to a 32px handle, and the batting rows grow into the
+       space (fit() measures the deck rather than assuming it, so nothing here
+       has to know the number).
+
+       On the body rather than the deck, because there are two decks — one per
+       team tab — and folding is a preference about the screen, not about the
+       team. The drawer's own open/shut state is deliberately left alone, so
+       unfolding gives back exactly what was folded away.
+
+       The label is not written here. fit() derives it from the class, for the
+       same reason it derives the More-plays button's: it has to be right at
+       rest — on load, and after an orientation change that takes the handle
+       out of the layout entirely — and not only after a press. */
+    document.body.classList.toggle('deck-folded');
   }
 });
 
@@ -108,22 +128,46 @@ document.addEventListener('keydown', function (e) {
      --deck-h   what the docked deck actually occupies, so .app
                 reserves that and not a flat 140px
 
-   Below FIT_BREAK (phone, and iPad portrait) the stylesheet's own
-   breakpoint ladder is left alone: the card cannot fit there anyway,
-   and shrinking the cells would only make the scroll harder to read.
+   Below FIT_BREAK — iPad portrait — the stylesheet's own breakpoint
+   ladder is left alone: the card cannot fit there anyway, and
+   shrinking the cells would only make the scroll harder to read.
    Extra innings and shown sub rows overflow past the floor by design
-   — they scroll. --------------------------------------------------- */
+   — they scroll.
+
+   The phone is neither of those and takes its own path, below. ------ */
 (function () {
   /* PAD covers what sits below the grid but outside this measurement:
      .app's 14px gutter under the deck, plus a pixel or two of rounding
      in the row heights. Short-changing it leaves the page 2-3px
      scrollable, which on a touch screen is as annoying as 300px. */
   var FIT_MIN = 44, FIT_MAX = 62, FIT_BREAK = 835, STARTERS = 9, PAD = 18;
+  /* A phone gets a higher floor than the iPad's 44px, because there is nothing
+     to be won by going below it: the grid scrolls inside its own box either
+     way (see the phone note below), so a shorter row buys no extra slot — it
+     only shrinks the pitch marks, which size off --cell-h and are already down
+     to 6-7px on the iPad. (44px would put a seven-mark column at 5.6px.) */
+  var PHONE_MIN = 48;
+  /* Kept verbatim in step with the two phone blocks at the end of styles.css.
+     Asking matchMedia rather than comparing innerWidth/innerHeight here is the
+     whole point: if the CSS and this file disagree about what a phone is, the
+     layout reserves space for one deck and paints another. */
+  var PHONE_PORTRAIT = '(max-width: 560px)';
+  var PHONE_LANDSCAPE = '(orientation: landscape) and (max-height: 500px) and (min-width: 561px)';
+  function phoneMode() {
+    if (window.matchMedia(PHONE_PORTRAIT).matches) return 'portrait';
+    if (window.matchMedia(PHONE_LANDSCAPE).matches) return 'landscape';
+    return null;
+  }
   /* At and above this the stylesheet lays the drawer flat and it stops being a
      drawer — every play button is on the deck all the time. Kept in step with the
      `min-width: 1100px` block in styles.css. */
   var FLAT_DRAWER = 1100;
   var root = document.documentElement, queued = false;
+
+  function boxH(sel) {
+    var e = document.querySelector('.tab-content.active ' + sel);
+    return e ? e.getBoundingClientRect().height : 0;
+  }
 
   function fit() {
     queued = false;
@@ -150,45 +194,106 @@ document.addEventListener('keydown', function (e) {
       btn.textContent = showing ? 'Fewer plays' : 'More plays';
     });
 
-    var box = document.querySelector(
-      '.tab-content.active ' + (flat ? '.quick-bar' : '.qb-core'));
-    var deck = box ? Math.ceil(box.getBoundingClientRect().height) : 0;
+    var phone = phoneMode();
+
+    /* The handle's words, on the same terms as the More-plays button above and
+       for the same reason — they have to be right at rest. An orientation change
+       is the case that makes it necessary here rather than on the press: the
+       handle is `display: none` outside the phone blocks, so turning the phone
+       to landscape and back re-lays it out from the stylesheet, and a label that
+       only ever moved on a click would come back saying the wrong thing. */
+    var folded = document.body.classList.contains('deck-folded');
+    document.querySelectorAll('.deck-handle').forEach(function (btn) {
+      btn.textContent = folded ? 'Show entry' : 'Hide entry';
+      btn.setAttribute('aria-expanded', folded ? 'false' : 'true');
+    });
+
+    /* What the deck occupies at rest. On a phone that is the whole docked bar
+       *less* the drawer: the bar's own 3px rule and its safe-area bottom padding
+       are on screen and have to be reserved, and the drawer must not be — it
+       expands over the card, same as everywhere else. Subtracting the drawer
+       rather than adding up the handle and the core keeps that arithmetic in the
+       stylesheet, where the padding is declared. */
+    var deck = Math.ceil(
+      flat ? boxH('.quick-bar')
+           : phone ? boxH('.quick-bar') - boxH('.qb-drawer')
+                   : boxH('.qb-core'));
     root.style.setProperty('--deck-h', deck + 'px');
 
     var wrap = document.querySelector('.tab-content.active .grid-wrap');
-    if (window.innerWidth < FIT_BREAK || !wrap) { root.style.removeProperty('--cell-h'); return; }
+    if (!wrap) { root.style.removeProperty('--cell-h'); return; }
 
-    /* Narrower than that, the drawer still opens over the card and is still not
-       reserved — so give the grid its own scroll while it is open, or the rows
-       behind the deck cannot be reached at all (F9-A). Only `fit()` knows where the
-       open drawer's top edge actually lands. */
+    var head = wrap.querySelector('thead');
+    var headH = head ? head.getBoundingClientRect().height : 40;
+
+    /* The nine starters are not the only rows in the box. A sub row shows itself
+       the moment a name is typed into it — no toggle involved — and it is
+       content-height, not --cell-h, so the starters have to give up the space or
+       the bottom of the order goes off the end. Measure what is actually on
+       screen: a collapsed row reports no height. Both paths below want this. */
+    var subs = 0;
+    wrap.querySelectorAll('tr.pos-sub').forEach(function (r) {
+      subs += r.getBoundingClientRect().height;
+    });
+
+    /* ---- Phone ----
+       The page does not scroll here; the grid does. Every other block on the
+       screen is chrome the scorer needs to keep still — the scoreboard above,
+       the inning numbers in the head row, the deck below — and page-scrolling a
+       card that is 250px short takes all three away at once. So the grid gets a
+       measured box and its own scroll, and what does not fit scrolls inside it
+       under a head row that is already sticky.
+
+       The ceiling is the deck's top edge in every state: the handle is the
+       docked deck's last child and the deck is laid out `column-reverse`, so the
+       handle sits above both the core and the drawer whatever either is doing.
+       That makes one measurement right for folded, unfolded, and drawer-open,
+       and it is a fixed-position rect, so the safe-area insets are already in
+       it. No page scroll to correct for either — there isn't any. */
+    if (phone) {
+      var handle = document.querySelector('.tab-content.active .deck-handle');
+      var ceiling = handle ? handle.getBoundingClientRect().top
+                           : window.innerHeight - deck;
+      var room = Math.floor(ceiling - wrap.getBoundingClientRect().top - PAD);
+      root.style.setProperty('--grid-max-h', Math.max(120, room) + 'px');
+      /* Grow the rows into whatever the box turns out to be, up to the same
+         62px ceiling the iPad uses, but never below PHONE_MIN — past that a
+         shorter row buys no extra slot, because the box scrolls either way.
+         Folding the deck in portrait is what this is for: the box goes from
+         ~250px to ~570px and all nine slots land on screen at full height.
+
+         Sub rows come out of the starters' share first, then stop mattering:
+         same trade the iPad makes below, and for the same reason. A phone with
+         the Show-sub-rows toggle on has eighteen rows and no arrangement fits
+         them, so let the box scroll rather than shrink the card to 48px for a
+         scroll it does not prevent. */
+      var ph = Math.floor((room - headH - subs) / STARTERS);
+      if (ph < PHONE_MIN) ph = Math.floor((room - headH) / STARTERS);
+      root.style.setProperty('--cell-h', Math.max(PHONE_MIN, Math.min(FIT_MAX, ph)) + 'px');
+      return;
+    }
+
+    root.style.removeProperty('--grid-max-h');
+    if (window.innerWidth < FIT_BREAK) { root.style.removeProperty('--cell-h'); return; }
+
+    /* Narrower than FLAT_DRAWER the drawer still opens over the card and is
+       still not reserved — so give the grid its own scroll while it is open, or
+       the rows behind the deck cannot be reached at all (F9-A). Only `fit()`
+       knows where the open drawer's top edge actually lands. */
     var openDrawer = flat ? null : document.querySelector('.tab-content.active .qb-drawer.open');
     if (openDrawer) {
       var gridTop = wrap.getBoundingClientRect().top;
       var avail = Math.floor(openDrawer.getBoundingClientRect().top - gridTop - PAD);
       root.style.setProperty('--grid-max-h', Math.max(160, avail) + 'px');
-    } else {
-      root.style.removeProperty('--grid-max-h');
     }
 
-    var head = wrap.querySelector('thead');
     /* Document-space top, so a scrolled page still measures the same box. */
     var top = wrap.getBoundingClientRect().top + window.scrollY;
-    var body = window.innerHeight - top - deck - PAD - (head ? head.getBoundingClientRect().height : 40);
+    var body = window.innerHeight - top - deck - PAD - headH;
 
-    /* The nine starters are not the only rows in the box. A sub row shows
-       itself the moment a name is typed into it — no toggle involved — and
-       it is content-height, not --cell-h, so the starters have to give up
-       the space or the bottom of the order slides under the deck. Measure
-       what is actually on screen: a collapsed row reports no height.
-
-       If even the floor cannot swallow them — the Show-sub-rows toggle, all
-       eighteen at once — stop shrinking and let it scroll. A 44px row is a
-       bad trade for a scroll it does not prevent. */
-    var subs = 0;
-    wrap.querySelectorAll('tr.pos-sub').forEach(function (r) {
-      subs += r.getBoundingClientRect().height;
-    });
+    /* If even the floor cannot swallow the sub rows measured above — the
+       Show-sub-rows toggle, all eighteen at once — stop shrinking and let it
+       scroll. A 44px row is a bad trade for a scroll it does not prevent. */
     var h = Math.floor((body - subs) / STARTERS);
     if (h < FIT_MIN) h = Math.floor(body / STARTERS);
     root.style.setProperty('--cell-h', Math.max(FIT_MIN, Math.min(FIT_MAX, h)) + 'px');
@@ -210,9 +315,16 @@ document.addEventListener('keydown', function (e) {
   /* Laid flat the deck's height is reserved, so folding it away hands ~114px back to
      the batting rows — but the click above measures on the next frame, 200ms before
      the padding has finished animating, and would bake in a stale height. Measure
-     again when it settles. Fires once per property; refit coalesces them. (F21) */
+     again when it settles. Fires once per property; refit coalesces them. (F21)
+
+     `.qb-core` is here for the phone's deck handle, which folds the core the same
+     way — 174px back to the batting rows, and the same stale-height trap. It was
+     landing on the right numbers by accident: folding also zeroes the drawer's
+     padding, so the drawer fired a transitionend of its own. Naming the element
+     that is actually animating rather than relying on that. */
   document.addEventListener('transitionend', function (e) {
-    if (e.target.classList && e.target.classList.contains('qb-drawer')) refit();
+    var c = e.target.classList;
+    if (c && (c.contains('qb-drawer') || c.contains('qb-core'))) refit();
   });
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit);
   window.addEventListener('load', refit);

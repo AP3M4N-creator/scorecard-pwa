@@ -487,11 +487,15 @@ function refitNames(force) {
 function buildScoringGrid(team, containerId) {
   const wrap = document.getElementById(containerId);
   let html = '<table class="scoring-grid"><thead><tr>';
-  html += '<th style="width:20px"></th>'; // batting order
-  html += '<th class="player-col" style="width:30px">#</th>';
-  html += '<th class="player-col" style="width:170px">Player</th>';
-  html += '<th style="width:34px">POS</th>';
-  html += '<th style="width:40px">AVG</th>';
+  // Widths are classes, not inline styles. The grid is `table-layout: fixed`, so
+  // this head row resolves every column in the table — and an inline width is
+  // the one thing a media query cannot override. The phone block needs to
+  // narrow the name block and drop AVG outright, so the numbers live in CSS.
+  html += '<th class="ord-col"></th>'; // batting order
+  html += '<th class="player-col num-col">#</th>';
+  html += '<th class="player-col name-col">Player</th>';
+  html += '<th class="pos-col">POS</th>';
+  html += '<th class="avg-col">AVG</th>';
   html += '<th class="stat-col">AB</th><th class="stat-col">H</th><th class="stat-col">R</th><th class="stat-col">RBI</th><th class="stat-col">BB</th>';
   for (let i = 1; i <= INNINGS; i++) html += `<th class="inn-col" data-inn="${i-1}" style="width:var(--cell-w)">${i}</th>`;
   html += '</tr></thead><tbody>';

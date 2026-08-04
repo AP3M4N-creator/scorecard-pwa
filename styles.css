@@ -357,6 +357,17 @@ details.info-details > summary:hover { color: var(--navy); }
   border-bottom: 2px solid var(--text);
 }
 .scoring-grid thead th.player-col { text-align: left; padding-left: 8px; }
+/* The column widths, moved off the inline `style` attributes buildScoringGrid
+   used to write. Same numbers it wrote — deliberately not the `td` widths
+   below, which differ by a pixel or four and have never had any effect:
+   `table-layout: fixed` resolves the whole table from this first row and
+   ignores every width declared on a body cell. Here so the phone block can
+   override them. */
+.scoring-grid thead th.ord-col  { width: 20px; }
+.scoring-grid thead th.num-col  { width: 30px; }
+.scoring-grid thead th.name-col { width: 170px; }
+.scoring-grid thead th.pos-col  { width: 34px; }
+.scoring-grid thead th.avg-col  { width: 40px; }
 .scoring-grid thead th.inn-col {
   font-family: var(--heading); font-size: 15px; color: var(--text); letter-spacing: 0;
   border-bottom: 2px solid var(--text);
@@ -1371,4 +1382,365 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
 body.drawer-open .tab-content.active .grid-wrap {
   max-height: var(--grid-max-h, none);
   overflow-y: auto;
+}
+
+
+/* ============================================================
+   PHONE — keep this block last. Everything above it is the iPad
+   card and none of it changes.
+
+   A 9-batter x 9-inning card does not fit a phone in either
+   orientation, and the two orientations fail in opposite
+   directions, so they get opposite answers rather than one
+   compromise that suits neither:
+
+     portrait  440x956   the height is there, the width is not.
+                         All nine batting slots on screen — even
+                         with the deck up — and the innings scroll
+                         sideways under a frozen name block.
+
+     landscape 956x440   the width is there, the height is not.
+                         All nine innings on screen at once; the
+                         batting slots scroll. Nine rows plus a head
+                         row is 396px and landscape has 419px of
+                         usable height in total, so no arrangement
+                         of the chrome fits the card here. Stop
+                         trying, and make the scroll a good one.
+
+   In both, the *page* never scrolls — the grid takes its own scroll
+   box (--grid-max-h, measured by fit() in ui.js) so the scoreboard,
+   the inning headers and the entry deck never move under the
+   scorer's finger. That mechanism already existed for the
+   drawer-open case at F9-A; the phone just uses it always.
+
+   The discriminator for landscape is *height*, not width. At 956px
+   wide a phone in landscape was matching the `min-width: 835px`
+   iPad block, which budgets its whole layout against 834px of
+   height and was handed 440. No iPad is under 768px tall, so 500px
+   keeps them apart; the min-width keeps a narrow-but-short window
+   in the portrait block, where it belongs.
+   ============================================================ */
+
+:root {
+  --sa-t: env(safe-area-inset-top, 0px);
+  --sa-r: env(safe-area-inset-right, 0px);
+  --sa-b: env(safe-area-inset-bottom, 0px);
+  --sa-l: env(safe-area-inset-left, 0px);
+}
+
+/* `viewport-fit=cover` plus a black-translucent status bar hands the app the
+   whole screen, insets included. Only --sa-b was ever honoured, so on an
+   installed iPhone the masthead's top 59px sat under the clock. The navy bar
+   keeps painting into the inset — it is the bar's content that moves down.
+   Zero wherever there is no inset, so both of these are safe at every width. */
+.header-bar { padding-top: calc(14px + var(--sa-t)); }
+@media (min-width: 835px) { .header-bar { padding-top: calc(8px + var(--sa-t)); } }
+
+/* The deck handle is phone-only. On an iPad the resting deck is 63-109px and
+   folding it would buy a row and a half; at >=1100px there is already a fold,
+   for the flat drawer, and it is the More-plays button that does it. */
+.deck-handle { display: none; }
+
+
+/* ---------- Phone, both orientations ---------- */
+@media (max-width: 560px),
+       (orientation: landscape) and (max-height: 500px) and (min-width: 561px) {
+
+  /* --- The grid --- */
+  /* AVG / AB / H / R / RBI / BB are 145px and not one of them is written to
+     during an at-bat — they are a read-out of what the card already says. They
+     stay in the DOM (app.js writes every `st-*` cell by id on every play, and
+     the game summary reads the same figures); it is only the columns that are
+     gone. Hiding them is what makes the frozen block below affordable: freezing
+     all ten left-hand columns would be 315px of a 440px screen, and the card
+     would be 1.4 innings wide. */
+  .scoring-grid thead th.avg-col,  .scoring-grid td.avg-cell,
+  .scoring-grid thead th.stat-col, .scoring-grid td.stat-cell { display: none; }
+
+  /* One set of numbers for the frozen block, because the `left` offsets below
+     have to add up to exactly the widths above them.
+
+     `width: max-content` is load-bearing, not tidiness. The table is `width:
+     auto`, and an over-constrained fixed-layout table compresses its columns to
+     the container instead of overflowing it — so the name column resolved to
+     60px while the `left` offsets below still pointed at 92px of it, and the
+     four frozen columns sat with gaps between them that the scrolling at-bat
+     cells showed straight through. Holding the intrinsic width is the same fix
+     the stacked linescore needs at 560px, for the same reason. */
+  .scoring-grid { width: max-content; --frz-ord: 20px; --frz-num: 26px; --frz-name: 88px; --frz-pos: 34px; }
+  /* Both the head cell and the body cells, unlike everywhere else in this
+     stylesheet. `table-layout: fixed` ignores a body cell's width and resolves
+     the columns from the head row — but `width: max-content` above computes the
+     table's own width from every row first, so a body cell left at its
+     170px/128px default drags the column back out with it. */
+  .scoring-grid thead th.ord-col,  .scoring-grid td.order-cell  { width: var(--frz-ord); }
+  .scoring-grid thead th.num-col,  .scoring-grid td.num-cell    { width: var(--frz-num); }
+  .scoring-grid thead th.name-col, .scoring-grid td.player-cell { width: var(--frz-name); }
+  .scoring-grid thead th.pos-col,  .scoring-grid td.pos-cell    { width: var(--frz-pos); }
+  /* The head row's 0.1em tracking is what clipped POS in a 34px column — the
+     letters fit, the space after the last one did not. */
+  .scoring-grid thead th { padding: 4px 1px; letter-spacing: .02em; }
+
+  /* Nothing in this table was ever sticky *horizontally* — all 25 sticky cells
+     are `top: 0, left: auto` — so swiping out to inning 6 took the batting
+     order off the screen and left the scorer tapping a cell for a name they
+     could no longer read. Freeze the slot number, the jersey, the name and the
+     position; the innings scroll under them.
+
+     In both orientations, not just the portrait one that scrolls by default:
+     nine innings fit across a landscape phone but fifteen do not, and an
+     extra-innings card is exactly when the bottom of the order matters. */
+  .scoring-grid th.ord-col,  .scoring-grid td.order-cell  { position: sticky; left: 0; z-index: 3; }
+  .scoring-grid th.num-col,  .scoring-grid td.num-cell    { position: sticky; z-index: 3;
+    left: var(--frz-ord); }
+  .scoring-grid th.name-col, .scoring-grid td.player-cell { position: sticky; z-index: 3;
+    left: calc(var(--frz-ord) + var(--frz-num)); }
+  .scoring-grid th.pos-col,  .scoring-grid td.pos-cell    { position: sticky; z-index: 3;
+    left: calc(var(--frz-ord) + var(--frz-num) + var(--frz-name)); }
+  /* thead is already sticky vertically at z-index 2. These four are sticky on
+     both axes and have to beat their own row as well as the inning cells
+     sliding underneath them. */
+  .scoring-grid thead th.ord-col, .scoring-grid thead th.num-col,
+  .scoring-grid thead th.name-col, .scoring-grid thead th.pos-col { z-index: 4; }
+  /* `border-collapse: collapse` gives a cell's right-hand border to its
+     neighbour, so the frozen block's trailing edge belongs to the inning column
+     that is scrolling away underneath it and cannot be drawn there. A shadow on
+     the last frozen column instead — it sits outside the border box, so it
+     costs the table no width. */
+  .scoring-grid th.pos-col, .scoring-grid td.pos-cell { box-shadow: 2px 0 0 var(--text); }
+
+  /* And the frozen block needs a ground of its own to sit on.
+
+     A table cell's background is painted in the *table's* background layer
+     (CSS 2.1 §17.5.1), not inside the cell's own stacking context — so
+     `z-index: 3` lifts a frozen cell's content above the innings sliding under
+     it but leaves its background down in that shared layer, where the at-bat
+     cells, later in the row, paint over it. Normally invisible, because both are
+     opaque white. Not invisible over a scored cell: the five play tints are
+     deliberately alpha rather than solid fills, so scrolling out to inning 12
+     dragged a 40%-green single and a 40%-gold home run right through the batting
+     order's names.
+
+     A pseudo-element is content, so it lands inside the cell's z-index: 3
+     stacking context, above the tint; `z-index: -1` keeps it behind the cell's
+     own input. `background: inherit` so the ground stays whatever the cascade
+     already decided for that cell — navy for the order stripe, white for a
+     starter, --row-alt for a sub — rather than three more hard-coded colours
+     for the theme layer to drift away from. */
+  .scoring-grid td.order-cell::before, .scoring-grid td.num-cell::before,
+  .scoring-grid td.player-cell::before, .scoring-grid td.pos-cell::before {
+    content: ''; position: absolute; inset: 0; z-index: -1; background: inherit;
+  }
+  /* The block's own dividers are borders, so they are down in that same table
+     layer and wash out under a tint — where the 2px navy slot rules, being dark
+     enough to survive 40% of anything, do not. Redrawn on the lifted ground as
+     an inset shadow, which draws inside the padding box and so costs no width.
+     Only the two boundaries inside the block: the order stripe is navy against
+     white and needs no line, and the block's trailing edge is the 2px shadow
+     above. */
+  .scoring-grid td.num-cell::before,
+  .scoring-grid td.player-cell::before { box-shadow: inset -1px 0 0 var(--border-light); }
+
+  /* The page does not scroll on a phone; the grid does. --grid-max-h is
+     measured by fit(), the only thing that knows where the deck's top edge
+     lands. */
+  .tab-content.active .grid-wrap {
+    max-height: var(--grid-max-h, none); overflow-y: auto;
+  }
+  /* --grid-max-h already stops the grid clear of the deck, so a bottom padding
+     on .app would reserve the deck twice over and put the page 1-3px into
+     scroll — which on a touch screen is as annoying as 300px. The other two
+     panels are not height-capped and do still need the clearance. */
+  .app { padding-bottom: 0; }
+  .sec-panel:not([data-panel="bat"]) { padding-bottom: calc(var(--deck-h, 78px) + 14px); }
+
+  /* --- The foldable deck --- */
+  .deck-handle {
+    display: block; width: 100%; border: none; background: transparent;
+    cursor: pointer; line-height: 1;
+    font-family: var(--heading); font-size: 10px; font-weight: 600;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--text-light);
+  }
+  .deck-handle::before {
+    content: ''; display: block; height: 4px; border-radius: 2px;
+    width: 42px; margin: 0 auto 5px; background: var(--line, var(--rule));
+  }
+  .deck-handle:active::before { background: var(--accent); }
+  /* Folded by max-height rather than `display: none`, so the fold animates and
+     — the part that matters — fires a transitionend for fit() to re-measure
+     against. Measuring mid-animation and baking in the stale height is the F21
+     mistake; ui.js already listens for it on the drawer. */
+  .tab-content.active .qb-core {
+    max-height: 70vh;
+    transition: max-height .2s ease, opacity .16s ease, padding .2s ease;
+  }
+  body.deck-folded .tab-content.active .qb-core,
+  body.deck-folded .tab-content.active .qb-drawer {
+    max-height: 0; opacity: 0; overflow: hidden; padding: 0; border-bottom: none;
+  }
+
+  /* --- Chrome common to both --- */
+  .masthead .kicker { display: none; }
+  .live-cell .live-label { font-size: 8px; letter-spacing: .08em; }
+  .ls-out-dot { width: 9px; height: 9px; }
+  /* Same trade the iPad deck makes at 835px: "Score by Innings" is what a
+     linescore looks like, and the caption is 28px of pure height.
+
+     Dropping the words is not enough on its own, though — +EI is not the rare
+     control it looks like. updateInningVisibility() shows it whenever the game
+     is under fifteen innings, so on every regulation card it is on screen for
+     the whole game, and a caption of `font-size: 0` still left it a 31px line
+     of its own. It goes *beside* the table instead, which is what the 835px
+     deck does with it. */
+  .ls-table-col { display: flex; align-items: center; gap: 8px; }
+  .linescore-wrap h3 { font-size: 0; letter-spacing: 0; margin: 0; flex: 0 0 auto; }
+  /* Beside the table the chip can just be the right size, so the hit-area
+     overlay the 834px block hangs 20px *below* it goes with the caption. That
+     overlay existed because the chip shared the caption's line box and had
+     nowhere to grow into; here, 20px below it is the linescore's own rows. */
+  .linescore-wrap h3 .ei-btn {
+    font-size: 11px; letter-spacing: .06em; padding: 4px 7px;
+    min-width: 44px; min-height: 40px;
+  }
+  .linescore-wrap h3 .ei-btn::after { content: none; }
+}
+
+
+/* ---------- Phone, portrait ---------- */
+@media (max-width: 560px) {
+
+  /* --- Masthead: 132px -> 74px --- */
+  /* 12px gutters rather than 20: 16px of a 440px screen is a quarter of an
+     inning column. */
+  .app { padding-left: 12px; padding-right: 12px; }
+  .header-bar {
+    margin: 0 -12px; padding: 6px 12px; padding-top: calc(6px + var(--sa-t));
+    gap: 8px; row-gap: 4px; align-items: center; border-bottom-width: 3px;
+  }
+  .header-bar h1 { font-size: 17px; letter-spacing: .03em; }
+  .header-actions { gap: 5px; }
+  .header-actions button, .game-timer button, details.info-details > summary {
+    padding: 6px 10px; min-height: 38px; font-size: 12px; letter-spacing: .04em;
+  }
+  .game-timer .timer-display { min-width: 38px; font-size: 12px; }
+
+  /* --- Scoreboard strip: 197px -> 127px --- */
+  .linescore-wrap { padding: 8px 10px; margin: 8px 0 0; }
+  /* The readout is the tallest thing left in the strip and most of its height
+     is label. */
+  #live-stats > .live-cell { padding: 0 9px; gap: 1px; }
+  #ls-inning, #ls-count { font-size: 20px !important; }
+  .live-cell svg { width: 26px; height: 26px; }
+  /* Four stacked lines in the matchup cell set the row height for the three
+     figure cells beside it — and on a 440px screen the matchup cell is off the
+     right edge anyway, the last thing the row scrolls to. Labels beside the
+     names instead of above them: same information, half the height. The
+     pitch-count line goes; there is no room for it and the count is on the
+     deck. */
+  .live-cell.live-matchup {
+    min-width: 150px; display: grid; grid-template-columns: auto 1fr;
+    column-gap: 6px; align-items: baseline;
+  }
+  .live-matchup .ls-label-2 { margin-top: 0; }
+  .live-matchup .ls-name { font-size: 13px; }
+  .live-matchup .ls-name-sm { font-size: 12px; }
+  .live-matchup .ls-sub { display: none; }
+
+  /* --- Control row: 124px (three wrapped rows) -> 38px (one) --- */
+  .sec-bar {
+    flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    gap: 6px; margin: 6px 0 4px; padding-bottom: 2px; scrollbar-width: none;
+  }
+  .sec-bar::-webkit-scrollbar { display: none; }
+  .sec-bar > * { flex: 0 0 auto; }
+  /* `margin-left: auto` is an inline style on the Show-sub-rows button. On a row
+     that wraps it parked the button at the right edge; on a row that scrolls it
+     pushes the scroll width out by whatever is left over, so the row scrolls
+     past its own content. It has no job here. */
+  .sec-bar > .ghost-btn[data-ui-act="subs"] { margin-left: 0 !important; }
+  .sec-bar > .tab-bar { gap: 2px; padding-right: 8px; margin-right: 4px; }
+  .sec-bar .tab-btn { min-height: 36px; padding: 4px 9px; font-size: 14px; }
+  .sec-bar .sec-btn, .sec-bar .ghost-btn { min-height: 36px; padding: 4px 10px; font-size: 12px; }
+
+  /* --- The grid --- */
+  /* 69px -> 62px buys back most of the width the frozen block takes, so the
+     card still shows 4.4 innings at a time rather than 3.6. Safe for the pitch
+     marks in a way that shrinking --cell-h is not — `.pitch-mark` sizes off
+     --cell-h — and the 52px diamond still clears a 62px cell. */
+  :root { --cell-w: 62px; }
+
+  /* The last 12px of the vertical budget, and where it came from matters. At
+     --cell-h 48 the nine starters need 432px and the box measured 466 less a
+     36px head row: 11px short, so the ninth slot hung over the edge with the
+     deck up. Taken off the head row (above) and the deck's own padding rather
+     than off --cell-h, because 48px puts a seven-mark pitch column at 6.1px and
+     47 would put it at 6.0 — below where the iPad card sits. */
+  .qb-core { padding: 7px 0; }
+
+  .deck-handle { min-height: 32px; padding: 5px 0 4px; }
+}
+
+
+/* ---------- Phone, landscape ---------- */
+@media (orientation: landscape) and (max-height: 500px) and (min-width: 561px) {
+
+  /* --- Masthead: 56px -> 45px, one row. There is width to spare here. --- */
+  /* The side insets are 59px each on a Pro Max in landscape — the sensor
+     housing on one edge, the rounded corner on the other. The masthead and the
+     docked deck both bleed to the screen edge, so each pays the inset back in
+     its own padding. */
+  .app { padding-left: calc(20px + var(--sa-l)); padding-right: calc(20px + var(--sa-r)); }
+  .header-bar {
+    margin-left: calc(-20px - var(--sa-l)); margin-right: calc(-20px - var(--sa-r));
+    padding: 4px calc(20px + var(--sa-r)) 4px calc(20px + var(--sa-l));
+    gap: 12px; flex-wrap: nowrap; align-items: center; border-bottom-width: 3px;
+  }
+  .header-bar h1 { font-size: 16px; letter-spacing: .03em; }
+  .header-actions { gap: 5px; flex-wrap: nowrap; }
+  .header-actions button, .game-timer button, details.info-details > summary {
+    padding: 5px 10px; min-height: 34px; font-size: 12px;
+  }
+  .game-timer .timer-display { min-width: 38px; font-size: 12px; }
+
+  /* --- Strip: 97px -> 71px. Stays one row, as it is above 835px. --- */
+  .linescore-wrap { padding: 5px 10px; margin: 5px 0 0; gap: 10px; }
+  .linescore th, .linescore td { height: 18px; }
+  .linescore td.team-col { font-size: 12px; }
+  .linescore input { font-size: 12px; }
+  .linescore td.team-col > span { max-width: min(110px, 12vw); }
+  .live-cell { padding: 0 9px; gap: 1px; }
+  #ls-inning, #ls-count { font-size: 18px !important; }
+  .live-cell svg { width: 24px; height: 24px; }
+  .live-matchup .ls-name { font-size: 12px; }
+  .live-matchup .ls-name-sm { font-size: 11px; }
+  .live-matchup .ls-label-2 { margin-top: 1px; }
+  /* The 835px block holds this line open so the strip cannot grow mid-at-bat.
+     Same reason here, and less height to give it. */
+  .live-matchup .ls-sub { min-height: 11px; font-size: 10px; }
+
+  /* --- Control row --- */
+  .sec-bar { flex-wrap: nowrap; margin: 4px 0 3px; gap: 6px; }
+  .sec-bar .tab-btn { min-height: 30px; padding: 3px 10px; font-size: 14px; }
+  .sec-bar .sec-btn, .sec-bar .ghost-btn { min-height: 30px; padding: 3px 10px; font-size: 12px; }
+
+  /* --- The grid --- */
+  .scoring-grid thead th.inn-col { font-size: 13px; }
+
+  /* --- The deck --- */
+  /* One row, not two. At the shared 46px button the thirteen keys plus the
+     label and the separators come to ~947px against 901px of deck, so
+     More-plays wrapped — and a second row costs 52px of a screen that has 145px
+     for the batting order. Tightened to fit: 40px keys, which is the same
+     44x40 target the 835px block calls the .quick-btn standard. */
+  .qb-core { padding: 6px 0; }
+  .quick-btn { min-height: 40px; min-width: 40px; padding: 5px 8px; font-size: 14px; }
+  .qb-more-btn { min-height: 40px; padding: 5px 10px; font-size: 12px; }
+  .qb-core, .qb-drawer { gap: 5px; }
+  .qbg-tab { min-height: 30px; }
+  .tab-content.active .quick-bar {
+    max-height: 88vh;
+    padding-left: calc(20px + var(--sa-l)); padding-right: calc(20px + var(--sa-r));
+  }
+  .deck-handle { min-height: 26px; padding: 3px 0; }
+  .deck-handle::before { margin-bottom: 4px; }
 }
