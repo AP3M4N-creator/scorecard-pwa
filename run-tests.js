@@ -310,12 +310,21 @@ function deliveryChecks() {
     };
     const fonts = arrayOf('FONTS');
     const shell = arrayOf('SHELL');
+    // CRITICAL and OPTIONAL are the lists the install handler actually walks;
+    // FONTS and SHELL only feed them. Read all four, because a file that goes
+    // missing from OPTIONAL now fails silently by design — c.add() swallows it
+    // so one 404 can't leave the cache empty — and this is the only thing left
+    // that would notice.
+    const critical = arrayOf('CRITICAL');
+    const optional = arrayOf('OPTIONAL');
     // A parse that quietly matched nothing would make this check pass forever.
     if (!fonts || !fonts.length) return 'could not read FONTS out of sw.js';
     if (!shell || !shell.length) return 'could not read SHELL out of sw.js';
+    if (!critical || !critical.length) return 'could not read CRITICAL out of sw.js';
+    if (!optional || !optional.length) return 'could not read OPTIONAL out of sw.js';
     const direct = (sw.match(/base \+ '([^']+)'/g) || []).map(s => s.slice(8, -1));
     if (!direct.length) return "could not read the base + '...' entries out of sw.js";
-    const missing = [...fonts, ...shell, ...direct].filter(f => !exists(f));
+    const missing = [...fonts, ...shell, ...critical, ...optional, ...direct].filter(f => !exists(f));
     return missing.length ? 'precached but not in the repo: ' + missing.join(', ') : null;
   });
 

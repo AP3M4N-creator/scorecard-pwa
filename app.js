@@ -8451,10 +8451,18 @@ if ('serviceWorker' in navigator) {
     });
   }).catch(() => {});
 
-  // When a new worker takes control, reload once so fresh assets apply.
+  // When a new worker *replaces* an old one, reload once so fresh assets apply.
+  //
+  // Only when it replaces one. A first-ever load has no controller, and the new
+  // worker's clients.claim() fires controllerchange on a page that is already
+  // showing the very files that worker just cached — reloading there is a wasted
+  // round trip at best, and a reload that races the next install at worst. The
+  // installed app is where that shows: it launches uncontrolled after storage is
+  // cleared, and a launch that reloads itself reads as an app that won't start.
+  const hadController = !!navigator.serviceWorker.controller;
   let reloading = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloading) return;
+    if (!hadController || reloading) return;
     reloading = true;
     window.location.reload();
   });
