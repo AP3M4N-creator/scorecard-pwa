@@ -392,9 +392,13 @@
   <button class="spray-skip" id="spray-skip">Skip</button>
 </div>
 
-<div class="modal-overlay" id="game-library-modal">
+<!-- role/aria-modal/label on the three modals as well as the fifteen popups: the
+     finding was that *no* overlay was a dialog, and these are toggled by an
+     `active` class rather than through `openPopup`, so they cannot pick it up
+     from there. `dialogIsOpen` knows about both mechanisms (F32). -->
+<div class="modal-overlay" id="game-library-modal" role="dialog" aria-modal="true" aria-labelledby="game-library-title">
   <div class="modal-box">
-    <h2>Game Library</h2>
+    <h2 id="game-library-title">Game Library</h2>
     <div id="game-library-list"></div>
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
       <button class="modal-close" data-act="exportGameJSON">Export Game (JSON)</button>
@@ -409,10 +413,10 @@
   </div>
 </div>
 
-<div class="hotkey-modal" id="hotkey-modal" data-act="closeModalOnBackdrop">
+<div class="hotkey-modal" id="hotkey-modal" data-act="closeModalOnBackdrop" role="dialog" aria-modal="true" aria-labelledby="hotkey-modal-title">
   <div class="hotkey-modal-inner" style="position:relative">
     <button class="hotkey-close" data-act="closeHotkeyModal">&times;</button>
-    <h2>Keyboard Shortcuts</h2>
+    <h2 id="hotkey-modal-title">Keyboard Shortcuts</h2>
     <h3>Pitch Tracking</h3>
     <table class="hk-table">
       <tr><td>S</td><td>Strike (swinging/called)</td><td>Red ✕ marker</td></tr>

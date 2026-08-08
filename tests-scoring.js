@@ -6511,4 +6511,127 @@
     eq('the runner is where he was', onB('visiting', 0, 0), 0);
     eq('and nothing was left on the undo stack', playHistory.length, depth);
   });
+
+  /* ---- F32: none of the overlays was a dialog ----------------------------
+     No role, no label, no `aria-modal`, no focus trap and no focus
+     restoration, across fifteen popups and three modals. Tab walked straight
+     out of an open popup into the card behind it. The card itself is careful
+     work — `describeCellForScreenReader`, `announce()`, `#a11y-live` — and only
+     the overlays were left out of it. */
+
+  // A stand-in popup, so the contract can be stated against `openPopup` itself
+  // rather than only against the popups that happen to exist today.
+  function probeDialog() {
+    const el = document.createElement('div');
+    el.id = 'f32-probe';
+    el.innerHTML = '<div>Probe Title</div>' +
+      '<button id="f32-a">A</button><button id="f32-b">B</button>' +
+      '<button id="f32-c" disabled>C</button>';
+    document.body.appendChild(el);
+    return el;
+  }
+  function tab(shift) {
+    document.dispatchEvent(new KeyboardEvent('keydown',
+      { key: 'Tab', shiftKey: !!shift, bubbles: true, cancelable: true }));
+  }
+
+  test('openPopup makes a labelled modal dialog of whatever it opens (F32)', () => {
+    const el = probeDialog();
+    try {
+      openPopup(el);
+      eq('it is a dialog', el.getAttribute('role'), 'dialog');
+      eq('and says the card behind it is out of reach', el.getAttribute('aria-modal'), 'true');
+      const label = document.getElementById(el.getAttribute('aria-labelledby'));
+      ok('it is labelled by an element that exists', !!label);
+      eq('and the label is the title the scorer reads', label.textContent, 'Probe Title');
+    } finally { closePopup(el); el.remove(); }
+  });
+
+  // Each of these is opened the way the app opens it, not by calling `openPopup`
+  // by hand — the point is that the real paths get this, including `spray-popup`,
+  // which is markup in index.html rather than something app.js builds.
+  const F32_DIALOGS = [
+    ['spray-popup', () => { sel('visiting', 0, 0); play('1B'); }],
+    ['k-popup', () => { sel('visiting', 0, 0); pitch('S'); pitch('S'); pitch('S'); }],
+    ['pos-popup', () => { sel('visiting', 0, 0); promptPositionPlay('GO '); }],
+    ['runner-popup', () => {
+      sel('visiting', 0, 0); play('1B'); clickId('spray-skip');
+      sel('visiting', 3, 0); play('2B');
+    }],
+    ['outcome-popup', () => { dpPending(); }]
+  ];
+
+  F32_DIALOGS.forEach(([id, open]) => {
+    test(`${id} opens as a dialog that names itself (F32)`, () => {
+      open();
+      const el = document.getElementById(id);
+      ok('it is open', visible(id));
+      eq('it is a dialog', el.getAttribute('role'), 'dialog');
+      eq('and modal', el.getAttribute('aria-modal'), 'true');
+      const label = document.getElementById(el.getAttribute('aria-labelledby'));
+      ok('labelled by an element that is there', !!label);
+      ok('and the label says something', !!label && !!label.textContent.trim());
+    });
+  });
+
+  test('focus goes into the popup and comes back out again (F32)', () => {
+    const el = probeDialog();
+    const before = rawAll('input[data-field="name"][data-team="visiting"]')[0];
+    try {
+      before.focus();
+      eq('focus starts on the card', document.activeElement, before);
+      openPopup(el);
+      // The container, not the first button: focusing a control would read the
+      // control and skip the title the dialog was just given.
+      eq('and moves to the dialog itself', document.activeElement, el);
+      closePopup(el);
+      eq('and comes back where the scorer left it', document.activeElement, before);
+    } finally { el.remove(); }
+  });
+
+  test('Tab cycles inside the dialog instead of walking out of it (F32)', () => {
+    const el = probeDialog();
+    try {
+      openPopup(el);
+      const a = document.getElementById('f32-a'), b = document.getElementById('f32-b');
+      // Focus is on the container, which is not one of the stops: the first Tab
+      // has to put it on one rather than leaking into the card behind.
+      tab();
+      eq('the first Tab lands on the first control', document.activeElement, a);
+      tab();
+      eq('and the next on the second', document.activeElement, b);
+      // `b` is the last *enabled* control — the disabled one is not a stop.
+      tab();
+      eq('and then it wraps rather than leaving', document.activeElement, a);
+      tab(true);
+      eq('Shift+Tab wraps the other way', document.activeElement, b);
+    } finally { closePopup(el); el.remove(); }
+  });
+
+  test('a blocked option is not a Tab stop (F32)', () => {
+    dpWithManOnFirst();
+    ocBtn(0, 'safe', 0).onclick();                 // blocks the batter's three Safe options
+    const popup = document.getElementById('outcome-popup');
+    const stops = focusablesIn(popup);
+    ok('there are stops to cycle', stops.length > 0);
+    ok('and none of them is a blocked option',
+      stops.every(n => !isOptionBlocked(n)));
+    // The reason still has to be reachable: it is on the page, not only on the
+    // control that cannot be focused (F26).
+    ok('while the reason is still said in words',
+      !!document.getElementById('oc-blocked').textContent.trim());
+  });
+
+  // The three modals are toggled by an `active` class rather than through
+  // `openPopup`, so they cannot pick any of this up from there.
+  test('the modals are dialogs too (F32)', () => {
+    ['hotkey-modal', 'game-library-modal'].forEach(id => {
+      const el = document.getElementById(id);
+      ok(id + ' exists', !!el);
+      eq(id + ' is a dialog', el.getAttribute('role'), 'dialog');
+      eq(id + ' is modal', el.getAttribute('aria-modal'), 'true');
+      const label = document.getElementById(el.getAttribute('aria-labelledby'));
+      ok(id + ' is labelled by real text', !!label && !!label.textContent.trim());
+    });
+  });
 })();

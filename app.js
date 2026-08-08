@@ -1828,8 +1828,92 @@ function syncPopupBackdrop() {
   else hidePopupBackdrop();
 }
 
+/* ------------------------------------------------ the popups as dialogs ---
+   None of the fifteen carried `role`, `aria-modal` or a label, Tab walked
+   straight out of an open popup into the card behind it, and closing one left
+   focus wherever it had landed. The card itself is careful work —
+   `describeCellForScreenReader`, `announce()`, `#a11y-live` — and the overlays
+   were simply left out of it (F32).
+
+   All of it lives here rather than in fifteen builders, which is also what keeps
+   a popup added later from being the one that misses out. */
+
+// Every popup in this app opens with its own title as its first element — the
+// name the scorer reads. That is the name to announce, so it is taken from there
+// rather than passed in from fifteen call sites. The convention is not assumed:
+// `every popup names itself` walks all fifteen and fails if one stops holding.
+function labelPopup(el) {
+  const title = el.firstElementChild;
+  if (!title || !title.textContent.trim()) return;
+  // A first child that holds the controls is a layout wrapper, not a title.
+  if (title.querySelector('button, input, select, textarea')) return;
+  if (!title.id) title.id = el.id + '-title';
+  el.setAttribute('aria-labelledby', title.id);
+}
+
+// What Tab may reach inside a dialog. `disabled` drops out on its own, which is
+// what keeps a blocked destination (F26) out of the cycle rather than being a
+// stop that does nothing.
+function focusablesIn(el) {
+  if (!el) return [];
+  const sel = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+  return Array.prototype.filter.call(el.querySelectorAll(sel),
+    n => !n.disabled && n.style.display !== 'none');
+}
+
+// A dialog counts as open on whichever mechanism it uses: the popups are shown by
+// `style.display`, the three modals by an `active` class. Asking about both here
+// means the focus trap does not have to know which kind it is holding.
+function dialogIsOpen(el) {
+  if (!el) return false;
+  if (el.classList && el.classList.contains('active')) return true;
+  return !!(el.style.display && el.style.display !== 'none');
+}
+
+function openDialogs() {
+  if (typeof document === 'undefined') return [];
+  return Array.prototype.filter.call(document.querySelectorAll('[role="dialog"]'), dialogIsOpen);
+}
+
+/* Keep Tab inside the open dialog, and cycle it. Returns true when it handled
+   the key. The dialog held is the last one in document order that is open —
+   nested opens append, so that is the top one.
+
+   Every step is taken here rather than only the two that wrap, so the cycle is
+   exactly the list the trap is enforcing and there is no second, implicit order
+   to disagree with it. It also makes the whole thing testable without a browser:
+   the audit expected Tab-cycling to need one, and this is why it did not. */
+function trapDialogFocus(e) {
+  const open = openDialogs();
+  if (!open.length) return false;
+  const el = open[open.length - 1];
+  const items = focusablesIn(el);
+  // A dialog with nothing to focus still may not leak Tab into the card behind.
+  if (!items.length) return true;
+  // -1 covers both "focus is outside" and "focus is on the container", which
+  // holds it on open and is deliberately not a stop of its own.
+  const at = items.indexOf(document.activeElement);
+  const next = at === -1
+    ? (e.shiftKey ? items.length - 1 : 0)
+    : (at + (e.shiftKey ? -1 : 1) + items.length) % items.length;
+  items[next].focus();
+  return true;
+}
+
 function openPopup(el, display) {
-  if (el) el.style.display = display || 'block';
+  if (el) {
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');   // true of all fifteen: every one is backdrop-guarded
+    labelPopup(el);
+    // Where focus goes back to on close. Held on the element, not in one
+    // variable, because a popup can open over another one.
+    el.__returnFocus = document.activeElement;
+    el.style.display = display || 'block';
+    // The container, not the first control: focusing a button would read the
+    // button and skip the title the popup was just given.
+    if (!el.getAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+    if (el.focus) el.focus();
+  }
   syncPopupBackdrop();
 }
 
@@ -1840,6 +1924,13 @@ function closePopup(el) {
     // so closing it any other way than through Skip used to leave the handler
     // attached and the next hit's location landed on this at-bat.
     if (el.id === 'spray-popup') releaseSprayClick();
+    // Back where the scorer was. Only if it is still there to go back to — a
+    // popup that replaced the row it was opened from has nothing to return to,
+    // and focusing a detached node would drop focus onto the body silently.
+    const back = el.__returnFocus;
+    el.__returnFocus = null;
+    if (back && back.focus && back !== el &&
+        (!document.contains || document.contains(back))) back.focus();
   }
   syncPopupBackdrop();
 }
@@ -7562,6 +7653,11 @@ function showGameSummary() {
     modal = document.createElement('div');
     modal.id = 'game-summary-modal';
     modal.className = 'game-summary-modal';
+    // Its heading is rebuilt with the summary on every open, so it names itself
+    // outright rather than pointing at an element that comes and goes (F32).
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-label', 'Game Summary');
     modal.onclick = function(e) { if (e.target === this) this.classList.remove('active'); };
     modal.innerHTML = '<div class="game-summary-inner" id="gs-inner"></div>';
     document.body.appendChild(modal);
@@ -8088,6 +8184,10 @@ function renderManualWinProbChart(containerId) {
 
 /* Keyboard handler */
 document.addEventListener('keydown', function(e) {
+  // Before the `inInput` bail below, deliberately: a dialog holds inputs of its
+  // own — the sub popup's name field, the edit popup's play box — and Tab out of
+  // one of those is exactly the leak the trap exists to stop (F32).
+  if (e.key === 'Tab' && trapDialogFocus(e)) { e.preventDefault(); return; }
   const inInput = document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'SELECT');
   if (inInput) return;
   if (e.key === '?' || (e.key === '/' && !e.shiftKey)) { e.preventDefault(); toggleHotkeyModal(); return; }
