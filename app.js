@@ -3615,6 +3615,9 @@ function updateSituation() {
   const half = team === 'visiting' ? '▲' : '▼';
   const lsInn = document.getElementById('ls-inning');
   if (lsInn) lsInn.textContent = half + ' ' + innNum;
+  // Live until proved otherwise — the final check at the tail of this function
+  // sets it back if the card is closed.
+  markFinalReadout(false);
 
   const count = getPitchCount(ab.pitches || []);
   const lsCount = document.getElementById('ls-count');
@@ -3687,6 +3690,7 @@ function updateLiveStatsFromState() {
   // painted the live at-bat, which must not be blanked out from under it. (F20)
   if (!half) { if (!selectedCell) renderEmptyReadout(); return; }
   if (gameIsFinal()) { renderFinalReadout(); return; }
+  markFinalReadout(false);
   const lsInn = document.getElementById('ls-inning');
   const arrow = half.team === 'visiting' ? '▲' : '▼';
   if (lsInn) lsInn.textContent = arrow + ' ' + (getRealInning(half.team, half.innIdx) + 1);
@@ -3781,9 +3785,21 @@ function noteCardChanged() {
   if (gameState.backedUp) gameState.backedUp = false;
 }
 
+/* Which of the two readouts is on screen, as a class on the strip. The phone
+   layout hides the Inning cell (see the readout note in the phone blocks), and
+   FINAL is written into that cell and nowhere else — so without this, a finished
+   card on a phone showed three empty out dots and the final score under a
+   "Ball — Strike" label, with nothing saying the game was over. The word is what
+   brings the cell back, and only for as long as it is the word. */
+function markFinalReadout(isFinal) {
+  const wrap = document.querySelector('.linescore-wrap');
+  if (wrap) wrap.classList.toggle('is-final', !!isFinal);
+}
+
 /* The live panel, for a game that is over. Nothing is at bat, nobody is on, and
    the count slot shows the final score instead. */
 function renderFinalReadout() {
+  markFinalReadout(true);
   const lsInn = document.getElementById('ls-inning');
   const lsCount = document.getElementById('ls-count');
   const lsBatter = document.getElementById('ls-batter');
@@ -3816,6 +3832,7 @@ function renderFinalReadout() {
    there until the first tap. Same family as F1 and F4: derived display on a path
    that runs with no selection. (F20) */
 function renderEmptyReadout() {
+  markFinalReadout(false);
   const lsInn = document.getElementById('ls-inning');
   const lsCount = document.getElementById('ls-count');
   const lsBatter = document.getElementById('ls-batter');

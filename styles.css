@@ -1623,6 +1623,26 @@ body.drawer-open .tab-content.active .grid-wrap {
   .info-body { max-height: calc(100dvh - 130px); }
   .live-cell .live-label { font-size: 8px; letter-spacing: .08em; }
   .ls-out-dot { width: 9px; height: 9px; }
+
+  /* --- The readout: four things, not six --- */
+  /* On a phone the strip is asked for the count, who is at bat, who is pitching
+     and what he has thrown — and nothing else. The two cells that go are the two
+     the card itself already answers: the inning is the highlighted column in the
+     linescore directly above (and the arrow beside the team names), and the
+     runners are drawn in the at-bat cells. Outs are not written anywhere else, so
+     the dots stay.
+
+     Both cells stay in the DOM — app.js writes `ls-inning` and the three bases on
+     every repaint, `renderFinalReadout` puts FINAL in the inning cell, and the
+     tests read all of it. It is only the columns that are gone, the same trade
+     the six stat columns make below. */
+  .live-inning, .live-bases { display: none; }
+  /* Except the one thing the inning cell says that nothing else does. See
+     markFinalReadout in app.js. */
+  .linescore-wrap.is-final .live-inning { display: flex; }
+  /* The width those two were taking goes to the names, which are what fitName
+     shrinks when the cell is short. */
+  .live-cell.live-matchup { flex: 1 1 auto; min-width: 0; }
   /* Same trade the iPad deck makes at 835px: "Score by Innings" is what a
      linescore looks like, and the caption is 28px of pure height.
 
@@ -1676,20 +1696,43 @@ body.drawer-open .tab-content.active .grid-wrap {
   #live-stats > .live-cell { padding: 0 9px; gap: 1px; }
   #ls-inning, #ls-count { font-size: 20px !important; }
   .live-cell svg { width: 26px; height: 26px; }
-  /* Four stacked lines in the matchup cell set the row height for the three
-     figure cells beside it — and on a 440px screen the matchup cell is off the
-     right edge anyway, the last thing the row scrolls to. Labels beside the
-     names instead of above them: same information, half the height. The
-     pitch-count line goes; there is no room for it and the count is on the
-     deck. */
+  /* The 834px block strips the leading divider off `:first-child`, which is now a
+     cell that isn't painted. The rule belongs to whichever cell leads the row —
+     Outs while the game is live, Inning once it reads FINAL. Style and width
+     only, so the theme layer keeps the colour. */
+  #live-stats > .live-cell.live-outs { border-left: none; padding-left: 0; }
+  .is-final #live-stats > .live-cell.live-outs {
+    border-left-style: solid; border-left-width: 1px; padding-left: 9px;
+  }
+  /* Four stacked lines in the matchup cell set the row height for the figure
+     cells beside it. Labels beside the names instead of above them: same
+     information, half the height.
+
+     Two rows and three columns — label, name, and the pitch count riding the
+     pitcher's own row. The count used to be hidden here because a fifth line was
+     28px the portrait card did not have; beside the name it costs no height at
+     all, and there is width for it now that the inning and the diamond are gone
+     (the three cells come to ~305px of a 440px screen).
+
+     Placed explicitly, every item: auto-flow would put the second label in the
+     third column of the first row. */
   .live-cell.live-matchup {
-    min-width: 150px; display: grid; grid-template-columns: auto 1fr;
+    min-width: 150px; display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     column-gap: 6px; align-items: baseline;
   }
-  .live-matchup .ls-label-2 { margin-top: 0; }
-  .live-matchup .ls-name { font-size: 13px; }
-  .live-matchup .ls-name-sm { font-size: 12px; }
-  .live-matchup .ls-sub { display: none; }
+  .live-matchup .live-label { grid-area: 1 / 1; }
+  .live-matchup .ls-label-2 { grid-area: 2 / 1; margin-top: 0; }
+  .live-matchup .ls-name { grid-area: 1 / 2; font-size: 13px; }
+  .live-matchup .ls-name-sm { grid-area: 2 / 2; font-size: 12px; }
+  /* Right-hand column, and held at a width that fits "999 pitches" — the column
+     is `auto`, so a count appearing or growing a digit would otherwise take the
+     width out of the name beside it and re-shrink it mid-at-bat. Same reasoning
+     as the 835px block's min-height on this line, in the other axis. */
+  .live-matchup .ls-sub {
+    display: block; grid-area: 2 / 3; font-size: 10px;
+    min-width: 62px; text-align: right;
+  }
 
   /* --- Control row: 124px (three wrapped rows) -> 38px (one) --- */
   .sec-bar {
