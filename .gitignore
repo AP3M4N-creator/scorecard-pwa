@@ -1,3 +1,10 @@
 .DS_Store
 node_modules/
 .claude/settings.local.json
+
+# Scratch harnesses left at the root — the browser test runner from when there
+# was no Node here (F40), and anything like it since. Root-anchored so it cannot
+# swallow a real file in a subdirectory. F38's closing note is the reason this
+# is here: a `git add -A` sweeping up whatever happens to be lying about is how
+# a repo acquires files nobody meant to ship.
+/_*

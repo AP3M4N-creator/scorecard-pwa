@@ -91,6 +91,89 @@ function label(suite) {
   return suite.suite ? `${suite.page} + ${suite.suite}` : suite.page;
 }
 
+/* ------------------------------------------------------ delivery checks ---
+   The two suites above run the app. These run the repo, because the two ways
+   this project has actually broken in the field are not things a DOM can see:
+   a file that stops being delivered, and a hook that stops running.
+
+   Both of F37 and F38 were *regressions* of state that had been correct — the
+   `.nojekyll` marker deleted, the hook's exec bit dropped — and nothing noticed
+   either. Neither would have failed a test, because there was no test. */
+function deliveryChecks() {
+  const results = [];
+  const check = (name, fn) => {
+    try {
+      const why = fn();
+      results.push(why ? { name, pass: false, error: why } : { name, pass: true });
+    } catch (e) {
+      results.push({ name, pass: false, error: (e && e.message) || String(e) });
+    }
+  };
+  const exists = f => fs.existsSync(path.join(ROOT, f));
+
+  // F37. Without it GitHub Pages runs Jekyll over the site, which can drop a
+  // file the service worker precaches — and `addAll` is all-or-nothing, so one
+  // missing URL fails the install, leaves the old worker in place, and the app
+  // silently stops updating and stops working offline.
+  check('.nojekyll is present, so Pages serves the site as static files', () =>
+    exists('.nojekyll') ? null : '.nojekyll is missing — Pages will run Jekyll over the site');
+
+  /* The other half of the same hazard, and the one a person cannot eyeball: every
+     URL the install precaches has to resolve. The list is deliberately exact
+     (sw.js:14-15) and it is edited by hand whenever the fonts or icons change. */
+  check('every asset the service worker precaches exists', () => {
+    const sw = read('sw.js');
+    const arrayOf = name => {
+      const m = sw.match(new RegExp('const ' + name + '\\s*=\\s*\\[([\\s\\S]*?)\\]'));
+      if (!m) return null;
+      return (m[1].match(/'[^']+'/g) || []).map(s => s.slice(1, -1));
+    };
+    const fonts = arrayOf('FONTS');
+    const shell = arrayOf('SHELL');
+    // A parse that quietly matched nothing would make this check pass forever.
+    if (!fonts || !fonts.length) return 'could not read FONTS out of sw.js';
+    if (!shell || !shell.length) return 'could not read SHELL out of sw.js';
+    const direct = (sw.match(/base \+ '([^']+)'/g) || []).map(s => s.slice(8, -1));
+    if (!direct.length) return "could not read the base + '...' entries out of sw.js";
+    const missing = [...fonts, ...shell, ...direct].filter(f => !exists(f));
+    return missing.length ? 'precached but not in the repo: ' + missing.join(', ') : null;
+  });
+
+  // F38, first half. The mode in the *index* is what a fresh clone checks out,
+  // so that is what is asked — a local chmod would hide the regression.
+  check('the pre-commit hook is executable in the index', () => {
+    let out;
+    try {
+      out = require('child_process')
+        .execFileSync('git', ['ls-files', '-s', '.githooks/pre-commit'], { cwd: ROOT })
+        .toString();
+    } catch (e) {
+      return null;   // no git, or not a checkout: nothing to assert against
+    }
+    if (!out.trim()) return '.githooks/pre-commit is not tracked';
+    return out.startsWith('100755')
+      ? null
+      : 'mode is ' + out.slice(0, 6) + ', not 100755 — the hook will not run on macOS or Linux';
+  });
+
+  /* F38, second half. The bump used BSD `sed -i ''`, which GNU sed reads as an
+     empty script plus a filename, so it never ran here — and nothing checked,
+     so the hook still added sw.js and announced a version it had not written. */
+  check('the cache-version bump is portable and checks that it landed', () => {
+    const hook = read('.githooks/pre-commit');
+    if (/sed\s+-i\s+''/.test(hook)) return "the BSD `sed -i ''` form is back — it is a no-op under GNU sed";
+    // Matched on the `grep` specifically, not on the version string: that string
+    // is also the sed replacement, so a looser pattern goes on passing after the
+    // verification is deleted. Which is what it did on the first draft of this.
+    if (!/grep -q "SHELL_VERSION = 'v\$next'"/.test(hook)) {
+      return 'the bump no longer checks that the substitution actually applied';
+    }
+    return null;
+  });
+
+  return results;
+}
+
 const started = Date.now();
 let passed = 0, failed = 0;
 
@@ -119,6 +202,19 @@ for (const suite of SUITES) {
   }
   console.log('');
 }
+
+console.log('▸ Delivery  (the repo, not the app)');
+for (const r of deliveryChecks()) {
+  if (r.pass) {
+    passed++;
+    if (!QUIET) console.log(`  ✓ ${r.name}`);
+  } else {
+    failed++;
+    console.log(`  ✗ ${r.name}`);
+    console.log(`      ${r.error}`);
+  }
+}
+console.log('');
 
 const secs = ((Date.now() - started) / 1000).toFixed(1);
 console.log(`${passed} passed · ${failed} failed  (${secs}s)\n`);
