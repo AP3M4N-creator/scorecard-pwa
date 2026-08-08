@@ -5,7 +5,7 @@
 //  - Fonts/icons are stale-while-revalidate: instant from cache, refreshed
 //    in the background.
 // Bump SHELL_VERSION only if you ever need to force-drop the whole cache.
-const SHELL_VERSION = 'v115';
+const SHELL_VERSION = 'v116';
 const CACHE = 'scorecard-' + SHELL_VERSION;
 
 // One file per family (per style for Source Serif): the variable ones cover
@@ -20,12 +20,12 @@ const FONTS = [
 ];
 
 // Files treated as "app code": always try the network first when online.
-const SHELL = ['index.html', 'styles.css', 'app.js', 'ui.js', 'manifest.json'];
+const SHELL = ['index.html', 'styles.css', 'app.js', 'ui.js', 'boot.js', 'manifest.json'];
 
 // Without these the card cannot be drawn at all, so a failure to cache one is
 // worth failing the install over — the previous worker stays in charge and
 // keeps serving a cache that works.
-const CRITICAL = ['index.html', 'styles.css', 'app.js', 'ui.js'];
+const CRITICAL = ['index.html', 'styles.css', 'app.js', 'ui.js', 'boot.js'];
 // Everything else is nice to have offline. A single 404 here used to reject
 // addAll() and leave the whole cache empty, which is how an installed app ends
 // up with a worker in charge and nothing to fall back on.

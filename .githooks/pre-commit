@@ -87,7 +87,7 @@ fi
 
 sw="sw.js"
 
-echo "$staged" | grep -Eq '^(index\.html|app\.js|styles\.css|manifest\.json|[^/]*\.png|fonts/)' || exit 0
+echo "$staged" | grep -Eq '^(index\.html|app\.js|ui\.js|boot\.js|styles\.css|manifest\.json|[^/]*\.png|fonts/)' || exit 0
 
 current=$(grep -oE "SHELL_VERSION = 'v[0-9]+'" "$sw" | grep -oE '[0-9]+')
 [ -n "$current" ] || { echo "pre-commit: could not read SHELL_VERSION in $sw" >&2; exit 0; }

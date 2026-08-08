@@ -292,9 +292,11 @@ function deliveryChecks() {
   const exists = f => fs.existsSync(path.join(ROOT, f));
 
   // F37. Without it GitHub Pages runs Jekyll over the site, which can drop a
-  // file the service worker precaches — and `addAll` is all-or-nothing, so one
-  // missing URL fails the install, leaves the old worker in place, and the app
-  // silently stops updating and stops working offline.
+  // file the service worker precaches. A dropped CRITICAL file still fails the
+  // install outright — deliberately, so the old worker stays in charge rather
+  // than a new one taking over with a half-filled cache — and a dropped
+  // OPTIONAL one is swallowed, which is quieter and worse: the app updates,
+  // works online, and has lost a font or an icon offline with nothing said.
   check('.nojekyll is present, so Pages serves the site as static files', () =>
     exists('.nojekyll') ? null : '.nojekyll is missing — Pages will run Jekyll over the site');
 
@@ -326,6 +328,23 @@ function deliveryChecks() {
     if (!direct.length) return "could not read the base + '...' entries out of sw.js";
     const missing = [...fonts, ...shell, ...critical, ...optional, ...direct].filter(f => !exists(f));
     return missing.length ? 'precached but not in the repo: ' + missing.join(', ') : null;
+  });
+
+  /* boot.js only reports the failures that happen after it runs. Loaded late it
+     would miss the stylesheet, miss ui.js and app.js, and go on saying nothing
+     about the exact white screen it was written for — a watchdog that is quiet
+     for the wrong reason is worse than none, because it reads as all clear.
+     So the order is asserted rather than trusted to survive the next edit. */
+  check('boot.js runs before anything it is meant to watch', () => {
+    const html = read('index.html');
+    const at = s => html.indexOf(s);
+    const boot = at('src="boot.js"');
+    if (boot < 0) return 'index.html does not load boot.js';
+    const after = [['styles.css', at('href="styles.css"')],
+                   ['ui.js', at('src="ui.js"')],
+                   ['app.js', at('src="app.js"')]];
+    const early = after.filter(([, i]) => i >= 0 && i < boot).map(([n]) => n);
+    return early.length ? 'loaded before boot.js, so a failure in it goes unreported: ' + early.join(', ') : null;
   });
 
   // F38, first half. The mode in the *index* is what a fresh clone checks out,
