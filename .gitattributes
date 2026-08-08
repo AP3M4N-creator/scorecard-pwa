@@ -1,0 +1,13 @@
+# Line endings.
+#
+# Every blob in this repo is stored LF. Git for Windows ships with
+# core.autocrlf=true, so a checkout there rewrites files as CRLF. That is
+# harmless for JS, CSS and HTML, but fatal for a shell script: the shebang
+# becomes `#!/bin/sh\r`, which will not execute. The pre-commit hook would
+# then stop running, silently taking the test gate and the SHELL_VERSION
+# cache bump with it -- the same class of failure as F38, and just as quiet.
+#
+# So pin anything that has to run as a script to LF on every platform.
+
+.githooks/** text eol=lf
+*.sh        text eol=lf
