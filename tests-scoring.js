@@ -140,6 +140,25 @@
     const innSel = document.getElementById('info-innings');
     if (innSel && innSel.value !== String(DEFAULT_REGULATION)) innSel.value = String(DEFAULT_REGULATION);
 
+    // And the tab, which is shared DOM the same way. The app switches sides on
+    // its own — the half-inning ending, an undo restoring the other team — so a
+    // case that ended on Home left every later case running against a
+    // `display: none` grid. That is invisible under `npm test`, because jsdom is
+    // built without `resources: 'usable'` and never loads styles.css, so nothing
+    // is hidden and every selector still resolves. In a real browser it is not
+    // invisible: an element inside the inactive tab has no offsetParent and
+    // **cannot take focus**, so every `document.activeElement` assertion after
+    // the first switch was passing on a technicality or failing outright. Two of
+    // the F7 SUB cases were failing. Reset the side with everything else.
+    //
+    // Guarded on the class rather than called flat: `switchTab` issues three
+    // uncached document-level queries, and at ~6ms each under jsdom that is
+    // ~7s added to a 400-case run to undo something most cases never did.
+    const vTab = document.getElementById('tab-visiting');
+    if (vTab && !vTab.classList.contains('active') && typeof switchTab === 'function') {
+      switchTab('visiting');
+    }
+
     for (const col of dirtyCols) {
       for (const team of ['visiting', 'home']) {
         for (let p = 0; p < PLAYERS; p++) {
