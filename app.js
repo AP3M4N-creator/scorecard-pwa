@@ -563,7 +563,7 @@ function buildPitcherTable(team, containerId) {
   const labels = ['IP','PC','H','R','ER','K','BB'];
   let html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">';
   html += '<h3 style="margin:0">Pitchers</h3>';
-  html += '<button type="button" data-act="recomputePitcherAssignments" title="Re-attribute recorded at-bats to the correct pitcher based on pitching changes" style="font-size:10px;font-weight:700;padding:2px 7px;border:1px solid var(--navy,#1a2744);border-radius:3px;background:#fff;color:var(--navy,#1a2744);cursor:pointer;font-family:var(--heading,inherit);letter-spacing:0.3px">↻ Fix Stats</button>';
+  html += '<button type="button" data-act="recomputePitcherAssignments" title="Re-attribute recorded at-bats to the correct pitcher based on pitching changes" style="font-size:10px;font-weight:700;padding:2px 7px;border:1px solid var(--navy,#003278);border-radius:3px;background:#fff;color:var(--navy,#003278);cursor:pointer;font-family:var(--heading,inherit);letter-spacing:0.3px">↻ Fix Stats</button>';
   html += '</div>';
   html += '<table class="pitcher-grid"><thead><tr>';
   html += '<th class="pitcher-num-col">#</th>';
@@ -1551,11 +1551,14 @@ function showPlayToast(msg, tone) {
   if (!el) {
     el = document.createElement('div');
     el.id = 'play-reject';
-    el.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);color:#fff;padding:10px 18px;border-radius:6px;z-index:400;font-family:var(--heading);font-size:13px;font-weight:700;letter-spacing:0.5px;text-align:center;max-width:80vw;box-shadow:0 4px 20px rgba(0,0,0,0.35);';
+    // Top of the scale. This is the thing that says why a press refused, so it
+    // has to clear whatever refused it — including the backdrop's own "Finish
+    // the open entry first", which at 400 was painted under the summary (F29).
+    el.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);color:#fff;padding:10px 18px;border-radius:6px;z-index:var(--z-toast);font-family:var(--heading);font-size:13px;font-weight:700;letter-spacing:0.5px;text-align:center;max-width:80vw;box-shadow:0 4px 20px rgba(0,0,0,0.35);';
     document.body.appendChild(el);
   }
   el.dataset.tone = tone === 'notice' ? 'notice' : 'reject';
-  el.style.background = tone === 'notice' ? 'var(--navy,#1a2744)' : 'var(--accent,#c62828)';
+  el.style.background = tone === 'notice' ? 'var(--navy,#003278)' : 'var(--accent,#c62828)';
   el.textContent = msg;
   el.style.display = 'block';
   if (playRejectTimer) clearTimeout(playRejectTimer);
@@ -1679,7 +1682,11 @@ function showPopupBackdrop() {
   if (!bd) {
     bd = document.createElement('div');
     bd.id = 'popup-backdrop';
-    bd.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:180;background:rgba(26,39,68,0.15);';
+    // One step under the popup rung, which puts it over the modals too. At 180
+    // it sat under *both* the popup and the summary it was opened from, so the
+    // summary stayed fully interactive behind an open popup and the guard
+    // guarded nothing (F22, F29).
+    bd.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:var(--z-popup-backdrop);background:rgba(0,50,120,0.15);';
     bd.onclick = function(e) {
       if (e && e.stopPropagation) e.stopPropagation();
       const open = openGuardedPopups();
@@ -2298,7 +2305,7 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'outcome-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:300;box-shadow:0 8px 40px rgba(26,39,68,0.4);min-width:300px;font-family:var(--font);';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:300px;font-family:var(--font);';
     document.body.appendChild(popup);
   }
 
@@ -2805,7 +2812,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     // Was white-and-#333, the one popup in the set still wearing the old chrome —
     // and it does the same job as the DP/FC outcome popup, which wears the app's
     // navy. Two popups asking the same question should not look like two apps (F11b).
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:300;box-shadow:0 8px 40px rgba(26,39,68,0.4);min-width:300px;font-family:var(--font);';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:300px;font-family:var(--font);';
     document.body.appendChild(popup);
   }
 
@@ -3535,7 +3542,7 @@ function showStrikeoutPopup(target) {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'k-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:20px 24px;z-index:300;box-shadow:0 8px 40px rgba(26,39,68,0.4);text-align:center;font-family:var(--heading);';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:20px 24px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);text-align:center;font-family:var(--heading);';
     popup.innerHTML = '<div style="font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:14px">Strikeout</div>'
       + '<div style="display:flex;gap:12px;justify-content:center">'
       + '<button id="k-swinging" style="padding:10px 24px;font-size:16px;font-weight:700;font-family:var(--heading);background:var(--navy);color:var(--gold);border:none;border-radius:6px;cursor:pointer;letter-spacing:1px">K<br><span style=font-size:10px>SWINGING</span></button>'
@@ -4035,7 +4042,7 @@ function showBasePickerPopup(title, options, callback) {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'base-picker';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:300;box-shadow:0 8px 40px rgba(26,39,68,0.4);text-align:center;font-family:var(--heading);';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);text-align:center;font-family:var(--heading);';
     document.body.appendChild(popup);
   }
   let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:12px">' + title + '</div>';
@@ -4295,7 +4302,7 @@ function editPlayType() {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'edit-play-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:300;box-shadow:0 8px 40px rgba(26,39,68,0.4);min-width:280px;font-family:var(--font);';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:280px;font-family:var(--font);';
     document.body.appendChild(popup);
   }
   const plays = ['1B','2B','3B','HR','K','ꓘ','BB','IBB','HBP','SF','SH','CI','IF','K+WP','E'];
@@ -4484,7 +4491,7 @@ function moveRunner() {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'move-runner-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:300;box-shadow:0 8px 40px rgba(26,39,68,0.4);min-width:260px;font-family:var(--font);';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:260px;font-family:var(--font);';
     document.body.appendChild(popup);
   }
   let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:10px;font-family:var(--heading)">Move Runner</div>';
@@ -4740,12 +4747,12 @@ function reviewEarnedRuns() {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'er-review-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card,#fff);border:2px solid var(--navy,#1a2744);border-radius:8px;padding:14px 16px;z-index:400;box-shadow:0 8px 40px rgba(0,0,0,0.35);min-width:280px;max-width:360px;font-family:var(--font)';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card,#fff);border:2px solid var(--navy,#003278);border-radius:8px;padding:14px 16px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,0,0,0.35);min-width:280px;max-width:360px;font-family:var(--font)';
     document.body.appendChild(popup);
   }
 
   const teamName = (team === 'visiting' ? gameState.info.visitingTeam : gameState.info.homeTeam) || (team === 'visiting' ? 'Visiting' : 'Home');
-  let html = `<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--navy,#1a2744);margin-bottom:8px">Earned Run Review — ${escapeHtml(teamName)}, Inn ${realInn + 1}</div>`;
+  let html = `<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--navy,#003278);margin-bottom:8px">Earned Run Review — ${escapeHtml(teamName)}, Inn ${realInn + 1}</div>`;
 
   if (!erReviewList.length) {
     html += '<div style="font-size:12px;color:var(--text-light,#666);margin-bottom:10px">No runs scored in this inning.</div>';
@@ -5514,6 +5521,10 @@ function newGame() {
   gameOverShown = false;
   backupPromptDismissed = false;
   applyState();
+  // You finish a game on the Home tab, because the home team bats last, and
+  // `applyState` has no reason to move you. So a fresh card opened showing the
+  // home side under a readout reading ▲ 1 — the visitors bat first (F36).
+  switchTab('visiting');
 }
 
 /* --------------------------------------------------- position play entry ---
@@ -5593,7 +5604,7 @@ function showPositionPopup(prefix, placeholder, target) {
     popup.id = 'pos-popup';
     // Was `#333` — the one dark popup in an otherwise white/navy set. This is the
     // card/navy the base picker and the strikeout popup use.
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:14px 16px;z-index:300;display:flex;flex-direction:column;gap:8px;align-items:stretch;box-shadow:0 8px 40px rgba(26,39,68,0.4);font-family:var(--heading);';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:14px 16px;z-index:var(--z-popup);display:flex;flex-direction:column;gap:8px;align-items:stretch;box-shadow:0 8px 40px rgba(0,50,120,0.4);font-family:var(--heading);';
     const keyStyle = 'padding:6px 0;min-width:58px;min-height:46px;font-family:var(--heading);font-weight:700;background:var(--navy);color:var(--gold);border:none;border-radius:6px;cursor:pointer;line-height:1.1';
     let keys = '<div id="pos-keypad" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">';
     for (let i = 1; i <= POSITIONS; i++) {
@@ -5912,7 +5923,7 @@ function changePitcher() {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'pitcher-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border:2px solid #333;border-radius:8px;padding:14px 18px;z-index:300;box-shadow:0 6px 30px rgba(0,0,0,0.35);min-width:220px;font-family:var(--font);';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border:2px solid #333;border-radius:8px;padding:14px 18px;z-index:var(--z-popup);box-shadow:0 6px 30px rgba(0,0,0,0.35);min-width:220px;font-family:var(--font);';
     document.body.appendChild(popup);
   }
 
@@ -5969,11 +5980,17 @@ function markSub() {
    A `visibility: collapse` row refuses focus, so the field cannot be reached
    until the row is shown — which is the deadlock behind F7. Only the affected
    slot's row is opened: `.show-subs` opens all eighteen, and that drops the fit
-   from 9 visible batting slots to about 4 at 1194x834. */
-function revealSubRow(team, pIdx) {
+   from 9 visible batting slots to about 4 at 1194x834.
+
+   `row` is which of the slot's rows to open, and it defaults to 1 because SUB
+   always writes row 1. A pinch runner does not: he goes in behind whoever is
+   currently on base, so with a sub already in the slot he lands in row 2, and
+   opening row 1 there would put the caret on the wrong man's name (F24). */
+function revealSubRow(team, pIdx, row) {
   const slotBase = Math.floor(pIdx / ROWS_PER_POS) * ROWS_PER_POS;
+  const r = row || 1;
   const inp = document.querySelector(
-    `input[data-field="name"][data-team="${team}"][data-p="${slotBase + 1}"]`);
+    `input[data-field="name"][data-team="${team}"][data-p="${slotBase + r}"]`);
   if (!inp) return null;
   const tr = inp.closest('tr');
   if (tr) tr.classList.add('revealed');
@@ -6031,7 +6048,14 @@ function markPinchRunner() {
   setSubLine(team, pIdx, innIdx + 1, INNINGS - 1, runner);
   renderPitcherChange(team, pIdx, innIdx);
   updatePlayerStats(team);
+  // The same hole F7 closed for SUB, in the function that never got it: the row
+  // holding the runner's name is `visibility: collapse` until it has one, so PR
+  // was a press with no toast, no mark and no next step — and the only feedback
+  // it did give was an announcement naming a row that is still blank (F24).
+  const nameInp = revealSubRow(team, pIdx, runner);
   announce(rowLabel(team, pIdx + runner) + ' pinch-runs for ' + rowLabel(team, pIdx + subRowOf(ab)));
+  showPlayNotice(nameInp ? 'Enter the pinch runner\'s name.'
+                         : 'Pinch runner recorded — open Show sub rows to name him.');
   autoSave();
 }
 
@@ -6182,7 +6206,7 @@ function promptSubRemoval(team, pIdx, innIdx) {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'sub-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:400;box-shadow:0 8px 40px rgba(26,39,68,0.4);min-width:280px;max-width:min(92vw,380px);font-family:var(--font);';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:280px;max-width:min(92vw,380px);font-family:var(--font);';
     document.body.appendChild(popup);
   }
 
@@ -6385,7 +6409,7 @@ function promptDHChoice(team, spec) {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'dh-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:400;box-shadow:0 8px 40px rgba(26,39,68,0.4);min-width:280px;max-width:min(92vw,380px);font-family:var(--font);';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:280px;max-width:min(92vw,380px);font-family:var(--font);';
     document.body.appendChild(popup);
   }
   let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:8px;font-family:var(--heading)">' + escapeHtml(spec.title) + '</div>';
@@ -6420,7 +6444,7 @@ function changeFieldPos() {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'pos-change-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:300;box-shadow:0 8px 40px rgba(26,39,68,0.4);min-width:220px;font-family:var(--font);';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:220px;font-family:var(--font);';
     document.body.appendChild(popup);
   }
   const positions = ['P','C','1B','2B','3B','SS','LF','CF','RF','DH'];
@@ -6645,16 +6669,16 @@ function recomputePitcherAssignments() {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'recompute-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card,#fff);border:2px solid var(--navy,#1a2744);border-radius:8px;padding:16px 18px;z-index:400;box-shadow:0 8px 40px rgba(0,0,0,0.35);min-width:260px;max-width:340px;font-family:var(--font);';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card,#fff);border:2px solid var(--navy,#003278);border-radius:8px;padding:16px 18px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,0,0,0.35);min-width:260px;max-width:340px;font-family:var(--font);';
     document.body.appendChild(popup);
   }
-  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--navy,#1a2744);margin-bottom:8px">Recompute Pitcher Stats</div>';
+  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--navy,#003278);margin-bottom:8px">Recompute Pitcher Stats</div>';
   if (!plan.length) {
     html += '<div style="font-size:12px;color:var(--text-light,#666);margin-bottom:10px">All at-bats are already attributed to the correct pitcher. Nothing to change.</div>';
     html += '<button data-act="hidePopupById" data-arg="recompute-popup" style="width:100%;padding:6px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Close</button>';
   } else {
     html += '<div style="font-size:12px;color:var(--text-light,#666);margin-bottom:10px">Re-attributes <b>' + plan.length + '</b> at-bat' + (plan.length === 1 ? '' : 's') + ' to the correct pitcher based on the pitching changes recorded on the card. This updates IP, PC, H, R, ER, K and BB. It cannot be auto-undone.</div>';
-    html += '<div style="display:flex;gap:6px"><button id="rc-apply" style="flex:1;padding:7px;font-size:12px;font-weight:700;background:var(--navy,#1a2744);color:var(--gold,#c8a44b);border:none;border-radius:4px;cursor:pointer;text-transform:uppercase">Apply</button>';
+    html += '<div style="display:flex;gap:6px"><button id="rc-apply" style="flex:1;padding:7px;font-size:12px;font-weight:700;background:var(--navy,#003278);color:var(--gold,#ffffff);border:none;border-radius:4px;cursor:pointer;text-transform:uppercase">Apply</button>';
     html += '<button id="rc-cancel" style="padding:7px 12px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button></div>';
   }
   popup.innerHTML = html;
@@ -7327,7 +7351,7 @@ function promptPitcherDecision(which) {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'decision-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:400;box-shadow:0 8px 40px rgba(26,39,68,0.4);min-width:240px;font-family:var(--font);';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:240px;font-family:var(--font);';
     document.body.appendChild(popup);
   }
   let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:10px;font-family:var(--heading)">' + title + '</div>';

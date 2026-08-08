@@ -5947,4 +5947,196 @@
       eq('with no cell left highlighted', document.querySelectorAll('.at-bat-cell.selected').length, 0);
     } finally { clearStorage(); }
   });
+
+  /* =====================================================================
+     2026-08-08 — AUDIT-2026-08-07, wave 2.
+
+       F29/F22  two independent z-index ladders, so every popup opened from
+                inside a modal painted underneath it. One token scale now.
+       F24      PR was a press with no toast, no mark and no next step — F7's
+                fix was never applied to `markPinchRunner`
+       F36      New Game left you on the Home tab in the top of the 1st
+       F35      the superseded #1a2744 palette lived on in generated markup
+
+     What these can and cannot check. `run-tests.js` builds the DOM with jsdom
+     and does NOT pass `resources: 'usable'`, so **styles.css is never loaded**
+     under `npm test` — there is no cascade, `getComputedStyle` returns
+     defaults, and `var(--z-popup)` resolves to nothing. So nothing below
+     asserts a computed z-index; they asserts what app.js *writes*, which is
+     where both bugs actually lived. The resolved ladder was measured in a real
+     browser instead and is recorded in AUDIT-2026-08-07.md under F29.
+
+     F34 is a stylesheet-only change (`.quick-btn small`) with no app.js side
+     at all, so it has no case here for the same reason — it was measured, four
+     colour pairings, and the numbers are in the audit.
+     ===================================================================== */
+
+  /* ---- F29: no popup carries a z-index literal any more --------------- */
+
+  // The bug was not any one number, it was that there were two ladders and no
+  // way to compare them. A literal here is the thing that let them drift, so
+  // the invariant to hold is that app.js names a rung and never picks one.
+  // Deliberately checks the built element rather than the source text: the
+  // suite has no filesystem, and this is what the browser actually gets.
+  test('every popup app.js builds names a z-index token, never a number', () => {
+    // Each entry opens one popup from a cold card. Popups whose preconditions
+    // need a whole game are covered by the decision-popup case below.
+    sel('visiting', 0, 0);
+    const built = [];
+    const open = (id, fn) => {
+      try { fn(); } catch (e) { fail(`${id} threw while opening: ${e.message}`); }
+      const el = document.getElementById(id);
+      if (el) built.push(el);
+      return el;
+    };
+    open('base-picker', () => showBasePickerPopup('t', [{ label: 'a', value: 'a' }], () => {}));
+    open('pitcher-popup', () => changePitcher());
+    open('outcome-popup', () => { play('1B'); });
+    open('play-reject', () => showPlayReject('x'));
+    open('popup-backdrop', () => showPopupBackdrop());
+    ok('the case opened something to look at', built.length >= 3);
+    built.forEach(el => {
+      const inline = el.getAttribute('style') || '';
+      ok(`#${el.id} declares a z-index at all`, /z-index/i.test(inline));
+      ok(`#${el.id} names a token, not a number — got ${JSON.stringify(
+            (inline.match(/z-index\s*:\s*[^;]+/i) || [''])[0])}`,
+        !/z-index\s*:\s*-?\d/i.test(inline));
+    });
+  });
+
+  /* ---- F22: the summary's change links open a popup you can see ------- */
+
+  // The three W/L/SV links were 100% dead on every finished game: the popup
+  // opened at 400 under a summary at 600 and the summary stayed tappable over
+  // it. jsdom cannot see the paint, so this asserts the two things that made
+  // the paint wrong — the popup is really open, and the backdrop that is
+  // supposed to take the summary's taps really went up.
+  //
+  // The summary is opened directly rather than by playing a game out. What was
+  // broken is the stacking of a popup against the surface it was opened from,
+  // and `showGameSummary` builds the same links on the same path either way; a
+  // 28-play finish (the shortest regulation the select offers is 5) would be
+  // testing the inning machinery, which has its own cases.
+  test('the summary\'s change link opens a live decision popup (F22)', () => {
+    // The winning side's pitcher has to have recorded an out, or the popup has
+    // nobody to offer and "Auto" is the only button on it.
+    sel('visiting', 0, 0); play('K');
+    sel('visiting', 3, 0); play('K');
+    sel('visiting', 6, 0); play('K');
+    sel('home', 0, 0); play('HR');                    // and somebody has to be winning
+    const d = computePitcherDecisions();
+    eq('there is a winner to argue about', d.winTeam, 'home');
+
+    showGameSummary();
+    const modal = document.querySelector('.game-summary-modal');
+    ok('the summary is up', !!modal && modal.classList.contains('active'));
+    const link = Array.from(modal.querySelectorAll('button')).find(
+      b => b.dataset.act === 'promptPitcherDecision' && b.dataset.arg === 'wp');
+    ok('and it offers a change link', !!link);
+
+    promptPitcherDecision('wp');
+    ok('the popup is open', visible('decision-popup'));
+    ok('and the backdrop went up to take the summary\'s taps',
+      visible('popup-backdrop'));
+    const inline = document.getElementById('decision-popup').getAttribute('style') || '';
+    ok('on a named rung, not a number', !/z-index\s*:\s*-?\d/i.test(inline));
+
+    // And the feature behind the link works, which is the point of fixing it.
+    const opt = document.querySelector('#decision-popup .dp-opt');
+    ok('there is a pitcher to pick', !!opt);
+    opt.click();
+    eq('picking one writes the override', gameState.decisions.wp, 0);
+    ok('and the popup closed behind it', !visible('decision-popup'));
+  });
+
+  /* ---- F24: PR says what it did and where the name goes --------------- */
+
+  // Word for word F7's case, for the press that never got F7's fix. Mirrors
+  // 'SUB opens the row it just created and puts the caret in it'.
+  test('PR opens the runner\'s row and puts the caret in it (F24)', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    sel('visiting', 0, 0);
+    markPinchRunner();
+    eq('the runner went into row 1', ab('visiting', 0, 0).prRow, 1);
+    const inp = document.querySelector('input[data-field="name"][data-team="visiting"][data-p="1"]');
+    ok('the runner\'s row is open', inp.closest('tr').classList.contains('revealed'));
+    ok('with the caret in the name field', document.activeElement === inp);
+    ok('and the press said so', visible('play-reject'));
+    eq('as a notice, not a refusal',
+      document.getElementById('play-reject').dataset.tone, 'notice');
+  });
+
+  // `revealSubRow` opens `slotBase + 1` because that is the only row SUB ever
+  // writes. PR is the one caller for which that is wrong: he goes in behind
+  // whoever is on base, so with a substitute already in the slot he lands in
+  // row 2 — and the caret would have gone to the man he is running for.
+  test('PR behind a substitute opens row 2, not row 1 (F24)', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    ab('visiting', 0, 0).subChange = 1;               // the man on base is the sub
+    sel('visiting', 0, 0);
+    markPinchRunner();
+    eq('the runner went into row 2', ab('visiting', 0, 0).prRow, 2);
+    const row2 = document.querySelector('input[data-field="name"][data-team="visiting"][data-p="2"]');
+    ok('row 2 is the one that opened', row2.closest('tr').classList.contains('revealed'));
+    ok('and the caret is in it', document.activeElement === row2);
+  });
+
+  // The tail is additive: it must not change what PR records.
+  test('PR still refuses where there is nobody to run for (F24)', () => {
+    sel('visiting', 0, 0);
+    markPinchRunner();                                // no play in the cell yet
+    ok('the refusal is shown', visible('play-reject'));
+    eq('as a refusal, not the new notice',
+      document.getElementById('play-reject').dataset.tone, 'reject');
+    eq('and nothing was marked', ab('visiting', 0, 0).prRow, 0);
+    ok('and no row was opened', !document.querySelector('tr.pos-sub.revealed'));
+  });
+
+  /* ---- F36: a fresh card opens on the side that bats first ------------ */
+
+  // You finish a game on the Home tab, because the home team bats last, and
+  // `applyState` has no reason to move you — so the new card opened showing the
+  // home side under a readout reading ▲ 1.
+  test('New Game lands on the visiting tab, not wherever you were (F36)', () => {
+    const realConfirm = window.confirm;
+    window.confirm = () => true;
+    try {
+      clearStorage();
+      sel('home', 0, 0);
+      play('1B');
+      switchTab('home');                              // where a finished game leaves you
+      eq('starting on Home', document.querySelector('.tab-content.active').id, 'tab-home');
+      newGame();
+      eq('the fresh card opens on Visiting',
+        document.querySelector('.tab-content.active').id, 'tab-visiting');
+      eq('and the tab button agrees',
+        document.querySelector('.tab-btn.active').dataset.tab, 'visiting');
+      eq('under a readout that already said so',
+        document.getElementById('ls-inning').textContent, '▲ 1');
+      eq('with the card cleared', ab('home', 0, 0).play, '');
+    } finally { window.confirm = realConfirm; clearStorage(); }
+  });
+
+  /* ---- F35: the superseded palette is out of generated markup --------- */
+
+  // #1a2744 is a navy from a palette this app stopped using; it survived as the
+  // fallback in `var(--navy,#1a2744)` and as rgba(26,39,68,…) on every popup
+  // shadow, so it painted wherever the token failed to resolve — which is
+  // exactly when a fallback is read.
+  test('no generated popup carries the superseded #1a2744 palette (F35)', () => {
+    sel('visiting', 0, 0);
+    showBasePickerPopup('t', [{ label: 'a', value: 'a' }], () => {});
+    recomputePitcherAssignments();
+    showPlayReject('x');
+    ['base-picker', 'recompute-popup', 'play-reject'].forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;                                // preconditions, not this case
+      const markup = (el.getAttribute('style') || '') + el.innerHTML;
+      ok(`#${id} has no #1a2744`, !/#1a2744/i.test(markup));
+      ok(`#${id} has no rgba(26,39,68…)`, !/26\s*,\s*39\s*,\s*68/.test(markup));
+      ok(`#${id} has no superseded gold`, !/#c8a44b/i.test(markup));
+    });
+  });
 })();

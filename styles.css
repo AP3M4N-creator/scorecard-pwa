@@ -53,6 +53,37 @@
   --font: "Source Serif 4", Georgia, serif;
   --heading: "Source Serif 4", Georgia, serif;
   --mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+
+  /* ---------- The stacking scale (F29) ----------
+     There used to be two ladders, authored apart and never compared: this file
+     ran 1,2,3,4,120,150,300,500,600,1000 and app.js ran 180,300,400. They
+     interleaved badly. Every gameplay popup sat at 300-400 and both big modals
+     sat above them, so a popup opened from inside a modal painted underneath it
+     and the modal stayed tappable on top of it — F22 is that bug, and the Game
+     Library at 500 was the second way in.
+
+     One scale now, and both files read it. The rule the numbers encode: a
+     surface must outrank whatever it was opened from. Popups are therefore
+     above every modal, not below them, because a popup is always opened from
+     something. Nothing here is a literal anywhere else — if you need a new
+     tier, name it here.
+
+     `--z-banner` was 1000 and outranked every dialog, so a storage warning
+     could paint over an open popup. A banner is a passive notice with a
+     dismiss button, not a dialog, so it now sits above the page's own sticky
+     chrome and below anything modal. That is a ruling, not an inheritance. */
+  --z-grid-sticky: 2;        /* the scoring grid's sticky head row */
+  --z-frozen-col: 3;         /* the four frozen columns, sticky on X */
+  --z-frozen-head: 4;        /* their head cells, sticky on both axes */
+  --z-deck: 120;             /* the sticky masthead + linescore strip */
+  --z-deck-docked: 150;      /* the entry deck, docked to the bottom edge */
+  --z-menu: 300;             /* dropdowns anchored to a button */
+  --z-banner: 400;           /* page-level notices */
+  --z-modal: 500;            /* full-screen overlays */
+  --z-modal-child: 700;      /* an overlay that opens over another overlay */
+  --z-popup-backdrop: 750;   /* one step under the popup it guards */
+  --z-popup: 800;            /* every popup app.js builds */
+  --z-toast: 900;            /* says why a press refused, so it clears them all */
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -353,7 +384,7 @@ details.info-details > summary:hover { color: var(--navy); }
   background: var(--cream); color: var(--text-light);
   font-family: var(--heading); font-weight: 600; font-size: 11px;
   letter-spacing: .1em; text-transform: uppercase;
-  padding: 7px 2px; text-align: center; position: sticky; top: 0; z-index: 2;
+  padding: 7px 2px; text-align: center; position: sticky; top: 0; z-index: var(--z-grid-sticky);
   border-bottom: 2px solid var(--text);
 }
 .scoring-grid thead th.player-col { text-align: left; padding-left: 8px; }
@@ -595,7 +626,10 @@ details.info-details > summary:hover { color: var(--navy); }
 .spray-popup {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
   background: var(--card); border: 1px solid var(--text); border-radius: 2px;
-  padding: 18px; z-index: 300; box-shadow: 0 12px 32px rgba(45,43,43,0.22);
+  /* A popup, not a menu: it is in ALSO_GUARDED (app.js) and the backdrop goes
+     up behind it, so it belongs on the popup rung with the fourteen app.js
+     builds rather than on the dropdown rung it happened to share (F29). */
+  padding: 18px; z-index: var(--z-popup); box-shadow: 0 12px 32px rgba(45,43,43,0.22);
   text-align: center; display: none;
 }
 .spray-popup h3 {
@@ -612,10 +646,12 @@ details.info-details > summary:hover { color: var(--navy); }
 
 /* ---------- Modals ---------- */
 .modal-overlay, .hotkey-modal, .game-summary-modal {
-  position: fixed; inset: 0; background: rgba(32,30,29,0.55); z-index: 500;
+  position: fixed; inset: 0; background: rgba(32,30,29,0.55); z-index: var(--z-modal);
   display: none; align-items: center; justify-content: center;
 }
-.game-summary-modal { z-index: 600; align-items: flex-start; justify-content: center; padding: 20px; overflow-y: auto; }
+/* The summary can open with the Game Library already up, so it takes the rung
+   above the plain overlay — which is what the bare 600 here was buying (F29). */
+.game-summary-modal { z-index: var(--z-modal-child); align-items: flex-start; justify-content: center; padding: 20px; overflow-y: auto; }
 .modal-overlay.active, .hotkey-modal.active, .game-summary-modal.active { display: flex; }
 .modal-box, .hotkey-modal-inner, .game-summary-inner {
   background: var(--card); border: 1px solid var(--text); border-radius: 2px;
@@ -726,7 +762,7 @@ details.info-details > summary:hover { color: var(--navy); }
 /* ---------- Banners ---------- */
 .banner {
   display: none; align-items: center; gap: 12px; flex-wrap: wrap;
-  position: sticky; top: 0; z-index: 1000; padding: 10px 18px;
+  position: sticky; top: 0; z-index: var(--z-banner); padding: 10px 18px;
   font-family: var(--heading); font-size: 14px; font-weight: 600; color: #fff;
 }
 .banner span { flex: 1; min-width: 220px; }
@@ -801,7 +837,7 @@ details.info-details > summary:hover { color: var(--navy); }
   #live-stats > .live-cell:first-child { border-left: none; padding-left: 0; }
   /* Keep entry in reach: dock the quick bar to the bottom edge */
   .tab-content.active .quick-bar {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 150;
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--z-deck-docked);
     flex-direction: column-reverse; background: var(--cream);
     border-top: 1px solid var(--text); padding: 0 12px;
     box-shadow: 0 -6px 20px rgba(45,43,43,0.16);
@@ -1015,7 +1051,7 @@ details.info-details > summary::before { color: var(--rb-red); }
 
 /* ---------- Entry deck, docked at every size ---------- */
 .tab-content.active .quick-bar {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 150;
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--z-deck-docked);
   flex-direction: column-reverse;
   background: rgba(255,255,255,0.97); backdrop-filter: blur(12px);
   border-top: 3px solid var(--rb-red); padding: 0 20px;
@@ -1046,7 +1082,20 @@ details.info-details > summary::before { color: var(--rb-red); }
   color: var(--rb-red); border-color: var(--rb-red); background: var(--rb-white);
 }
 .quick-btn.undo-play:hover, .quick-btn.pitcher-change:hover { background: var(--rb-red); color: var(--rb-white); }
-.quick-btn small { opacity: .5; }
+/* The keyboard letter on each play button, at 9px. The hint takes its colour
+   from the button, so there are four pairings here, not one — and F34 measured
+   only navy-on-white. Remeasured at 1194x834, worst case first:
+
+     opacity   white/red   red/white   navy/white   white/navy
+       .5        2.42        2.60         2.93         4.14
+       .7        3.63        3.92         5.10         6.69
+       .85       4.82        5.15         7.98         9.16
+
+   So .7 — the number F34 proposed — leaves the four pitch buttons and the four
+   hit buttons still under AA. .85 is the lowest step that clears 4.5:1 on all
+   four, and at 9px against a label three sizes larger the letter still reads as
+   subordinate (F34). */
+.quick-btn small { opacity: .85; }
 .qb-more-btn { border-color: var(--line); color: var(--rb-blue); border-radius: 4px; }
 .qb-more-btn.open { background: var(--rb-red); border-color: var(--rb-red); color: var(--rb-white); }
 
@@ -1226,7 +1275,7 @@ details.info-details > summary { padding: 8px 14px; min-height: 40px; justify-co
   letter-spacing: .06em; }
 details.info-details > summary:hover { background: rgba(255,255,255,0.16); border-color: var(--rb-white); color: var(--rb-white); }
 .info-body {
-  position: absolute; top: calc(100% + 8px); right: 0; z-index: 300;
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: var(--z-menu);
   width: max-content; max-width: min(680px, calc(100vw - 32px));
   background: var(--paper, #fff); color: var(--rb-blue, #003278);
   border: 1px solid var(--line, rgba(0,0,0,0.2)); border-top: 3px solid var(--rb-red, #c0111f);
@@ -1238,7 +1287,7 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
    and the live readout get the width they need on one line. */
 .hdr-menu { position: relative; }
 .hdr-menu-panel {
-  display: none; position: absolute; top: calc(100% + 8px); right: 0; z-index: 300;
+  display: none; position: absolute; top: calc(100% + 8px); right: 0; z-index: var(--z-menu);
   min-width: 190px; padding: 6px;
   background: var(--paper, #fff); border: 1px solid var(--line, rgba(0,0,0,0.2));
   border-top: 3px solid var(--rb-red, #c0111f); border-radius: 3px;
@@ -1263,7 +1312,7 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
 @media (min-width: 835px) {
   /* --- The strip: masthead, linescore and live readout on one deck --- */
   .deck-strip {
-    position: sticky; top: 0; z-index: 120;
+    position: sticky; top: 0; z-index: var(--z-deck);
     margin: 0 -20px; padding: 0 20px 8px;
     background: var(--paper, #fff);
   }
@@ -1499,18 +1548,18 @@ body.drawer-open .tab-content.active .grid-wrap {
      In both orientations, not just the portrait one that scrolls by default:
      nine innings fit across a landscape phone but fifteen do not, and an
      extra-innings card is exactly when the bottom of the order matters. */
-  .scoring-grid th.ord-col,  .scoring-grid td.order-cell  { position: sticky; left: 0; z-index: 3; }
-  .scoring-grid th.num-col,  .scoring-grid td.num-cell    { position: sticky; z-index: 3;
+  .scoring-grid th.ord-col,  .scoring-grid td.order-cell  { position: sticky; left: 0; z-index: var(--z-frozen-col); }
+  .scoring-grid th.num-col,  .scoring-grid td.num-cell    { position: sticky; z-index: var(--z-frozen-col);
     left: var(--frz-ord); }
-  .scoring-grid th.name-col, .scoring-grid td.player-cell { position: sticky; z-index: 3;
+  .scoring-grid th.name-col, .scoring-grid td.player-cell { position: sticky; z-index: var(--z-frozen-col);
     left: calc(var(--frz-ord) + var(--frz-num)); }
-  .scoring-grid th.pos-col,  .scoring-grid td.pos-cell    { position: sticky; z-index: 3;
+  .scoring-grid th.pos-col,  .scoring-grid td.pos-cell    { position: sticky; z-index: var(--z-frozen-col);
     left: calc(var(--frz-ord) + var(--frz-num) + var(--frz-name)); }
-  /* thead is already sticky vertically at z-index 2. These four are sticky on
-     both axes and have to beat their own row as well as the inning cells
-     sliding underneath them. */
+  /* thead is already sticky vertically at --z-grid-sticky. These four are
+     sticky on both axes and have to beat their own row as well as the inning
+     cells sliding underneath them. */
   .scoring-grid thead th.ord-col, .scoring-grid thead th.num-col,
-  .scoring-grid thead th.name-col, .scoring-grid thead th.pos-col { z-index: 4; }
+  .scoring-grid thead th.name-col, .scoring-grid thead th.pos-col { z-index: var(--z-frozen-head); }
   /* `border-collapse: collapse` gives a cell's right-hand border to its
      neighbour, so the frozen block's trailing edge belongs to the inning column
      that is scrolling away underneath it and cannot be drawn there. A shadow on
@@ -1522,7 +1571,7 @@ body.drawer-open .tab-content.active .grid-wrap {
 
      A table cell's background is painted in the *table's* background layer
      (CSS 2.1 §17.5.1), not inside the cell's own stacking context — so
-     `z-index: 3` lifts a frozen cell's content above the innings sliding under
+     `--z-frozen-col` lifts a frozen cell's content above the innings sliding under
      it but leaves its background down in that shared layer, where the at-bat
      cells, later in the row, paint over it. Normally invisible, because both are
      opaque white. Not invisible over a scored cell: the five play tints are
@@ -1530,7 +1579,7 @@ body.drawer-open .tab-content.active .grid-wrap {
      dragged a 40%-green single and a 40%-gold home run right through the batting
      order's names.
 
-     A pseudo-element is content, so it lands inside the cell's z-index: 3
+     A pseudo-element is content, so it lands inside the cell's --z-frozen-col
      stacking context, above the tint; `z-index: -1` keeps it behind the cell's
      own input. `background: inherit` so the ground stays whatever the cascade
      already decided for that cell — navy for the order stripe, white for a
