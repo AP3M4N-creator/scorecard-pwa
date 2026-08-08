@@ -201,6 +201,43 @@ function refillAtBats(state) {
   });
 }
 
+/* Restore the full 27-row / 8-pitcher shape of a roster a load path handed us
+   short.
+
+   `mergeStateDefaults` guards its keys with truthiness, and `[]` is truthy, so a
+   truncated export — or a hand-edited file, or an interrupted write — went
+   straight through with `players: []`. `applyState` paints rows by walking
+   `players`, so with nothing to walk it painted nothing and never cleared the
+   inputs already on screen: the previous game's names, pitchers and every play
+   cell stayed up under the new game's title, with no warning (F23). Restoring
+   the shape here is what makes those loops run and blank them.
+
+   Not import-only — `loadState` runs the same merge, so a truncated
+   localStorage card did this at boot too.
+
+   Must run *after* `migrateLineupRows`, which infers the old slot width from the
+   row count: pad an 18-row 2-row-per-slot save up to 27 first and the migration
+   sees a current-width card, bails, and every lineup below the first stays
+   shifted up a spot. Before `refillAtBats`, which fills the new rows' at-bats. */
+function padRosters(state) {
+  if (!state || !state.teams) return;
+  const defaults = createEmptyState().teams;
+  ['visiting', 'home'].forEach(t => {
+    const d = defaults[t];
+    if (!state.teams[t]) state.teams[t] = d;
+    const team = state.teams[t];
+    // Index-preserving: a row that is there keeps its index, because that index
+    // *is* the man's place in the lineup and `bases[].p`, `lastPA.pIdx` and the
+    // out log all name it.
+    if (!Array.isArray(team.players) || team.players.length < d.players.length) {
+      team.players = d.players.map((def, i) => (team.players && team.players[i]) || def);
+    }
+    if (!Array.isArray(team.pitchers) || team.pitchers.length < d.pitchers.length) {
+      team.pitchers = d.pitchers.map((def, i) => (team.pitchers && team.pitchers[i]) || def);
+    }
+  });
+}
+
 // A shallow copy of `state` with the sub rows' at-bats emptied. Used for every
 // write and for change detection, so both sides of a comparison are the same
 // shape. The live `gameState` is never mutated.
@@ -5124,6 +5161,7 @@ function mergeStateDefaults(parsed) {
   // Before refillAtBats: the re-lay-out moves whole player rows, and there is no
   // point padding rows that are about to be inserted.
   migrateLineupRows(parsed);
+  padRosters(parsed);
   refillAtBats(parsed);
   backfillOutsLog(parsed);
   migrateBaseRunners(parsed);

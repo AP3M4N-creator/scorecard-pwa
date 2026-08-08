@@ -6139,4 +6139,160 @@
       ok(`#${id} has no superseded gold`, !/#c8a44b/i.test(markup));
     });
   });
+
+  /* ---- F23: a truncated roster must not leave the last game on the card --
+     `mergeStateDefaults` guarded with truthiness and `[]` is truthy, so an
+     import with empty `players` arrays was accepted: the team names changed,
+     the linescore blanked, and every player, pitcher and play cell of the
+     previous game stayed on screen under the new game's title. */
+
+  // Drive the real `importGameJSON` with a JSON string. The app reads the file
+  // through FileReader, so stand one in that fires `onload` at once — the input
+  // element, both validation guards, the unsaved-changes confirm,
+  // `mergeStateDefaults` and `applyState` are all still on the path. This is the
+  // first coverage `importGameJSON` has had of any kind (F39).
+  function importJSON(text) {
+    const realFR = window.FileReader, realConfirm = window.confirm, realAlert = window.alert;
+    const alerts = [];
+    window.alert = m => alerts.push(String(m));
+    window.confirm = () => true;                   // yes, discard the outgoing card
+    window.FileReader = function () {
+      this.onload = null;
+      this.onerror = null;
+      this.result = null;
+      this.readAsText = () => { this.result = text; if (this.onload) this.onload(); };
+    };
+    lineupDirty = true;                            // applyState writes the lineup inputs
+    let thrown = '';
+    try {
+      importGameJSON({ files: [{ name: 'card.json' }], value: 'card.json' });
+    } catch (e) {
+      // Not swallowed — reported, so a case can say *the import threw* rather
+      // than fail on whatever the half-painted card happens to read afterwards.
+      thrown = (e && e.message) || String(e);
+    } finally {
+      window.FileReader = realFR;
+      window.confirm = realConfirm;
+      window.alert = realAlert;
+    }
+    return { alerts, thrown };
+  }
+
+  // A card with names on it and plays in it, so an import that fails to clear
+  // has something of the last game left to show.
+  function scoreAGame() {
+    setPlayer('visiting', 0, '27', 'Altuve');
+    setPlayer('visiting', 3, '2', 'Dubon');
+    setPlayer('home', 0, '5', 'Freeman');
+    sel('visiting', 0, 0); play('1B');
+    sel('visiting', 3, 0); play('K');
+    gameState.info.visitingTeam = 'Astros';
+    gameState.info.homeTeam = 'Dodgers';
+    collectState();
+  }
+
+  function filledNames(team) {
+    return Array.from(rawAll(`input[data-field="name"][data-team="${team}"]`))
+      .filter(i => i.value.trim()).map(i => i.value);
+  }
+  function filledPlayCells() {
+    return Array.from(rawAll('.play-text')).filter(c => c.textContent.trim()).length;
+  }
+
+  test('an import with an empty roster clears the last game off the card (F23)', () => {
+    try {
+      clearStorage();
+      scoreAGame();
+      ok('the outgoing game is on the card', filledNames('visiting').length > 0);
+      ok('with plays in it', filledPlayCells() > 0);
+
+      // The truncated-export shape: valid JSON, both keys the guard checks for,
+      // and `[]` where the rosters should be. `[]` is truthy, which is the whole
+      // bug — the merge's `if (!parsed.teams)` waved this straight through.
+      const res = importJSON(JSON.stringify({
+        info: { visitingTeam: 'X', homeTeam: 'Y' },
+        teams: { visiting: { players: [], pitchers: [] }, home: { players: [], pitchers: [] } }
+      }));
+
+      // Worse than the finding recorded: with a game in progress, `applyState`
+      // walks the innings' player refs into a roster that no longer has those
+      // rows and throws part-way through, leaving the card half-painted.
+      eq('the import did not throw', res.thrown, '');
+      eq('and it was not refused', res.alerts.join('|'), '');
+      eq('it is the new game on the card', gameState.info.visitingTeam, 'X');
+
+      // The shape is what makes applyState's row loop run at all, and that loop
+      // is the only thing that blanks the inputs already on screen.
+      ['visiting', 'home'].forEach(t => {
+        eq(`${t} has a full lineup again`,
+          gameState.teams[t].players.length, POSITIONS * ROWS_PER_POS);
+        eq(`${t} has a full pitcher table again`,
+          gameState.teams[t].pitchers.length, PITCHER_ROWS);
+        eq(`no ${t} name survived the import`, filledNames(t).join('|'), '');
+      });
+      eq('and no play cell did either', filledPlayCells(), 0);
+    } finally { clearStorage(); }
+  });
+
+  // Empty is only the loud end of it. A roster cut off part-way — a hand-edited
+  // file, a write that stopped — has to be filled out *behind* the men who are
+  // in it, because a row index is the man's place in the order and the runners,
+  // the out log and `nextLeadoff` all name rows. Padding that reshuffled would
+  // be a worse bug than the one it fixed.
+  test('a roster cut off part-way is filled out behind the men in it (F23)', () => {
+    try {
+      clearStorage();
+      const short = JSON.parse(JSON.stringify(stateForStorage(createEmptyState())));
+      short.info.visitingTeam = 'X';
+      short.info.homeTeam = 'Y';
+      ['visiting', 'home'].forEach(t => {
+        short.teams[t].players = short.teams[t].players.slice(0, 5);
+        short.teams[t].pitchers = short.teams[t].pitchers.slice(0, 2);
+      });
+      short.teams.visiting.players[0].name = 'Altuve';
+      short.teams.visiting.players[3].name = 'Dubon';   // slot 1's starter
+
+      const res = importJSON(JSON.stringify(short));
+
+      eq('the import ran clean', res.thrown + res.alerts.join('|'), '');
+      eq('the lineup is full length again',
+        gameState.teams.visiting.players.length, POSITIONS * ROWS_PER_POS);
+      eq('and the rows behind it are empty',
+        gameState.teams.visiting.players.slice(5).filter(p => p.name).length, 0);
+      // The two men are still in their own spots, not shifted up into a gap.
+      eq('slot 0 still leads off', gameState.teams.visiting.players[0].name, 'Altuve');
+      eq('and slot 1 still bats second', gameState.teams.visiting.players[3].name, 'Dubon');
+      eq('the pitcher table is full length again',
+        gameState.teams.visiting.pitchers.length, PITCHER_ROWS);
+    } finally { clearStorage(); }
+  });
+
+  test('a real export still round-trips through import unchanged (F23)', () => {
+    try {
+      clearStorage();
+      scoreAGame();
+      // Exactly what exportGameJSON writes to the file.
+      const file = JSON.stringify(stateForStorage(gameState), null, 2);
+      const namesBefore = filledNames('visiting').join('|');
+      const cellsBefore = filledPlayCells();
+
+      importJSON(file);
+
+      // The padding is index-preserving, so the men and their at-bats have to
+      // come back in the same rows they went out in — this is the assertion
+      // that keeps the fix from being a reshuffle.
+      eq('the lineup came back as it went out', filledNames('visiting').join('|'), namesBefore);
+      eq('and so did the plays', filledPlayCells(), cellsBefore);
+      eq('the man on first is still the man who singled', onB('visiting', 0, 0), 0);
+      eq('and the strikeout is still his', ab('visiting', 3, 0).play, 'K');
+
+      // Save bookkeeping legitimately moves on an import; the card itself must not.
+      const norm = s => {
+        const o = JSON.parse(JSON.stringify(stateForStorage(s)));
+        delete o.lastSaved; delete o.currentGameId; delete o.backedUp;
+        return JSON.stringify(o);
+      };
+      eq('and the card serialises identically', norm(gameState), norm(JSON.parse(file)));
+    } finally { clearStorage(); }
+  });
 })();
