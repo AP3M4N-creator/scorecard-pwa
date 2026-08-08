@@ -38,6 +38,22 @@ current=$(grep -oE "SHELL_VERSION = 'v[0-9]+'" "$sw" | grep -oE '[0-9]+')
 [ -n "$current" ] || { echo "pre-commit: could not read SHELL_VERSION in $sw" >&2; exit 0; }
 next=$((current + 1))
 
-sed -i '' "s/SHELL_VERSION = 'v[0-9]*'/SHELL_VERSION = 'v$next'/" "$sw"
+# Portable in-place edit: GNU sed wants -i with an attached suffix, BSD/macOS
+# wants -i ''. Write to a temp file and move it back instead, then confirm the
+# substitution actually landed — a silent no-op here ships a stale cache.
+tmp="$sw.$$.tmp"
+if ! sed "s/SHELL_VERSION = 'v[0-9]*'/SHELL_VERSION = 'v$next'/" "$sw" > "$tmp"; then
+  rm -f "$tmp"
+  echo "pre-commit: sed failed while bumping SHELL_VERSION in $sw — commit aborted" >&2
+  exit 1
+fi
+mv "$tmp" "$sw" || { echo "pre-commit: could not write $sw — commit aborted" >&2; exit 1; }
+
+if ! grep -q "SHELL_VERSION = 'v$next'" "$sw"; then
+  echo "pre-commit: SHELL_VERSION bump to v$next did not apply — commit aborted" >&2
+  echo "            $sw would ship to a stale cache; fix the bump and retry." >&2
+  exit 1
+fi
+
 git add "$sw"
 echo "pre-commit: assets changed -> bumped service-worker cache to v$next"
