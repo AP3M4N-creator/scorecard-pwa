@@ -1497,14 +1497,27 @@ function runnerPathClear(inn, fromBase, dest, runner) {
   return true;
 }
 
-// The runners' order has to survive the play: two men can't finish on one base,
-// and a trailing runner can't finish ahead of a lead runner who is still on one —
-// he would have to pass him. `parties` is [{ key, from, dest }]; `from` is the
-// base each started on (-1 for the batter) and `dest` is 0-3, or undefined for
-// anyone thrown out or not yet decided. Returns the set of keys in conflict.
-function runnerOrderConflicts(parties) {
+// The two ways a set of destinations can break the runners' order, in the words
+// the popup refuses with. Named because they are now said in three places — the
+// toast on Confirm, the `title` on a blocked option, and the line under the rows
+// that carries it on a touch screen — and those must not drift apart (F26).
+const SHARE_BASE_MSG = 'Two runners can\'t share a base — pick another destination.';
+const PASS_RUNNER_MSG = 'A runner can\'t pass the runner ahead of him.';
+
+/* Why each runner in conflict is in conflict, rather than only that he is.
+
+   Same walk as `runnerOrderConflicts` — which is now defined in terms of this, so
+   the rule lives in one place and a blocked button can never disagree with the
+   Confirm that would have refused it. Returns Map(key -> reason).
+
+   Sharing a base beats passing when a runner is caught by both: it is the more
+   concrete of the two, and it names the base the scorer has to move somebody off. */
+function runnerConflictReasons(parties) {
   const on = parties.filter(p => p.dest !== undefined && p.dest !== null && p.dest >= 0 && p.dest <= 3);
-  const bad = new Set();
+  const why = new Map();
+  const note = (key, msg) => {
+    if (msg === SHARE_BASE_MSG || !why.has(key)) why.set(key, msg);
+  };
   for (let i = 0; i < on.length; i++) {
     for (let j = i + 1; j < on.length; j++) {
       const a = on[i], b = on[j];
@@ -1512,18 +1525,47 @@ function runnerOrderConflicts(parties) {
       // Both scoring is fine — home isn't a base anyone has to stand on.
       if (a.dest === 3 && b.dest === 3) continue;
       const keepsOrder = a.from < b.from ? a.dest < b.dest : a.dest > b.dest;
-      if (!keepsOrder) { bad.add(a.key); bad.add(b.key); }
+      if (!keepsOrder) {
+        // Equal destinations fail `keepsOrder` on both sides of the ternary, so
+        // this is the same condition split by cause, not a second rule.
+        const msg = a.dest === b.dest ? SHARE_BASE_MSG : PASS_RUNNER_MSG;
+        note(a.key, msg);
+        note(b.key, msg);
+      }
     }
   }
-  return bad;
+  return why;
 }
 
-// Grey out an offered destination the current set of choices has made illegal, so
-// the scorer sees the constraint instead of running into a refusal on Confirm.
-// Reversible: the option comes back as soon as the conflicting choice changes.
-function setOptionBlocked(btn, blocked) {
+// The runners' order has to survive the play: two men can't finish on one base,
+// and a trailing runner can't finish ahead of a lead runner who is still on one —
+// he would have to pass him. `parties` is [{ key, from, dest }]; `from` is the
+// base each started on (-1 for the batter) and `dest` is 0-3, or undefined for
+// anyone thrown out or not yet decided. Returns the set of keys in conflict.
+function runnerOrderConflicts(parties) {
+  return new Set(runnerConflictReasons(parties).keys());
+}
+
+/* Grey out an offered destination the current set of choices has made illegal, so
+   the scorer sees the constraint instead of running into a refusal on Confirm.
+   Reversible: the option comes back as soon as the conflicting choice changes.
+
+   `why` is the reason, and it is not optional in spirit — greying out in silence
+   is what F26 was. It goes on `title` for a pointer, on `aria-disabled` so the
+   state is announced rather than merely painted (a `disabled` button is skipped
+   by the reader, which is why the reason cannot live on the button alone), and on
+   `dataset.why` for `paintBlockedNote` to collect into the visible line. */
+function setOptionBlocked(btn, blocked, why) {
   btn.dataset.blocked = blocked ? '1' : '';
   btn.disabled = !!blocked;
+  btn.setAttribute('aria-disabled', blocked ? 'true' : 'false');
+  if (blocked && why) {
+    btn.title = why;
+    btn.dataset.why = why;
+  } else {
+    btn.removeAttribute('title');
+    delete btn.dataset.why;
+  }
   btn.style.opacity = blocked ? '0.35' : '1';
   btn.style.cursor = blocked ? 'not-allowed' : 'pointer';
   if (blocked) {
@@ -1538,6 +1580,28 @@ function setOptionBlocked(btn, blocked) {
     // `choices` went on holding it.
     btn.style.cssText = btn.dataset.style;
   }
+}
+
+/* Say, under the rows, why the greyed-out options are greyed out.
+
+   `title` alone was the whole of F26's proposed fix and it is not enough: this is
+   scored on an iPad, where there is no hover to ask with, so a tooltip is a reason
+   the scorer can never reach. The words go on the page instead, the way the
+   5.08(a) bar already does it a few lines away.
+
+   One line per distinct reason, not one per button — three blocked options with
+   the same cause are one constraint, and saying it three times reads as three
+   problems. `skip` drops a reason that already has its own line up (5.08(a)), so
+   the popup never says the same thing twice. */
+function paintBlockedNote(el, btns, skip) {
+  if (!el) return;
+  const reasons = [];
+  Array.prototype.forEach.call(btns, btn => {
+    const why = btn.dataset.why;
+    if (why && why !== skip && reasons.indexOf(why) === -1) reasons.push(why);
+  });
+  el.textContent = reasons.join(' ');
+  el.style.display = reasons.length ? 'block' : 'none';
 }
 
 /* The three states an advancement button can be in, in one place, so the force
@@ -1571,9 +1635,7 @@ function runnerOrderMessage(parties) {
   const on = parties.filter(p => p.dest !== undefined && p.dest !== null && p.dest >= 0 && p.dest <= 2);
   const dests = on.map(p => p.dest);
   const shared = dests.some((d, i) => dests.indexOf(d) !== i);
-  return shared
-    ? 'Two runners can\'t share a base — pick another destination.'
-    : 'A runner can\'t pass the runner ahead of him.';
+  return shared ? SHARE_BASE_MSG : PASS_RUNNER_MSG;
 }
 
 let playRejectTimer = null;
@@ -2448,6 +2510,9 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
   // Rule 5.08(a) — see NO_RUN_508A. Hidden until the chosen outcomes make the
   // batter's out the third one, which they can stop doing again on the next click.
   html += `<div id="oc-508a" style="display:none;font-size:10px;color:var(--accent);margin:2px 0 6px;line-height:1.4">${escapeHtml(NO_RUN_508A)}</div>`;
+  // Why the greyed-out Safe options are greyed out — see paintBlockedNote (F26).
+  // Same slot and same voice as the bar above it, filled on every refresh.
+  html += `<div id="oc-blocked" style="display:none;font-size:10px;color:var(--accent);margin:2px 0 6px;line-height:1.4"></div>`;
   html += `<button id="oc-confirm" style="margin-top:6px;width:100%;padding:7px;font-size:12px;font-weight:700;background:var(--navy);color:var(--gold);border:none;border-radius:4px;cursor:pointer;font-family:var(--heading);letter-spacing:0.5px;text-transform:uppercase">Confirm</button>`;
   popup.innerHTML = html;
   openPopup(popup);
@@ -2522,10 +2587,16 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
       if (btn.dataset.action !== 'safe') return;   // an out never collides
       const key = btn.dataset.base === 'batter' ? 'batter' : parseInt(btn.dataset.base);
       const dest = btn.dataset.dest ? parseInt(btn.dataset.dest) : 0;
-      if (barred && dest === 3) { setOptionBlocked(btn, true); return; }
+      if (barred && dest === 3) { setOptionBlocked(btn, true, NO_RUN_508A); return; }
       const hypothetical = ocParties().map(p => (p.key === key ? { key: p.key, from: p.from, dest } : p));
-      setOptionBlocked(btn, runnerOrderConflicts(hypothetical).has(key));
+      // The reason, not just the verdict — `runnerOrderConflicts` is this same map
+      // with the reasons thrown away, so asking for them costs nothing (F26).
+      const why = runnerConflictReasons(hypothetical).get(key);
+      setOptionBlocked(btn, !!why, why);
     });
+    // 5.08(a) is skipped: it already has its own line directly above this one.
+    paintBlockedNote(document.getElementById('oc-blocked'),
+      popup.querySelectorAll('.oc-btn'), NO_RUN_508A);
   }
 
   function flashOcRow(key) {
@@ -2934,6 +3005,9 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     html += '<div style="font-size:10px;color:var(--text-light);margin:2px 0 8px;line-height:1.4">Every runner is forced, so the card has filled them in. Tap a base to change one.</div>';
   }
 
+  // Why the greyed-out bases are greyed out — see paintBlockedNote (F26). The same
+  // line as the DP popup's, because it is the same constraint refusing the same way.
+  html += `<div id="rp-blocked" style="display:none;font-size:10px;color:var(--accent);margin:2px 0 6px;line-height:1.4"></div>`;
   html += `<div style="display:flex;gap:6px;margin-top:6px">`;
   html += `<button id="rp-confirm" style="flex:1;padding:7px;font-size:12px;font-weight:700;background:var(--navy);color:var(--gold);border:none;border-radius:4px;cursor:pointer;font-family:var(--heading);letter-spacing:0.5px;text-transform:uppercase">Confirm</button>`;
   // There was no way out of this popup at all — no Cancel, and Escape did nothing —
@@ -2994,9 +3068,11 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
       // The 5.08(a) bar goes through here rather than being painted once at render
       // time, or the collision refresh below would open the plate back up on the
       // next click. The batter's own row tops out at 3rd, so this is the runners.
-      const blocked = (runBarred && dest === 3) ||
-        runnerOrderConflicts(rpParties({ key, dest })).has(key);
-      setOptionBlocked(btn, blocked);
+      const why = (runBarred && dest === 3)
+        ? NO_RUN_508A
+        : runnerConflictReasons(rpParties({ key, dest })).get(key);
+      const blocked = !!why;
+      setOptionBlocked(btn, blocked, why);
       // A pre-selected force that the scorer has just made impossible by answering
       // another row is dropped, not left standing behind a greyed-out button where
       // only Confirm would find it. The row goes back to unanswered, which is what
@@ -3009,6 +3085,11 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
       choices[key] = undefined;
       popup.querySelectorAll(`.rp-btn[data-base="${key}"]`).forEach(b => paintRpBtn(b, false));
     });
+    // After the invalidation pass, not before: a dropped force repaints its row but
+    // does not re-run the block check, and the line has to describe the board as it
+    // now stands. 5.08(a) is skipped — it has its own line at the top when it is on.
+    paintBlockedNote(document.getElementById('rp-blocked'),
+      popup.querySelectorAll('.rp-btn'), NO_RUN_508A);
   }
 
   // Button click handlers

@@ -6295,4 +6295,132 @@
       eq('and the card serialises identically', norm(gameState), norm(JSON.parse(file)));
     } finally { clearStorage(); }
   });
+
+  /* ---- F26: a blocked option has to say why it is blocked -----------------
+     `setOptionBlocked` set `disabled`, an opacity, a cursor and three colours,
+     and said nothing at all. Three of the batter's options would go grey at
+     once, for two different and perfectly good reasons, and the popup gave
+     neither — on an iPad there is no hover to ask a `title` with. */
+
+  function ocNote() {
+    const el = document.getElementById('oc-blocked');
+    return el && el.style.display !== 'none' ? el.textContent : '';
+  }
+  function rpNote() {
+    const el = document.getElementById('rp-blocked');
+    return el && el.style.display !== 'none' ? el.textContent : '';
+  }
+  // A man on 1st and a double play behind him: the popup the finding was found in.
+  function dpWithManOnFirst() {
+    sel('visiting', 0, 0); play('1B');
+    sel('visiting', 3, 0);
+    promptPositionPlay('DP ');
+    positionPopup('4-6-3');
+  }
+
+  test('a blocked option says why, in the words Confirm would refuse with (F26)', () => {
+    dpWithManOnFirst();
+    ocBtn(0, 'safe', 0).onclick();          // the runner holds 1st; the batter is out on a DP
+
+    // All three of the batter's Safe options are now illegal, for two reasons:
+    // 1st is the base the runner is standing on, and 2nd or 3rd would put the
+    // batter ahead of a man who started ahead of him.
+    const first = ocBtn('batter', 'safe', 0);
+    const second = ocBtn('batter', 'safe', 1);
+    const third = ocBtn('batter', 'safe', 2);
+    [first, second, third].forEach((b, i) => {
+      ok(`the batter's option ${i} is blocked`, isOptionBlocked(b));
+      ok(`and it carries a reason`, !!b.title);
+      // `disabled` alone is skipped by a screen reader, so the state is said as
+      // well as painted.
+      eq(`and announces the state`, b.getAttribute('aria-disabled'), 'true');
+    });
+
+    // The anti-drift assertion, and the point of the fix: the words on the
+    // blocked button are the same words `runnerOrderMessage` refuses with at
+    // Confirm, taken from the same two constants rather than written twice.
+    eq('sharing a base is named as such', first.title, SHARE_BASE_MSG);
+    eq('and it is what Confirm would say', first.title,
+      runnerOrderMessage([{ key: 0, from: 0, dest: 0 }, { key: 'batter', from: -1, dest: 0 }]));
+    eq('passing the lead runner is named as such', second.title, PASS_RUNNER_MSG);
+    eq('for 3rd as much as 2nd', third.title, PASS_RUNNER_MSG);
+  });
+
+  test('the reason is on the page, not only in a tooltip (F26)', () => {
+    dpWithManOnFirst();
+    ocBtn(0, 'safe', 0).onclick();
+
+    const note = ocNote();
+    ok('the popup says it in words', !!note);
+    ok('it names the shared base', note.indexOf(SHARE_BASE_MSG) !== -1);
+    ok('and the pass', note.indexOf(PASS_RUNNER_MSG) !== -1);
+    // Three blocked buttons, two causes, two sentences. Saying the same reason
+    // once per button would read as three separate problems.
+    eq('and says each reason once', note.split(SHARE_BASE_MSG).length - 1, 1);
+    eq('the pass once too', note.split(PASS_RUNNER_MSG).length - 1, 1);
+  });
+
+  test('the reason clears when the choice that caused it changes (F26)', () => {
+    dpWithManOnFirst();
+    ocBtn(0, 'safe', 0).onclick();
+    ok('blocked to begin with', isOptionBlocked(ocBtn('batter', 'safe', 0)));
+    ok('and the line is up', !!ocNote());
+
+    // Send the runner home instead: he is ahead of the batter wherever the
+    // batter stops, so nothing collides any more.
+    ocBtn(0, 'safe', 3).onclick();
+
+    [0, 1, 2].forEach(d => {
+      const b = ocBtn('batter', 'safe', d);
+      ok(`option ${d} is offered again`, !isOptionBlocked(b));
+      eq(`and says so`, b.getAttribute('aria-disabled'), 'false');
+      eq(`with no stale reason on it`, b.title, '');
+    });
+    eq('and the line has gone', ocNote(), '');
+  });
+
+  // 5.08(a) already has its own line at the top of both popups. The button still
+  // carries the reason for a pointer and a reader, but repeating the sentence
+  // underneath would have the popup saying the same thing twice.
+  test('a 5.08(a) block is not said twice (F26)', () => {
+    sel('visiting', 0, 0); play('K');                // out 1
+    sel('visiting', 3, 0); play('3B');               // man on 3rd
+    sel('visiting', 6, 0); play('1B'); runnerPopup({ 2: 2 });
+    sel('visiting', 9, 0);
+    promptPositionPlay('DP ');
+    positionPopup('4-6-3');
+
+    const home = ocBtn(2, 'safe', 3);
+    ok('home is off the board', isOptionBlocked(home));
+    eq('the button carries the rule', home.title, NO_RUN_508A);
+    const note = ocNote();
+    ok('and the blocked line does not repeat it', note.indexOf(NO_RUN_508A) === -1);
+    ok('the 5.08(a) line is the one saying it',
+      document.getElementById('oc-508a').style.display === 'block');
+  });
+
+  // The sibling popup blocks by the same rule and now explains itself the same
+  // way — the finding named the DP popup, but `setOptionBlocked` is shared.
+  test('the Advance Runners popup explains its blocks too (F26)', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });     // p0 on 2nd, p2 on 1st
+    play('1B');                                      // popup: three-way decision
+    rpBtn(1, 1).onclick();                           // the lead runner holds 2nd
+
+    const toSecond = rpBtn(0, 1), toThird = rpBtn(0, 2);
+    eq('the base he is standing on is named', toSecond.title, SHARE_BASE_MSG);
+    eq('and passing him is named', toThird.title, PASS_RUNNER_MSG);
+    eq('the block is announced', toSecond.getAttribute('aria-disabled'), 'true');
+    const note = rpNote();
+    ok('and both reasons are on the page', note.indexOf(SHARE_BASE_MSG) !== -1 &&
+      note.indexOf(PASS_RUNNER_MSG) !== -1);
+    // "Out at" never collides with anyone, so it never goes through the blocking
+    // path — it must carry no reason, and no `aria-disabled` either. An absent
+    // attribute already reads as "not disabled"; stamping `false` on a button that
+    // can never be blocked is noise in the reader, not information.
+    eq('an option that never collides carries no reason', rpBtn(0, -2).title, '');
+    eq('and no state it did not need', rpBtn(0, -2).getAttribute('aria-disabled'), null);
+    ok('and is offered', !isOptionBlocked(rpBtn(0, -2)));
+  });
 })();
