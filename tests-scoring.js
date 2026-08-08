@@ -6423,4 +6423,92 @@
     eq('and no state it did not need', rpBtn(0, -2).getAttribute('aria-disabled'), null);
     ok('and is offered', !isOptionBlocked(rpBtn(0, -2)));
   });
+
+  /* ---- F25: the DP/FC/TP popup had no way out ----------------------------
+     F11b gave the Advance Runners popup a Cancel with a caller-supplied
+     rollback and never reached its sibling. `ab.play` and the result pitch are
+     written before this popup opens, so DP pressed by mistake could only be
+     escaped by confirming an entry you did not want and then undoing it. */
+
+  // The state each case starts from: a man on 1st, a DP keyed behind him, and the
+  // outcome popup open over a play that is already on the card.
+  function dpPending() {
+    sel('visiting', 0, 0); play('1B');
+    const depth = playHistory.length;
+    sel('visiting', 3, 0);
+    promptPositionPlay('DP ');
+    positionPopup('4-6-3');
+    ok('the outcome popup is open', visible('outcome-popup'));
+    ok('and the play is already on the card', !!ab('visiting', 3, 0).play);
+    return depth;
+  }
+
+  // What Cancel has to have taken back, in full. Same list as F11b's case for the
+  // sibling popup, because it is the same half-written entry.
+  function assertTakenBack(depth) {
+    ok('the popup closed', !visible('outcome-popup'));
+    eq('the double play came off the card', ab('visiting', 3, 0).play, '');
+    eq('and its result pitch with it', (ab('visiting', 3, 0).pitches || []).length, 0);
+    eq('no out was recorded', inn('visiting', 0).outs, 0);
+    eq('the runner is where he was', onB('visiting', 0, 0), 0);
+    eq('and nothing was left on the undo stack', playHistory.length, depth);
+  }
+
+  test('Cancel takes the double play back off the card (F25)', () => {
+    const depth = dpPending();
+    clickId('oc-cancel');
+    assertTakenBack(depth);
+  });
+
+  // Escape is a keypress nobody makes by accident, so it may do what a stray tap
+  // may not: press the popup's own Cancel, rollback and all.
+  test('Escape takes it back the same way (F25)', () => {
+    const depth = dpPending();
+    key('Escape');
+    assertTakenBack(depth);
+  });
+
+  // The backdrop is the whole screen outside the popup. A palm on an iPad must
+  // not discard a written play — and the rollback leaves nothing on the undo
+  // stack to get it back with, so this refusal is the last line.
+  test('a tap behind the outcome popup is refused, and says how to get out (F25)', () => {
+    dpPending();
+    clickId('popup-backdrop');
+    ok('it is still open', visible('outcome-popup'));
+    ok('and the tap was answered', visible('play-reject'));
+    const said = document.getElementById('play-reject').textContent;
+    ok('naming the way out that now exists', said.indexOf('Cancel') >= 0);
+  });
+
+  // The rollback wiring is only half the fix — this is the half that says the
+  // popup still does its job.
+  test('Confirm still records the double play (F25)', () => {
+    dpPending();
+    outcomePopup({ 0: ['out', 1], batter: ['out'] });
+    ok('the popup closed', !visible('outcome-popup'));
+    eq('the play is on the card', ab('visiting', 3, 0).play, 'DP 4-6-3');
+    eq('both outs are recorded', inn('visiting', 0).outs, 2);
+    eq('the runner is off the bases', onB('visiting', 0, 0), null);
+    // Rule 9.04(b)(1) — no RBI on a DP. Unchanged by the cancel wiring, and
+    // asserted here so a rollback that fired on the Confirm path would show up.
+    eq('and no RBI', ab('visiting', 3, 0).rbi, 0);
+  });
+
+  // The sibling. F11b gave it the Cancel button but left it refusing Escape, so
+  // the two popups disagreed about the keyboard even after the fix that was
+  // supposed to make them agree.
+  test('Escape cancels the Advance Runners popup too (F25)', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    const depth = playHistory.length;
+    sel('visiting', 3, 0);
+    play('2B');                                     // the wrong button
+    ok('the popup is open', visible('runner-popup'));
+    key('Escape');
+    ok('the popup closed', !visible('runner-popup'));
+    eq('the double came off the card', ab('visiting', 3, 0).play, '');
+    eq('and its result pitch with it', (ab('visiting', 3, 0).pitches || []).length, 0);
+    eq('the runner is where he was', onB('visiting', 0, 0), 0);
+    eq('and nothing was left on the undo stack', playHistory.length, depth);
+  });
 })();

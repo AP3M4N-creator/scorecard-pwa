@@ -1759,6 +1759,11 @@ function backdropGuarded() { return PENDING_ENTRY_POPUPS.concat(ALSO_GUARDED); }
    Derived, and a function for the same reason as `backdropGuarded` — both of the
    lists it is built from are declared below. */
 function mustAnswerPopups() { return ENTRY_IN_PROGRESS_POPUPS.concat(['dh-popup']); }
+/* Both entry popups now have a Cancel, so "finish it" is no longer the only way
+   out and saying so would send the scorer looking for one that isn't there. The
+   backdrop still refuses — a stray tap must not discard a written play — but it
+   names the button that will, and Escape presses it outright (F25). */
+const MUST_ANSWER_DEFAULT = 'Finish the open entry first, or press Cancel to take it back.';
 const MUST_ANSWER_WHY = {
   'dh-popup': 'Answer the DH question first — the lineup stays illegal until you do.'
 };
@@ -1795,7 +1800,7 @@ function showPopupBackdrop() {
       // A swallowed tap with no explanation reads as a dead app, so the popups
       // that can only be answered say so (C1).
       const stuck = blockingPopup();
-      if (stuck) { showPlayReject(MUST_ANSWER_WHY[stuck] || 'Finish the open entry first.'); return; }
+      if (stuck) { showPlayReject(MUST_ANSWER_WHY[stuck] || MUST_ANSWER_DEFAULT); return; }
       // Every other guarded popup has a Cancel of its own and writes nothing
       // until it is answered, so a tap outside is the same act as pressing it.
       // Making them modal without this would trade a popup you can tap past for
@@ -1841,6 +1846,30 @@ function closePopup(el) {
 
 function closePopupById(id) {
   closePopup(typeof document === 'undefined' ? null : document.getElementById(id));
+}
+
+/* A popup's own Cancel, or null. Marked in the markup rather than listed by id
+   here, so a popup that grows one is dismissible by every path that respects the
+   mark without anything else being told about it (F25). */
+function cancelControl(id) {
+  if (typeof document === 'undefined') return null;
+  const el = document.getElementById(id);
+  const btn = el && el.querySelector('[data-dismiss="cancel"]');
+  return btn && btn.onclick ? btn : null;
+}
+
+/* Close a popup the way pressing its own Cancel would.
+
+   For the two popups that own a half-written entry this is the whole difference
+   between a way out and a wrecked card: `closePopupById` only hides the thing,
+   which would leave `ab.play` and its result pitch on a card with no runners and
+   no out to match — the orphan described at ENTRY_IN_PROGRESS_POPUPS. Going
+   through the button runs the caller's rollback, and the rollback cannot drift
+   from what Cancel does because it *is* what Cancel does. */
+function dismissPopupById(id) {
+  const btn = cancelControl(id);
+  if (btn) btn.onclick();
+  else closePopupById(id);
 }
 
 // Popups whose Confirm writes to an at-bat and an inning captured when they
@@ -2177,7 +2206,7 @@ function applyPlayEffects(team, pIdx, innIdx, play, prev, done, onCancel) {
       applyRunnerOutcomes(team, pIdx, innIdx, ab, inn, play, outcomes);
       ab.rbi = countRunnersScored(team, prev);
       done();
-    });
+    }, { onCancel });
     return;
   } else if (play === 'DP' || /^DP /.test(play) || play === 'FC' || /^FC /.test(play)) {
     const isDP = play === 'DP' || /^DP /.test(play);
@@ -2189,7 +2218,7 @@ function applyPlayEffects(team, pIdx, innIdx, play, prev, done, onCancel) {
         // — the run there is his (#12).
         ab.rbi = isDP ? 0 : countRunnersScored(team, prev);
         done();
-      });
+      }, { onCancel });
       return;
     }
     if (isDP) {
@@ -2389,7 +2418,7 @@ function updateSprayMini() {
 }
 
 /* Runner outcome popup for DP/FC */
-function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
+function showRunnerOutcomePopup(team, innIdx, play, isDP, callback, opts) {
   const inn = getInnState(team, innIdx);
   const baseNames = ['1st','2nd','3rd','Home'];
   const runners = [];
@@ -2513,7 +2542,15 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
   // Why the greyed-out Safe options are greyed out — see paintBlockedNote (F26).
   // Same slot and same voice as the bar above it, filled on every refresh.
   html += `<div id="oc-blocked" style="display:none;font-size:10px;color:var(--accent);margin:2px 0 6px;line-height:1.4"></div>`;
-  html += `<button id="oc-confirm" style="margin-top:6px;width:100%;padding:7px;font-size:12px;font-weight:700;background:var(--navy);color:var(--gold);border:none;border-radius:4px;cursor:pointer;font-family:var(--heading);letter-spacing:0.5px;text-transform:uppercase">Confirm</button>`;
+  html += `<div style="display:flex;gap:6px;margin-top:6px">`;
+  html += `<button id="oc-confirm" style="flex:1;padding:7px;font-size:12px;font-weight:700;background:var(--navy);color:var(--gold);border:none;border-radius:4px;cursor:pointer;font-family:var(--heading);letter-spacing:0.5px;text-transform:uppercase">Confirm</button>`;
+  // The same trap F11b closed on the Advance Runners popup, still open in its
+  // sibling: DP/FC/TP pressed by mistake could only be escaped by confirming an
+  // entry you did not want and then undoing it (F25). What Cancel takes back
+  // depends on the caller, so it is handed in — both of this popup's callers are
+  // inside `applyPlay` and have a play and a result pitch already written.
+  html += `<button id="oc-cancel" data-dismiss="cancel" style="padding:7px 12px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer;font-family:var(--font)">Cancel</button>`;
+  html += `</div>`;
   popup.innerHTML = html;
   openPopup(popup);
 
@@ -2675,6 +2712,11 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback) {
   });
 
   refreshOutcomeAvailability();
+
+  document.getElementById('oc-cancel').onclick = function() {
+    closePopup(popup);
+    if (opts && opts.onCancel) opts.onCancel();
+  };
 
   document.getElementById('oc-confirm').onclick = function() {
     // The offered options are already constrained, but the defaults were never
@@ -3016,7 +3058,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
   // `applyPlay` have already written the play and its result pitch, and hand in a
   // rollback; a wild pitch or an Advance Runners edit writes nothing until Confirm,
   // so for those closing is enough (F11b).
-  html += `<button id="rp-cancel" style="padding:7px 12px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer;font-family:var(--font)">Cancel</button>`;
+  html += `<button id="rp-cancel" data-dismiss="cancel" style="padding:7px 12px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer;font-family:var(--font)">Cancel</button>`;
   html += `</div>`;
   popup.innerHTML = html;
   openPopup(popup);
@@ -8053,11 +8095,20 @@ document.addEventListener('keydown', function(e) {
     document.getElementById('hotkey-modal')?.classList.remove('active');
     document.getElementById('game-summary-modal')?.classList.remove('active');
     // Escape closed the two modals and nothing else, so on a Magic Keyboard the
-    // popups were as inescapable as they were under a finger. Same rule as the
-    // backdrop: what can be cancelled is cancelled, what must be answered says so.
+    // popups were as inescapable as they were under a finger. What can be
+    // cancelled is cancelled, what must be answered says so.
+    //
+    // A must-answer popup that has grown a Cancel is no longer stuck: Escape
+    // presses it. That is deliberately not what the backdrop does — Escape is a
+    // keypress nobody makes by accident, while the backdrop is the whole screen
+    // outside the popup, and a palm on an iPad must not silently take a written
+    // play back off the card (F25).
     const stuck = blockingPopup();
-    if (stuck) showPlayReject(MUST_ANSWER_WHY[stuck] || 'Finish the open entry first.');
-    else openGuardedPopups().forEach(closePopupById);
+    if (stuck && !cancelControl(stuck)) {
+      showPlayReject(MUST_ANSWER_WHY[stuck] || MUST_ANSWER_DEFAULT);
+      return;
+    }
+    openGuardedPopups().forEach(dismissPopupById);
     return;
   }
   if (!selectedCell) return;
