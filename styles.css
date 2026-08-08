@@ -528,17 +528,22 @@ details.info-details > summary:hover { color: var(--navy); }
    a table cell needs the cell to have a definite height, and these do not — the
    row does (`tr.pos-starter { height: var(--cell-h) }`), the cell inherits it by
    layout rather than by declaration, and the input falls back to its content
-   height. Measured at 1194x834: the position cell is 39x60 and the `select`
-   inside it is 38x24. Sixty per cent of every cell in the batting order — the
+   height. Every control in the batting order was therefore 24px tall (28px for
+   the text inputs) whatever the row underneath it was doing — and the row is
+   44-55px on an iPad. Half to two-thirds of every cell in the order — the
    jersey, the name, the position, the average — was not a target at all, and
    tapping the part of the cell above or below the text did nothing.
 
    Making the cell a containing block and pinning the control to it is what the
    two declarations were already asking for. Nothing moves: an input centres its
    text in its content box, and the content box is still centred in the cell, so
-   every glyph stays where it was. The targets go 38x24 -> 39x60 and 155x28 ->
-   156x60, at no cost to the one-page fit, because this is space the cell was
-   already occupying.
+   every glyph stays where it was — drift measured at 0.00px on all four. It
+   costs the one-page fit nothing, because this is space the cell was already
+   occupying; the control now simply covers it.
+
+   The gain is whatever `fit()` decides the row is worth, so it is a range
+   rather than a number: 42px where the flat drawer squeezes hardest, 53px on an
+   iPad in portrait. The table above the `pointer: coarse` block has all five.
 
    The three frozen columns are `position: sticky` on a phone (see the frozen
    block near the end of the file), which is also a containing block, so they
@@ -923,17 +928,36 @@ details.info-details > summary:hover { color: var(--navy); }
    the height its column was already holding open (the 835px and phone-landscape
    blocks), and the deck handle's overlay (the foldable-deck block).
 
-   Measured after, smallest of each kind:
+   Measured after, smallest of each kind, on the deployed site with the fit
+   engine actually running — which matters more than it sounds. The lineup
+   controls are as tall as their row, and the row height is not a constant in
+   this stylesheet: `fit()` measures the space left over and writes --cell-h,
+   which lands between its 44px floor and 62px ceiling depending on what the
+   deck is doing. So these are the *fitted* numbers, and the first column is the
+   worst case rather than the best one — 1194x834 is where the drawer lies flat
+   and permanently open (see the F9 block), which reserves 177px and pins the
+   rows to the floor. Fold that drawer and the same column reads 37x52.
+
+   An earlier version of this table was taken with `fit()` never having run, so
+   it recorded the CSS ladder's resting 60px row instead of the fitted 44px one
+   and overstated every lineup figure by about 16px. Numbers here have to come
+   from a fitted layout or they are describing a page nobody sees.
 
                           1194x834  1024x768  834x1194   390x844   844x390
-     lineup name / # / AVG  155x58    121x56     72x53     87x53     87x56
-     position select         38x58     34x56     30x53     33x53     33x56
-     linescore R/H/E         25x28     25x28     25x26     16x23     25x24
-     deck play buttons       45x46     45x46     45x46     45x46     40x40
-     deck handle (target)        -         -         -    350x44    774x38
-     +EI (target)            44x40     44x40     52x42     52x42     44x40
-     team tabs               97x34     97x34     97x34     86x36     88x30
-     section buttons        142x32    142x32    146x34    129x36    129x30
+     --cell-h                 44px      48px      55px      48px      48px
+     lineup name              151x42    121x46     72x53     87x46     87x46
+     lineup # / AVG            27x42     24x46     20x53     25x46     25x46
+     position select           37x42     34x46     30x53     33x46     33x46
+     linescore R/H/E           25x28     25x28     25x26     16x23     25x24
+     deck play buttons         45x46     45x46     45x46     45x46     40x40
+     deck handle (target)          -         -         -    350x44    789x38
+     +EI (target)              44x40     44x40     52x42     44x40     44x40
+     team tabs                 97x34     97x34     97x34     86x36     88x30
+     section buttons          142x32    142x32    146x34    129x36    129x30
+
+   Before, for the two families this block moved: the lineup controls were 24px
+   tall at every one of those widths (28px for the text inputs), and the
+   linescore was 21 / 21 / 26 / 23 / 17.
 
    Still short, on purpose:
 
