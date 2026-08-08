@@ -111,6 +111,8 @@ document.addEventListener('keydown', function (e) {
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hook);
   else hook();
+  /* See the note on `window.__ui` at the foot of this file. */
+  (window.__ui = window.__ui || {}).placeNotes = placeNotes;
 })();
 
 /* ---------------------------------------------------------------
@@ -331,4 +333,24 @@ document.addEventListener('keydown', function (e) {
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit);
   window.addEventListener('load', refit);
   refit();
+
+  /* ---------------------------------------------------------------
+     The one seam in this file, and it exists for the suite (F39).
+
+     Everything above is private to its IIFE, which is right — nothing
+     in app.js calls into here, and the browser drives all of it through
+     events. But that also meant this file had zero test coverage: the
+     event-driven half can be reached by dispatching a click, while
+     `fit()` can only be reached through `requestAnimationFrame`, and
+     the suite's cases are synchronous. Waiting a frame inside every one
+     of them would make the whole suite async to test three labels.
+
+     So the two functions a case needs to call directly are handed out
+     under one namespaced object. Not a public API: nothing in the app
+     reads `__ui`, and it is deliberately the two entry points rather
+     than the internals they use, so what a test can reach is the same
+     thing the browser reaches — just without waiting for the frame.
+     --------------------------------------------------------------- */
+  (window.__ui = window.__ui || {}).fit = fit;
+  window.__ui.refit = refit;
 })();

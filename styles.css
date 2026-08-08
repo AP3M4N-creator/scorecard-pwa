@@ -24,34 +24,127 @@
   font-display: swap;
   src: url('fonts/jetbrains-mono-latin.woff2') format('woff2');
 }
+/* Graduate was declared 900 lines down, beside the palette that named it. The
+   palette has moved up here (F30) and the face follows it: @font-face is
+   position-independent, so this is legibility only — all four families the app
+   ships are now declared in one place, next to the stacks that order them. */
+@font-face {
+  font-family: 'Graduate';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('fonts/graduate-latin.woff2') format('woff2');
+}
 
+/* ---------- The palette (F30) ----------
+
+   There used to be three `:root` blocks — this one, a theme layer at the top of
+   the Rangers section, and a safe-area pair near the one-page-fit block. The
+   second was not a theme *switch*; it was an unconditional redeclaration that
+   won on source order alone, so 21 of the names below resolved to something
+   other than what they said and the base values were dead weight the file went
+   on carrying. Reading `--green: #17693a` here told you nothing about what
+   `var(--green)` painted.
+
+   One block now, holding what actually resolves. Six names were declared and
+   never used (`--navy-light`, `--accent-light`, `--gold-light`, `--blue`,
+   `--blue-deep`, `--sa-b`) and are gone; `--green` was live in the file but
+   dead in the cascade — both its call sites were overridden further down — and
+   is gone with them. Nothing here changes a painted pixel: this is the same
+   set of resolved values the browser was already computing, written once
+   instead of twice. */
 :root {
-  /* Ink & paper (Broadsheet) with Rangers spot colors */
-  --navy: #003278;          /* structural ink / scoreboard ground */
-  --navy-light: #14448c;
-  --cream: #f3f2f2;         /* paper */
-  --cream-dark: #e8e6e3;
-  --card: #ffffff;
-  --border: #201e1d;
-  --border-light: #d3cfca;
-  --row-alt: #faf9f8;
-  --accent: #c0111f;        /* Rangers red — the rare second spot */
-  --accent-light: #e8a3a8;
-  --gold: #f4efe4;          /* light ink used on the navy ground */
-  --gold-light: #ffffff;
-  --blue: #003278;
-  --blue-light: #dde6f4;
-  --green: #17693a;
-  --select: #eef3fb;
-  --text: #201e1d;
-  --text-light: #6f6a63;
-  --rule: rgba(32,30,29,0.16);
+  /* Three brand values. Everything else is one of them, tinted or deepened. */
+  --rb-blue: #003278;
+  --rb-red: #c0111f;
+  --rb-white: #ffffff;
 
-  --cell-w: 84px;
-  --cell-h: 56px;
+  --paper: #eef2f8;          /* white cooled toward the blue */
+  --paper-2: #e2e9f4;
+  --line: rgba(0,50,120,0.22);
+  --line-soft: rgba(0,50,120,0.13);
 
-  --font: "Source Serif 4", Georgia, serif;
-  --heading: "Source Serif 4", Georgia, serif;
+  /* The semantic layer. These names are what the rest of the file reads; the
+     three above are the only place a literal colour is chosen. */
+  --navy: var(--rb-blue);    /* structural ink / scoreboard ground */
+  --cream: var(--paper);
+  --cream-dark: var(--paper-2);
+  --card: var(--rb-white);
+  --border: var(--rb-blue);
+  --border-light: rgba(0,50,120,0.2);
+  --row-alt: #f7f9fc;
+  --accent: var(--rb-red);   /* the rare second spot */
+  --blue-light: rgba(0,50,120,0.1);
+  --select: rgba(192,17,31,0.12);
+  --text: var(--rb-blue);
+  /* 0.6 measured 3.66:1 on the paper — under AA for the 11-19px labels this
+     paints (inactive team tab, section buttons, every field label). 0.72 is
+     the lightest step that clears 4.5:1 on the darkest ground it lands on
+     (--paper-2): 4.84:1 there, 5.07:1 on the paper, 5.50:1 on white. */
+  --text-light: rgba(0,50,120,0.72);
+  --rule: var(--line-soft);
+  /* Not gold. This is the light ink used *on* the navy ground — the total
+     cell's figure, the scoreboard captions, the text on every navy button
+     app.js builds — and in this skin that ink is white. All 24 call sites want
+     "whatever reads on navy", which is what the value is; it is the name that
+     is wrong, and renaming it to `--on-navy` was ruled out as a bigger diff
+     than the lie is worth. Read it as on-navy and it is correct everywhere. */
+  --gold: var(--rb-white);
+
+  /* The five notable plays. These are the only colours on the card that are *not*
+     one of the three brand values tinted — green, gold and purple step outside the
+     skin on purpose, because five plays need five colours a glance can tell apart
+     and navy/red/white cannot supply that many. The assignments are the scorer's
+     own: any hit green, home run gold, strikeout red, walk navy, double play
+     purple. Routine outs get no colour of their own (see .play-go) — most plate
+     appearances are outs, and colouring them would leave the five nothing to stand
+     out against.
+     Translucent, and the alphas are not arbitrary: the card's ink stays navy on
+     every one of them, so each hue is set as bold as it can go while the smallest
+     thing painted over it still clears 4.5:1. The binding constraint is never the
+     15px play text (it has 5.8:1 to spare here) but the 6-7px pitch marks, which
+     is the same reason these started life at 4-14%. Each value below is that
+     ceiling: navy ink lands at 5.81-5.86:1 and a strike mark at 4.50-4.54:1 on all
+     four of the dark hues. Solid fills were tried and abandoned — they force the
+     basepaths, the diamond and the pitch marks to white, and the scorer reads the
+     baserunning off those lines. */
+  --play-hit: rgba(23,105,58,0.40);
+  --play-hr:  rgba(242,194,0,0.40);
+  --play-k:   rgba(192,17,31,0.34);
+  --play-bb:  rgba(0,50,120,0.32);
+  --play-dp:  rgba(106,27,154,0.33);
+
+  --cell-w: 90px;
+  --cell-h: 62px;
+
+  /* `viewport-fit=cover` plus a black-translucent status bar hands the app the
+     whole screen, insets included, so the four edges have to be readable. Zero
+     wherever there is no inset, which is what makes them safe at every width.
+     There is no `--sa-b`: the bottom inset is wanted in three places and all
+     three want it inside a `calc()` against a padding of their own, so they
+     take `env()` directly rather than through a name. */
+  --sa-t: env(safe-area-inset-top, 0px);
+  --sa-r: env(safe-area-inset-right, 0px);
+  --sa-l: env(safe-area-inset-left, 0px);
+
+  /* Graduate is the varsity face; the broadsheet serif stays on as the fallback
+     so a missing woff2 degrades to the old skin rather than to system-ui.
+     `font-src 'self'` — never link fonts.googleapis.com.
+
+     `--mono` used to start with Graduate too, which meant the 31KB JetBrains
+     Mono was fetched, precached by the service worker and never rendered once:
+     Graduate resolved first for every glyph in it. The mono stack exists for
+     the pitch marks, the count and the fielder keypad — the three places on the
+     card where figures have to line up in a column — and Graduate is a
+     single-weight display face with no tabular figures, so it was the one face
+     that must not be at the front of this list. (F31)
+
+     `--heading` is deliberately identical to `--font`. Graduate is the house
+     style for both, so the two names mark intent — this is a heading, this is
+     body — rather than a difference in face, and a re-skin that wants them
+     apart has the seam already cut. */
+  --font: 'Graduate', "Source Serif 4", Georgia, serif;
+  --heading: 'Graduate', "Source Serif 4", Georgia, serif;
   --mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
 
   /* ---------- The stacking scale (F29) ----------
@@ -85,6 +178,18 @@
   --z-popup: 800;            /* every popup app.js builds */
   --z-toast: 900;            /* says why a press refused, so it clears them all */
 }
+
+/* The cell ladder. There were two of these as well, for the same reason as the
+   palette: the base seeded 84/56 and stepped it down here, then the theme's
+   `:root` — being later and unconditional — reset it to 90/62 and had to
+   restate the whole ladder further down to get the stepping back. Every value
+   in the base copy was dead. One ladder now, next to the block it steps.
+   Both phone blocks narrow --cell-w again below this; ui.js measures --cell-h
+   outright above 835px and on a phone, so these are the resting values it
+   starts from and the floor wherever it does not run. */
+@media (max-width: 1280px) { :root { --cell-w: 82px; --cell-h: 60px; } }
+@media (max-width: 1024px) { :root { --cell-w: 75px; --cell-h: 58px; } }
+@media (max-width: 834px)  { :root { --cell-w: 69px; --cell-h: 55px; } }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -356,8 +461,12 @@ details.info-details > summary:hover { color: var(--navy); }
 .quick-btn.out { color: var(--text); }
 .quick-btn.walk { color: var(--navy); border-color: rgba(0,50,120,0.35); }
 .quick-btn.walk:hover { background: var(--blue-light); border-color: var(--navy); }
-.quick-btn.runner { color: var(--green); border-color: rgba(23,105,58,0.35); }
-.quick-btn.runner:hover { background: rgba(23,105,58,0.09); border-color: var(--green); }
+/* .quick-btn.runner is styled in the Rangers block, not here. It used to carry a
+   green pair at this position too — the last two references to `--green` — but
+   both were overridden further down and neither ever painted: the runner plays
+   have been navy since the re-skin, because three brand colours is the whole
+   conceit and a fourth hue on the deck was never part of it. Deleted with the
+   token rather than left as a second opinion the cascade already discarded. */
 .quick-btn.undo-play { color: var(--accent); border-color: rgba(192,17,31,0.35); }
 .quick-btn.undo-play:hover { background: rgba(192,17,31,0.08); }
 .quick-btn.pitcher-change { color: #6a1b9a; border-color: rgba(106,27,154,0.35); }
@@ -413,9 +522,33 @@ details.info-details > summary:hover { color: var(--navy); }
 .scoring-grid td.player-cell { width: 170px; padding: 0; }
 .scoring-grid td.pos-cell { width: 40px; text-align: center; padding: 0; }
 .scoring-grid td.avg-cell { width: 44px; text-align: center; padding: 0; }
+/* ---------- F27 — the lineup's controls are the size of their cell ----------
+
+   `height: 100%` below has never resolved. A percentage height on the child of
+   a table cell needs the cell to have a definite height, and these do not — the
+   row does (`tr.pos-starter { height: var(--cell-h) }`), the cell inherits it by
+   layout rather than by declaration, and the input falls back to its content
+   height. Measured at 1194x834: the position cell is 39x60 and the `select`
+   inside it is 38x24. Sixty per cent of every cell in the batting order — the
+   jersey, the name, the position, the average — was not a target at all, and
+   tapping the part of the cell above or below the text did nothing.
+
+   Making the cell a containing block and pinning the control to it is what the
+   two declarations were already asking for. Nothing moves: an input centres its
+   text in its content box, and the content box is still centred in the cell, so
+   every glyph stays where it was. The targets go 38x24 -> 39x60 and 155x28 ->
+   156x60, at no cost to the one-page fit, because this is space the cell was
+   already occupying.
+
+   The three frozen columns are `position: sticky` on a phone (see the frozen
+   block near the end of the file), which is also a containing block, so they
+   need nothing extra there. */
+.scoring-grid td.num-cell, .scoring-grid td.player-cell,
+.scoring-grid td.pos-cell, .scoring-grid td.avg-cell { position: relative; }
 .scoring-grid td.num-cell input,
 .scoring-grid td.player-cell input,
 .scoring-grid td.avg-cell input {
+  position: absolute; inset: 0;
   width: 100%; height: 100%; border: none; background: transparent; padding: 6px 6px; font-size: 14px;
 }
 .scoring-grid td.player-cell input { font-weight: 600; }
@@ -433,6 +566,7 @@ details.info-details > summary:hover { color: var(--navy); }
 .scoring-grid td.avg-cell input { padding-left: 1px; padding-right: 1px; }
 .scoring-grid input:focus { outline: 2px solid var(--navy); outline-offset: -2px; }
 .scoring-grid td.pos-cell select {
+  position: absolute; inset: 0;
   width: 100%; height: 100%; border: none; background: transparent;
   font-family: var(--mono); font-size: 12px; cursor: pointer;
   appearance: none; -webkit-appearance: none; text-align: center; text-align-last: center; padding: 4px 0;
@@ -773,23 +907,67 @@ details.info-details > summary:hover { color: var(--navy); }
 }
 .banner button.hollow { background: transparent; color: #fff; border: 1px solid #fff; }
 
-/* ---------- Touch ---------- */
+/* ---------- Touch ----------
+
+   F27 measured every interactive element at the five viewports this app is used
+   at and found that exactly one family — the deck's play buttons — met the 44px
+   guideline, and only above phone landscape. The worst were the ones a scorer
+   pokes at mid-game.
+
+   The rule taken, rather than "make everything 44px": grow each target until it
+   would start stealing its neighbour's taps, and never at the cost of the
+   one-page fit, because the fit is the feature. Where that was not enough, the
+   control is on the list below with the measurement rather than quietly left.
+   Three fixes came out of it and each is commented at its own site — the lineup
+   controls filling their cell (above), the linescore's two editable rows taking
+   the height its column was already holding open (the 835px and phone-landscape
+   blocks), and the deck handle's overlay (the foldable-deck block).
+
+   Measured after, smallest of each kind:
+
+                          1194x834  1024x768  834x1194   390x844   844x390
+     lineup name / # / AVG  155x58    121x56     72x53     87x53     87x56
+     position select         38x58     34x56     30x53     33x53     33x56
+     linescore R/H/E         25x28     25x28     25x26     16x23     25x24
+     deck play buttons       45x46     45x46     45x46     45x46     40x40
+     deck handle (target)        -         -         -    350x44    774x38
+     +EI (target)            44x40     44x40     52x42     52x42     44x40
+     team tabs               97x34     97x34     97x34     86x36     88x30
+     section buttons        142x32    142x32    146x34    129x36    129x30
+
+   Still short, on purpose:
+
+   - The linescore cells, 25-26px wide. Fifteen columns share the strip with the
+     live readout and the widths are what let a nine-inning card sit on one row;
+     a wider cell is a narrower readout or a second row. The height went as far
+     as it could go for free (21 -> 28) and the next pixel costs strip height,
+     which comes straight off the batting order.
+   - The play buttons in phone landscape, 40x40. That width is measured, not
+     chosen: line one comes to 774px against a 798px box, so 4px more per key
+     overflows into a second row — and a second row costs 45px of a screen that
+     has about 150px of card on it. The note in that block has the arithmetic.
+   - The team tabs and section buttons, 30-36px tall. They share the single
+     control row the layout was collapsed to; every pixel they gain pushes the
+     grid down at every viewport, including the two that have nothing to spare.
+   - The masthead's own buttons, 34-38px. On a phone they are behind the menu,
+     whose items are 42px, so the small ones are the ones a finger rarely wants.
+
+   The linescore at 390x844 is the one place nothing was gained: the strip is
+   stacked there, the caption is a real caption rather than a spacer, and the
+   column has no slack to hand over. 16x23, and it is the honest floor. */
 @media (pointer: coarse) {
   html { touch-action: manipulation; -webkit-tap-highlight-color: rgba(0,50,120,0.14); }
 }
 
 @media (max-width: 1280px) {
-  :root { --cell-w: 76px; --cell-h: 54px; }
   .app { padding: 0 12px 24px; }
 }
 @media (max-width: 1024px) {
-  :root { --cell-w: 70px; --cell-h: 52px; }
   .header-bar h1 { font-size: 18px; }
   .scoring-grid td.player-cell { width: 150px; }
   #live-stats { overflow-x: auto; }
 }
 @media (max-width: 834px) {
-  :root { --cell-w: 64px; --cell-h: 50px; }
   .scoring-grid td.player-cell { width: 128px; }
   .linescore th, .linescore td { width: 26px; }
 
@@ -893,89 +1071,19 @@ details.info-details > summary:hover { color: var(--navy); }
 
 /* ============================================================
    RANGERS DAY GAME — theme layer. Overrides only; everything
-   above is the shared base. Keep this block last.
+   above is the shared base, and this block has to stay ahead of
+   the two layout blocks that close the file.
 
    Three colours only:  Blue #003278   Red #C0111F   White #FFFFFF
    Cells stay pure white; the header row and order column go solid
    navy so the card reads like a program cover.
+
+   The palette itself is no longer here. It was a second `:root` that
+   redeclared most of the first one unconditionally, which is not a
+   theme switch — it is one palette shadowing another and winning on
+   source order. Both are merged into the single block at the top of
+   the file (F30); what is left below is rules.
    ============================================================ */
-
-@font-face {
-  font-family: 'Graduate';
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url('fonts/graduate-latin.woff2') format('woff2');
-}
-
-:root {
-  --rb-blue: #003278;
-  --rb-red: #c0111f;
-  --rb-white: #ffffff;
-
-  /* Everything else is one of the three, tinted or deepened */
-  --blue-deep: #001c45;
-  --paper: #eef2f8;          /* white cooled toward the blue */
-  --paper-2: #e2e9f4;
-  --line: rgba(0,50,120,0.22);
-  --line-soft: rgba(0,50,120,0.13);
-
-  --navy: var(--rb-blue);
-  --navy-light: #14448c;
-  --cream: var(--paper);
-  --cream-dark: var(--paper-2);
-  --card: var(--rb-white);
-  --border: var(--rb-blue);
-  --border-light: rgba(0,50,120,0.2);
-  --row-alt: #f7f9fc;
-  --accent: var(--rb-red);
-  --accent-light: #e8a3a8;
-  --gold: var(--rb-white);
-  --blue: var(--rb-blue);
-  --blue-light: rgba(0,50,120,0.1);
-  --green: var(--rb-blue);
-  --select: rgba(192,17,31,0.12);
-  --text: var(--rb-blue);
-  /* 0.6 measured 3.66:1 on the paper — under AA for the 11-19px labels this
-     paints (inactive team tab, section buttons, every field label). 0.72 is
-     the lightest step that clears 4.5:1 on the darkest ground it lands on
-     (--paper-2): 4.84:1 there, 5.07:1 on the paper, 5.50:1 on white. */
-  --text-light: rgba(0,50,120,0.72);
-  --rule: var(--line-soft);
-
-  /* The five notable plays. These are the only colours on the card that are *not*
-     one of the three brand values tinted — green, gold and purple step outside the
-     skin on purpose, because five plays need five colours a glance can tell apart
-     and navy/red/white cannot supply that many. The assignments are the scorer's
-     own: any hit green, home run gold, strikeout red, walk navy, double play
-     purple. Routine outs get no colour of their own (see .play-go) — most plate
-     appearances are outs, and colouring them would leave the five nothing to stand
-     out against.
-     Translucent, and the alphas are not arbitrary: the card's ink stays navy on
-     every one of them, so each hue is set as bold as it can go while the smallest
-     thing painted over it still clears 4.5:1. The binding constraint is never the
-     15px play text (it has 5.8:1 to spare here) but the 6-7px pitch marks, which
-     is the same reason these started life at 4-14%. Each value below is that
-     ceiling: navy ink lands at 5.81-5.86:1 and a strike mark at 4.50-4.54:1 on all
-     four of the dark hues. Solid fills were tried and abandoned — they force the
-     basepaths, the diamond and the pitch marks to white, and the scorer reads the
-     baserunning off those lines. */
-  --play-hit: rgba(23,105,58,0.40);
-  --play-hr:  rgba(242,194,0,0.40);
-  --play-k:   rgba(192,17,31,0.34);
-  --play-bb:  rgba(0,50,120,0.32);
-  --play-dp:  rgba(106,27,154,0.33);
-
-  /* Graduate is the varsity face; the broadsheet fonts stay on as the
-     fallback so a missing woff2 degrades to the old skin rather than to
-     system-ui. `font-src 'self'` — never link fonts.googleapis.com. */
-  --font: 'Graduate', "Source Serif 4", Georgia, serif;
-  --heading: 'Graduate', "Source Serif 4", Georgia, serif;
-  --mono: 'Graduate', 'JetBrains Mono', 'SF Mono', Consolas, monospace;
-
-  --cell-w: 90px;
-  --cell-h: 62px;
-}
 
 body { background: var(--paper); color: var(--rb-blue); letter-spacing: .01em; }
 a { color: var(--rb-blue); }
@@ -1220,12 +1328,10 @@ details.info-details > summary::before { color: var(--rb-red); }
 .gs-plays span { background: var(--paper-2); }
 .spray-popup #spray-marker { fill: var(--rb-red); }
 
-/* The theme's `:root` sits after the base breakpoints, so an unconditional
-   --cell-w/--cell-h here would win at every width and the grid would stop
-   shrinking on the iPad and phone. Restate the ladder, scaled to 90/62. */
-@media (max-width: 1280px) { :root { --cell-w: 82px; --cell-h: 60px; } }
-@media (max-width: 1024px) { :root { --cell-w: 75px; --cell-h: 58px; } }
-@media (max-width: 834px)  { :root { --cell-w: 69px; --cell-h: 55px; } }
+/* The cell ladder used to be restated here, because the theme's own `:root` sat
+   after the base breakpoints and an unconditional --cell-w/--cell-h would
+   otherwise win at every width. There is one `:root` now and one ladder, both
+   at the top of the file (F30) — nothing to restate. */
 
 /* Same trap for the masthead: the theme takes the title from 25px to 30px
    unconditionally, which overrode the base's step down to 18px and — the
@@ -1309,7 +1415,20 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
   border-right: 1px solid var(--line, rgba(0,0,0,0.16)); }
 .sec-bar .tab-btn { min-height: 34px; padding: 5px 12px; font-size: 15px; border-bottom-width: 2px; }
 
-@media (min-width: 835px) {
+/* Kept mutually exclusive with the phone-landscape block that closes the file
+   (F28). This was `(min-width: 835px)` alone, and at 844x390 — a Pro Max in
+   landscape, the exact device that block was written for — both queries
+   matched. The phone block is later so it won where the two collided, but only
+   where they collided: every rule here that it did not restate stayed in force
+   on a 390px-tall window, including a sticky `.deck-strip` and a caption set to
+   `font-size: 0`. Neither was written with 390px of height in mind.
+
+   `min-height: 501px` is the exact complement, not an approximation of one: the
+   phone block asks for `max-height: 500px`, and anything 835px wide and under
+   500px tall is landscape by arithmetic, so no third case falls between them.
+   Written as a height floor rather than `not (...)`, which needs Safari 16.4
+   and buys nothing here. */
+@media (min-width: 835px) and (min-height: 501px) {
   /* --- The strip: masthead, linescore and live readout on one deck --- */
   .deck-strip {
     position: sticky; top: 0; z-index: var(--z-deck);
@@ -1344,7 +1463,19 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
     font-size: 11px; letter-spacing: .06em; padding: 4px 7px;
     min-width: 44px; min-height: 40px;
   }
-  .linescore th, .linescore td { width: 26px; height: 22px; }
+  /* The R/H/E and inning cells are edited with a fingertip and were 25x21 —
+     the smallest editable control in the app, and it got smaller as the screen
+     did. They cannot be widened: fifteen columns share the row with the live
+     readout, and the fit is the feature. But there is height going spare and
+     nobody was using it. `.ls-table-col` is stretched to the readout's 81px and
+     the table only wants 67, so 14px inside this column belongs to nothing.
+     Spend it on the two editable rows and leave the head row alone — it is a
+     label, not a target. 22px -> 29px, and the table lands at 80px inside the
+     81px it already had, so the strip does not grow by a pixel and neither does
+     anything below it. (F27) */
+  .linescore th, .linescore td { width: 26px; }
+  .linescore th { height: 22px; }
+  .linescore td { height: 29px; }
   .linescore th.team-col, .linescore td.team-col { width: 92px; }
   .linescore td.team-col { font-size: 13px; }
   /* Every pixel the name column takes here comes off the live readout beside
@@ -1479,20 +1610,24 @@ body.drawer-open .tab-content.active .grid-wrap {
    narrower still belongs to the portrait block.
    ============================================================ */
 
-:root {
-  --sa-t: env(safe-area-inset-top, 0px);
-  --sa-r: env(safe-area-inset-right, 0px);
-  --sa-b: env(safe-area-inset-bottom, 0px);
-  --sa-l: env(safe-area-inset-left, 0px);
-}
+/* The four `--sa-*` insets were declared here, a third `:root` 1400 lines below
+   the first two. They are in the single block at the top now (F30), minus
+   `--sa-b`, which nothing ever read. */
 
 /* `viewport-fit=cover` plus a black-translucent status bar hands the app the
-   whole screen, insets included. Only --sa-b was ever honoured, so on an
-   installed iPhone the masthead's top 59px sat under the clock. The navy bar
+   whole screen, insets included. Only the bottom inset was ever honoured, so on
+   an installed iPhone the masthead's top 59px sat under the clock. The navy bar
    keeps painting into the inset — it is the bar's content that moves down.
-   Zero wherever there is no inset, so both of these are safe at every width. */
+   Zero wherever there is no inset, so both of these are safe at every width.
+
+   The second one carries the same height floor as the block above for the same
+   reason (F28), so that no `min-width: 835px` in this file means "iPad" in one
+   place and "iPad or a phone on its side" in another. It changes nothing on its
+   own — the phone-landscape block sets `.header-bar`'s padding as a shorthand
+   and is later, so it already won here — but a rule that is right by ordering
+   alone is one edit away from being wrong. */
 .header-bar { padding-top: calc(14px + var(--sa-t)); }
-@media (min-width: 835px) { .header-bar { padding-top: calc(8px + var(--sa-t)); } }
+@media (min-width: 835px) and (min-height: 501px) { .header-bar { padding-top: calc(8px + var(--sa-t)); } }
 
 /* The deck handle is phone-only. On an iPad the resting deck is 63-109px and
    folding it would buy a row and a half; at >=1100px there is already a fold,
@@ -1614,7 +1749,7 @@ body.drawer-open .tab-content.active .grid-wrap {
 
   /* --- The foldable deck --- */
   .deck-handle {
-    display: block; width: 100%; border: none; background: transparent;
+    display: block; position: relative; width: 100%; border: none; background: transparent;
     cursor: pointer; line-height: 1;
     font-family: var(--heading); font-size: 10px; font-weight: 600;
     letter-spacing: .16em; text-transform: uppercase; color: var(--text-light);
@@ -1623,6 +1758,16 @@ body.drawer-open .tab-content.active .grid-wrap {
     content: ''; display: block; height: 4px; border-radius: 2px;
     width: 42px; margin: 0 auto 5px; background: var(--line, var(--rule));
   }
+  /* 350x32 in portrait and 789x26 on its side — wide enough to hit blind,
+     short of 44 either way. It cannot grow: every pixel it takes is a pixel of
+     the batting order, which is the whole reason the deck folds. But it is
+     bracketed by dead space on both sides — `fit()` leaves an 18px pad between
+     the grid's last row and this handle, and `.qb-core` opens with 6-8px of
+     padding before the first play button — so the target can take 6px in each
+     direction without touching a control. 32 -> 44 in portrait, 26 -> 38 on its
+     side, and the painted bar does not move a pixel. Same trick as the +EI chip
+     in the 834px block: grow the target, not the thing. (F27) */
+  .deck-handle::after { content: ''; position: absolute; inset: -6px 0; }
   .deck-handle:active::before { background: var(--accent); }
   /* Folded by max-height rather than `display: none`, so the fold animates and
      — the part that matters — fires a transitionend for fit() to re-measure
@@ -1821,6 +1966,60 @@ body.drawer-open .tab-content.active .grid-wrap {
 /* ---------- Phone, landscape ---------- */
 @media (orientation: landscape) and (max-height: 500px) and (min-width: 740px) {
 
+  /* --- What this block used to get for free (F28) ---------------------------
+
+     Until the height floor went on the 835px block, a landscape phone matched
+     that block *as well as* this one, and this block was written against the
+     result without ever saying so — the note below the strip reads "stays one
+     row, as it is above 835px", which is only true because the rule that makes
+     it a row was arriving from the iPad. Separating the two took it away: the
+     strip went from 137px to 244px, the scoreboard stopped being sticky, and
+     the batting grid started 113px further down a screen that has 390.
+
+     So the pieces it genuinely wants are restated here, where they can be read
+     and where they now say a phone's numbers rather than an iPad's. This is the
+     part of F28 that was the actual work; the media query was one line.
+
+     Two of them differ from what was being inherited, and deliberately:
+
+     - `.deck-strip`'s bleed pays back the safe-area insets, the same way
+       `.header-bar` above and the docked deck below already do. The iPad's flat
+       `margin: 0 -20px` under-pulled by 59px on a Pro Max, so the sticky
+       scoreboard's background stopped short of the screen edge on exactly the
+       device this block exists for. Invisible in a desktop window, which has no
+       insets — which is how it survived being inherited.
+     - The name column is 78px, not the iPad's 92px. This block narrows every
+       other linescore column and holds the whole card to nine innings across;
+       the cap on the name span here is `min(110px, 12vw)`, which at 844px is
+       101px and was overrunning a 92px cell. 78px is what the column needs at
+       these figure sizes, and the span cap now binds instead of fighting it. */
+  .deck-strip {
+    position: sticky; top: 0; z-index: var(--z-deck);
+    margin: 0 calc(-20px - var(--sa-r)) 0 calc(-20px - var(--sa-l));
+    padding: 0 calc(20px + var(--sa-r)) 8px calc(20px + var(--sa-l));
+    background: var(--paper);
+  }
+  .masthead .kicker { font-size: 9px; margin-bottom: 1px; }
+  .linescore-wrap { display: flex; align-items: stretch; }
+  .ls-table-col { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+  /* "Score by Innings" is what a linescore looks like — the caption is pure
+     height, and there is less of it to spend here than anywhere. Only the +EI
+     control survives, floated alongside at the size the base rule gives it. */
+  .linescore-wrap h3 { margin: 0; font-size: 0; letter-spacing: 0; }
+  .linescore th, .linescore td { width: 26px; }
+  .linescore th.team-col, .linescore td.team-col { width: 78px; }
+  #live-stats { flex: 1; display: flex; align-items: center; min-width: 0; }
+  /* Not `.live-cell .live-label`. The iPad sets it to 9px, but a narrower block
+     further up already had it at 8px here and was winning on order, so copying
+     the iPad's value down would not have been a restatement — it would have
+     grown the label and taken 2.7px of the strip with it. Measured, not assumed:
+     restating everything the iPad block set is the wrong instinct, and this is
+     the one line where the two answers differ. */
+  .live-cell.live-matchup { min-width: 0; flex: 1; }
+  .tab-content.active { padding-top: 0; }
+  .grid-wrap { padding-bottom: 0; }
+  .quick-bar { margin-bottom: 0; }
+
   /* --- Masthead: 56px -> 45px, one row. There is width to spare here. --- */
   /* The side insets are 59px each on a Pro Max in landscape — the sensor
      housing on one edge, the rounded corner on the other. The masthead and the
@@ -1851,7 +2050,11 @@ body.drawer-open .tab-content.active .grid-wrap {
 
   /* --- Strip: 97px -> 71px. Stays one row, as it is above 835px. --- */
   .linescore-wrap { padding: 5px 10px; margin: 5px 0 0; gap: 10px; }
-  .linescore th, .linescore td { height: 18px; }
+  /* Same free 14px as the iPad block, and the same split — this column is
+     stretched to a 69px readout and the table wants 55. 18px -> 25px on the two
+     editable rows, table 68px inside 69px, strip unchanged. (F27) */
+  .linescore th { height: 18px; }
+  .linescore td { height: 25px; }
   .linescore td.team-col { font-size: 12px; }
   .linescore input { font-size: 12px; }
   .linescore td.team-col > span { max-width: min(110px, 12vw); }
@@ -1936,4 +2139,58 @@ body.drawer-open .tab-content.active .grid-wrap {
   }
   .deck-handle { min-height: 26px; padding: 3px 0; }
   .deck-handle::before { margin-bottom: 4px; }
+}
+
+
+/* ============================================================
+   REDUCED MOTION — keep this block last, so it can reach every
+   transition declared above it whatever else moves.
+
+   Seven `transition` declarations ran unconditionally, including the
+   220ms drawer, the 200ms deck fold on a phone, and the caret rotation
+   on the details panel. Vestibular triggers aside, a scorer working an
+   at-bat has asked their phone to be a pencil; the OS setting is where
+   they say so, and the app was not listening.
+
+   Duration, not `transition: none`. `fit()` re-measures the deck on
+   `transitionend` (see ui.js) — it is how the 200ms fold hands its
+   ~114px back to the batting rows without baking in a stale height —
+   and a transition removed outright fires no event at all.
+
+   The finding said to check that the event still fires rather than
+   assume it. It could not be checked here: an undisplayed Browser pane
+   composites no frames, so no transition runs in the first place and
+   the question cannot be put to it (same limitation F40 records for
+   focus and blur). So the reasoning is written down instead, and it is
+   the stronger answer anyway — under this setting `fit()` does not
+   need the event:
+
+     ui.js re-measures on every `[data-ui-act]` click, and the deck
+     handle is one. That refit runs on the next animation frame, ~16ms
+     later. At 200ms the fold is still moving then, which is exactly
+     why the transitionend listener was added (F21). At 0.01ms it has
+     long since finished, so the click's own refit already measures the
+     settled height and the event is redundant rather than load-bearing.
+
+   Which leaves nothing resting on the event under reduced motion, and
+   the 200ms path — where it is load-bearing — untouched. A displayed
+   pane would still be worth a look, and the suite covers the half that
+   does not need one: that this block exists, and that the handle
+   re-measures on its own press.
+
+   `backdrop-filter: blur(12px)` on the docked deck is deliberately left
+   alone. It is a static effect, not motion — nothing about it moves —
+   and dropping it would put the play buttons over unblurred card text.
+
+   `backdrop-filter: blur(12px)` on the docked deck is deliberately left
+   alone. It is a static effect, not motion — nothing about it moves —
+   and dropping it would put the play buttons over unblurred card text.
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
 }

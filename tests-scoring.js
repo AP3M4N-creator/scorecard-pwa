@@ -50,6 +50,13 @@
     /^\.inn-col\[data-inn=/,
     /^\.linescore tbody tr$/,
     /^\.spray-mini-svg$/,
+    /* ui.js runs in the suite now (F39), and `fit()` re-derives both of these
+       labels on every frame something was queued — including one per typed
+       character, because it also listens for `input`. Two per team, fixed for
+       the life of the page, and uncached they were most of what inlining ui.js
+       added to the run. */
+    /^\.qb-more-btn$/,
+    /^\.deck-handle$/,
     /^input\[data-field="(num|name|avg)"\]\[data-team=/,
     /^input\[data-team="(visiting|home)"\]\[data-field=/,
     /^select\[data-field="pos"\]\[data-team=/
@@ -6633,5 +6640,309 @@
       const label = document.getElementById(el.getAttribute('aria-labelledby'));
       ok(id + ' is labelled by real text', !!label && !!label.textContent.trim());
     });
+  });
+
+  /* ================================================================== F39 ===
+     ui.js — the shell's chrome layer, which had no coverage at all.
+
+     jsdom's resource loader is off, so `<script src="ui.js">` never ran under
+     `npm test` and nothing in this file was reached: the More-plays drawer, the
+     section tabs, the sub-row toggle, the masthead menu, the deck handle, the
+     one-page fit engine's label derivation, and the single Notes box that moves
+     between the two team cards. run-tests.js inlines it now, the same way it
+     has always inlined app.js.
+
+     What is reachable and what is not, stated rather than discovered later:
+     everything below is *state* — classes, labels, aria, where a node lives —
+     and every case drives it through the real path, a dispatched click on the
+     real control. `fit()`'s arithmetic is not here and cannot be: jsdom has no
+     layout, so every box it measures is zero and every number it derives from
+     them is meaningless. The labels it derives from *classes* are a different
+     matter, and those are the two cases at the end.
+
+     These cases share the page with every other case in the file, and `reset()`
+     does not know about any of this chrome — so each one puts back what it
+     changed, the same discipline F41 had to add for the team tab. */
+
+  function uiClick(el) {
+    if (!el) fail('nothing to click');
+    el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  }
+  const activeCard = () => document.querySelector('.tab-content.active');
+
+  test('the drawer group tabs switch panel, and only one is ever on (F39)', () => {
+    const drawer = activeCard().querySelector('.qb-drawer');
+    const tabs = Array.from(drawer.querySelectorAll('.qbg-tab'));
+    const panels = Array.from(drawer.querySelectorAll('.qbg-panel'));
+    ok('there are groups to switch between', tabs.length >= 2 && panels.length >= 2);
+    eq('Outs is the group it opens on', tabs.findIndex(t => t.classList.contains('active')), 0);
+
+    const runners = tabs.find(t => t.dataset.group === 'run');
+    uiClick(runners);
+    eq('the pressed tab is the only active one',
+      tabs.filter(t => t.classList.contains('active')).map(t => t.dataset.group).join(','), 'run');
+    eq('and its panel is the only active one',
+      panels.filter(p => p.classList.contains('active')).map(p => p.dataset.group).join(','), 'run');
+
+    uiClick(tabs[0]);
+    eq('and it switches back', tabs[0].classList.contains('active'), true);
+  });
+
+  test('a group tab does not reach into the other team card (F39)', () => {
+    const cards = Array.from(document.querySelectorAll('.tab-content'));
+    ok('there are two team cards', cards.length === 2);
+    const other = cards.find(c => c !== activeCard());
+    const otherBefore = Array.from(other.querySelectorAll('.qbg-tab'))
+      .map(t => t.classList.contains('active') ? '1' : '0').join('');
+
+    uiClick(activeCard().querySelector('.qbg-tab[data-group="fix"]'));
+    eq('the inactive card is untouched',
+      Array.from(other.querySelectorAll('.qbg-tab')).map(t => t.classList.contains('active') ? '1' : '0').join(''),
+      otherBefore);
+
+    uiClick(activeCard().querySelector('.qbg-tab[data-group="out"]'));
+  });
+
+  test('the section buttons switch panel (F39)', () => {
+    const area = activeCard().querySelector('.main-area') || activeCard();
+    const btns = Array.from(area.querySelectorAll('.sec-btn'));
+    const panels = Array.from(area.querySelectorAll('.sec-panel'));
+    eq('it opens on the batting order',
+      btns.filter(b => b.classList.contains('active')).map(b => b.dataset.panel).join(','), 'bat');
+
+    uiClick(btns.find(b => b.dataset.panel === 'pitch'));
+    eq('the pitching record is the only panel showing',
+      panels.filter(p => p.classList.contains('active')).map(p => p.dataset.panel).join(','), 'pitch');
+
+    uiClick(btns.find(b => b.dataset.panel === 'bat'));
+    eq('and the batting order comes back',
+      panels.filter(p => p.classList.contains('active')).map(p => p.dataset.panel).join(','), 'bat');
+  });
+
+  test('the sub-row toggle says what it will do next (F39)', () => {
+    const area = activeCard().querySelector('.main-area') || activeCard();
+    const btn = area.querySelector('[data-ui-act="subs"]');
+    const wrap = area.querySelector('.grid-wrap');
+    eq('it starts closed', wrap.classList.contains('show-subs'), false);
+    eq('and offers to open', btn.textContent, 'Show sub rows');
+
+    uiClick(btn);
+    eq('one press shows them', wrap.classList.contains('show-subs'), true);
+    eq('and the label is now the way back', btn.textContent, 'Hide sub rows');
+
+    uiClick(btn);
+    eq('the next press hides them again', wrap.classList.contains('show-subs'), false);
+    eq('and says so', btn.textContent, 'Show sub rows');
+  });
+
+  test('the masthead menu opens, says so, and shuts on an outside press (F39)', () => {
+    const menu = document.querySelector('.hdr-menu');
+    const trigger = menu.querySelector('[data-ui-act="menu"]');
+    eq('it starts shut', menu.classList.contains('open'), false);
+    eq('and says so to a reader', trigger.getAttribute('aria-expanded'), 'false');
+
+    uiClick(trigger);
+    eq('pressing it opens the panel', menu.classList.contains('open'), true);
+    eq('and the trigger agrees', trigger.getAttribute('aria-expanded'), 'true');
+
+    uiClick(trigger);
+    eq('pressing again shuts it', menu.classList.contains('open'), false);
+    eq('and says that too', trigger.getAttribute('aria-expanded'), 'false');
+
+    uiClick(trigger);
+    uiClick(document.body);                        // anywhere that is not the menu
+    eq('a press outside shuts it', menu.classList.contains('open'), false);
+    eq('and does not leave the trigger claiming otherwise',
+      trigger.getAttribute('aria-expanded'), 'false');
+  });
+
+  /* The menu's own items are `data-act` buttons: they fire app.js and then want
+     the menu out of the way. A menu that stayed open over the modal it had just
+     opened is the bug this covers. */
+  test('choosing an item shuts the menu behind it (F39)', () => {
+    const menu = document.querySelector('.hdr-menu');
+    const trigger = menu.querySelector('[data-ui-act="menu"]');
+    uiClick(trigger);
+    eq('the menu is open', menu.classList.contains('open'), true);
+    uiClick(menu.querySelector('.hdr-menu-panel button'));
+    eq('and picking from it shuts it', menu.classList.contains('open'), false);
+    eq('with the trigger back in step', trigger.getAttribute('aria-expanded'), 'false');
+    ['hotkey-modal', 'game-library-modal', 'game-summary-modal'].forEach(id => {
+      const m = document.getElementById(id);
+      if (m) m.classList.remove('active');
+    });
+  });
+
+  test('Escape shuts the menu and the details panel (F39)', () => {
+    const menu = document.querySelector('.hdr-menu');
+    const details = document.querySelector('details.info-details');
+    uiClick(menu.querySelector('[data-ui-act="menu"]'));
+    if (details) details.open = true;
+    document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    eq('the menu is shut', menu.classList.contains('open'), false);
+    if (details) eq('and so is the details panel', details.open, false);
+  });
+
+  /* The fold is a preference about the screen, not about the team — there are
+     two decks, one per team card, and folding either folds both. */
+  test('the deck handle folds the deck for the whole page (F39)', () => {
+    const handle = activeCard().querySelector('.deck-handle');
+    eq('the deck starts open', document.body.classList.contains('deck-folded'), false);
+    uiClick(handle);
+    eq('one press folds it', document.body.classList.contains('deck-folded'), true);
+    uiClick(handle);
+    eq('and the next unfolds it', document.body.classList.contains('deck-folded'), false);
+  });
+
+  /* F21 — the words on both of these have to be right *at rest*, not only after
+     a press: on load, and after an orientation change that takes the handle out
+     of the layout entirely. That is why `fit()` derives them from the class
+     rather than flipping them where the press is handled, and it is the part of
+     `fit()` that jsdom can hold to account. */
+  test('fit() derives the More-plays label from the drawer, not from the press (F39)', () => {
+    const drawer = activeCard().querySelector('.qb-drawer');
+    const btn = activeCard().querySelector('.qb-more-btn');
+    const wasOpen = drawer.classList.contains('open');
+
+    drawer.classList.remove('open');
+    window.__ui.fit();
+    eq('a shut drawer offers more', btn.textContent, 'More plays');
+    eq('and the button does not claim to be open', btn.classList.contains('open'), false);
+
+    drawer.classList.add('open');
+    window.__ui.fit();
+    eq('an open one offers fewer', btn.textContent, 'Fewer plays');
+    eq('and the button says it is open', btn.classList.contains('open'), true);
+
+    if (!wasOpen) drawer.classList.remove('open');
+    window.__ui.fit();
+  });
+
+  test('fit() derives the deck handle label and its aria from the fold (F39)', () => {
+    const handle = activeCard().querySelector('.deck-handle');
+    const wasFolded = document.body.classList.contains('deck-folded');
+
+    document.body.classList.remove('deck-folded');
+    window.__ui.fit();
+    eq('an open deck offers to hide', handle.textContent, 'Hide entry');
+    eq('and reads as expanded', handle.getAttribute('aria-expanded'), 'true');
+
+    document.body.classList.add('deck-folded');
+    window.__ui.fit();
+    eq('a folded one offers to show', handle.textContent, 'Show entry');
+    eq('and reads as collapsed', handle.getAttribute('aria-expanded'), 'false');
+
+    if (!wasFolded) document.body.classList.remove('deck-folded');
+    window.__ui.fit();
+  });
+
+  /* One Notes box, two team cards. It is moved rather than duplicated — two
+     textareas would be two values to keep in step and app.js reads exactly one
+     #game-notes — and it is hung off switchTab rather than the tab button,
+     because app.js switches sides on its own (a half-inning ending, an undo). */
+  test('the Notes box follows whichever team card is on screen (F39)', () => {
+    const box = document.getElementById('notes-box');
+    const rowIn = tab => document.querySelector('#' + tab + ' .sec-panel[data-panel="spray"] .spray-row');
+    ok('the box exists exactly once', document.querySelectorAll('#notes-box').length === 1);
+    ok('and starts in the tab that opens', rowIn('tab-visiting').contains(box));
+
+    switchTab('home');
+    ok('switching sides brings it along', rowIn('tab-home').contains(box));
+    ok('and does not leave a copy behind', document.querySelectorAll('#notes-box').length === 1);
+
+    switchTab('visiting');
+    ok('and back again', rowIn('tab-visiting').contains(box));
+  });
+
+  test('moving the Notes box keeps what was typed in it (F39)', () => {
+    const notes = document.getElementById('game-notes');
+    notes.value = 'wind out to left, 12mph';
+    switchTab('home');
+    eq('the value survives the move', notes.value, 'wind out to left, 12mph');
+    switchTab('visiting');
+    eq('and survives the move back', notes.value, 'wind out to left, 12mph');
+    notes.value = '';
+  });
+
+  /* The hook wraps the global rather than listening on the tab button, so that
+     app.js's own internal `switchTab(...)` calls go through it too. If that
+     wrapping is ever lost the box stops following, and the two cases above
+     would still pass if something else happened to be calling placeNotes. */
+  test('switchTab is wrapped once, however many times it is hooked (F39)', () => {
+    eq('the global is the wrapped one', typeof window.switchTab, 'function');
+    eq('and it is marked as hooked', window.switchTab._notesHooked, true);
+  });
+
+  /* ============================================ F39 — win-probability maths ===
+     The four cases above at "the win-probability chart" cover the palette, the
+     axes, the width and the escaping — everything except the numbers the curve
+     is drawn from. These are the numbers. */
+
+  test('a decided game is 0 or 1, and a tie with nothing left is a coin (F39)', () => {
+    eq('ahead with no halves left has won', winProbFromDiff(1, 0), 1.0);
+    eq('behind with no halves left has lost', winProbFromDiff(-1, 0), 0.0);
+    eq('level with no halves left is even', winProbFromDiff(0, 0), 0.5);
+    eq('and a negative count is treated the same as none', winProbFromDiff(4, -2), 1.0);
+  });
+
+  test('the normal CDF is centred and symmetric (F39)', () => {
+    ok('zero is the middle', Math.abs(normalCDF(0) - 0.5) < 1e-4);
+    ok('and it is symmetric about it', Math.abs((normalCDF(1.3) + normalCDF(-1.3)) - 1) < 1e-4);
+    ok('1.96 sigma is the 97.5th percentile', Math.abs(normalCDF(1.96) - 0.975) < 1e-3);
+    ok('it stays inside 0..1 far out', normalCDF(6) <= 1 && normalCDF(-6) >= 0);
+  });
+
+  test('a lead is worth more the less time is left to lose it (F39)', () => {
+    const early = winProbFromDiff(1, 18);      // one up, first pitch
+    const late  = winProbFromDiff(1, 2);       // one up, last inning
+    const last  = winProbFromDiff(1, 1);       // one up, three outs to go
+    ok('one run up is better than even from the start', early > 0.5);
+    ok('and worth more in the ninth than the first', late > early);
+    ok('and more still with one half left', last > late);
+    ok('while the same deficit mirrors it', winProbFromDiff(-1, 2) < 1 - 0.5);
+    ok('bigger leads beat smaller ones at the same point',
+      winProbFromDiff(3, 4) > winProbFromDiff(1, 4));
+  });
+
+  /* The home edge is the one constant in here that is not derived, and it does
+     not do what its comment claimed: 0.18 over sqrt(18)*0.92 is a 51.8% home
+     side at the first pitch of a nine-inning game, not the ~54% the comment
+     asserted. Pinned to what it actually computes, so that changing the
+     constant is a decision someone makes rather than one that goes unnoticed. */
+  test('the home team starts a shade better than even (F39)', () => {
+    const start = winProbFromDiff(0, 18);
+    ok('the home side is favoured at the first pitch', start > 0.5);
+    ok('but only just — 51.8%, not the 54% the comment used to claim',
+      Math.abs(start - 0.5184) < 0.001);
+    ok('and the edge shrinks as the game shortens', winProbFromDiff(0, 2) > start);
+  });
+
+  /* An `X` is a half nobody batted in — a home team that did not need its last
+     turn. It is not a scoreless inning, and giving it a point would grow the
+     curve a step for a half that was never played. */
+  test('an unplayed bottom half puts no point on the curve (F39)', () => {
+    const box = chartIn(560);
+    const pts = () => box.querySelector('polyline').getAttribute('points').trim().split(/\s+/).length;
+
+    gameState.linescore.visiting.innings[0] = '1';
+    gameState.linescore.home.innings[0] = '0';
+    gameState.linescore.visiting.innings[1] = '0';
+    gameState.linescore.home.innings[1] = 'X';
+    renderManualWinProbChart(box.id || (box.id = 'wp-x-test'));
+    eq('four points: the start, two visiting halves and one home half', pts(), 4);
+
+    gameState.linescore.home.innings[1] = '0';
+    renderManualWinProbChart(box.id);
+    eq('and five once that half is played', pts(), 5);
+    box.remove();
+  });
+
+  test('a card with nothing scored yet says so instead of drawing a flat line (F39)', () => {
+    const box = chartIn(560);
+    box.id = 'wp-empty-test';
+    renderManualWinProbChart(box.id);
+    eq('no curve is drawn', box.querySelectorAll('polyline').length, 0);
+    ok('and it says what to do about it', /Score innings/.test(box.textContent));
+    box.remove();
   });
 })();

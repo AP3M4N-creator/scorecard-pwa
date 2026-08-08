@@ -7,15 +7,70 @@ staged=$(git diff --cached --name-only --diff-filter=ACMR)
 
 # --- 1. Tests --------------------------------------------------------------
 # Only when something that can change behaviour (or the suites themselves) is
-# staged. Runs against the working tree, not the staged snapshot — commit from a
-# clean tree, or set SKIP_TESTS=1 deliberately (e.g. a fix during a live game).
+# staged. styles.css and ui.js are on the list now: ui.js is inlined into the
+# scoring suite, and styles.css has a section of its own (F39).
+#
+# The run is against the *staged snapshot*, not the working tree. It used to be
+# the working tree, and this comment used to say "commit from a clean tree" and
+# leave it there — which made the gate wrong in both directions: a staged fix
+# could be blocked by an unstaged breakage sitting next to it, and a staged
+# breakage could sail through because the unstaged copy of the same file
+# happened to be fine. `git stash --keep-index` puts the tree at what is about
+# to be committed for the length of the run, and the trap puts it back however
+# the run ends — pass, fail, or the scorer hitting Ctrl-C.
+#
+# The restore is not the obvious one, and the obvious one is actively harmful.
+# `git stash push --keep-index` followed by a plain `git stash pop` is the
+# recipe you will find everywhere and it corrupts the file it is protecting:
+# --keep-index stashes the staged *and* unstaged changes and then puts the index
+# back, so the pop tries to re-apply a diff on top of a tree that already
+# contains the staged half of it. Where both halves touch the same file that
+# conflicts, and it leaves <<<<<<< markers in the working copy. Tried, watched
+# it happen, hence the two extra words below.
+#
+# Putting the tree back to HEAD first makes the pop a clean fast-forward — HEAD
+# is exactly what the stash was taken against — and `pop --index` restores the
+# staged/unstaged split rather than dumping everything into the working tree.
+# The `reset --hard` is safe only because it is guarded on the push having
+# succeeded, which means everything it discards is already in the stash.
+stashed=""
+
+restore_tree() {
+  [ -n "$stashed" ] || return 0
+  stashed=""
+  trap - EXIT INT TERM HUP
+  git reset --hard --quiet
+  if ! git stash pop --index --quiet; then
+    echo "pre-commit: could not restore your working tree automatically." >&2
+    echo "            Nothing is lost — recover it with: git stash pop --index" >&2
+  fi
+}
+
 if [ -n "$SKIP_TESTS" ]; then
   echo "pre-commit: SKIP_TESTS set — test suite skipped"
-elif echo "$staged" | grep -Eq '^(index\.html|app\.js|tests\.html|tests-scoring\.js|run-tests\.js|package\.json)$'; then
+elif echo "$staged" | grep -Eq '^(index\.html|app\.js|ui\.js|styles\.css|tests\.html|tests-scoring\.js|run-tests\.js|package\.json)$'; then
   if ! command -v node >/dev/null 2>&1; then
     echo "pre-commit: node not found — tests skipped (install Node to run them)" >&2
   else
-    if ! node run-tests.js -q; then
+    # Only stash if there is something to stash: with a clean tree `git stash`
+    # saves nothing, still exits 0, and the pop afterwards would take somebody
+    # else's stash off the top. Untracked files count — a new file that has not
+    # been added yet is not part of what is being committed, so the suite should
+    # not be able to see it either.
+    if ! git diff --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+      if git stash push --keep-index --include-untracked --quiet -m "pre-commit: your work, restored automatically"; then
+        stashed=1
+        trap 'restore_tree' EXIT INT TERM HUP
+      else
+        echo "pre-commit: could not stash unstaged changes — testing the working tree instead" >&2
+      fi
+    fi
+
+    node run-tests.js -q
+    tests_rc=$?
+    restore_tree
+
+    if [ "$tests_rc" -ne 0 ]; then
       echo "pre-commit: tests failed — commit aborted" >&2
       echo "            fix them, or: SKIP_TESTS=1 git commit ..." >&2
       exit 1

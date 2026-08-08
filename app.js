@@ -8070,7 +8070,13 @@ function normalCDF(z) {
 function winProbFromDiff(runDiff, halfInnsRemaining) {
   if (halfInnsRemaining <= 0) return runDiff > 0 ? 1.0 : runDiff < 0 ? 0.0 : 0.5;
   const sigma = Math.sqrt(halfInnsRemaining) * 0.92;
-  const hfa = 0.18; // ~54% home win rate at start
+  /* The home edge, in runs. This said "~54% home win rate at start" and did not
+     produce one: at the first pitch of a nine-inning game sigma is sqrt(18)*0.92
+     = 3.90, so 0.18 of a run is z = 0.046 and the curve opens at 51.8%. 54% is
+     the real-world figure the constant was aiming at — it would want hfa ≈ 0.39
+     — but moving it moves every chart this app has ever drawn, so the number
+     stays and the comment stops overstating it. Pinned by a case (F39). */
+  const hfa = 0.18;
   return normalCDF((runDiff + hfa) / sigma);
 }
 
