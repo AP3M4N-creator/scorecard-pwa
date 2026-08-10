@@ -935,8 +935,10 @@ details.info-details > summary:hover { color: var(--navy); }
    which lands between its 44px floor and 62px ceiling depending on what the
    deck is doing. So these are the *fitted* numbers, and the first column is the
    worst case rather than the best one — 1194x834 is where the drawer lies flat
-   and permanently open (see the F9 block), which reserves 177px and pins the
+   and permanently open (see the F9 block), which reserves 171px and pins the
    rows to the floor. Fold that drawer and the same column reads 37x52.
+   (171px, not the 177px this said before F44 trimmed the drawer's padding. The
+   row stayed on its floor either way, so every figure below still holds.)
 
    An earlier version of this table was taken with `fit()` never having run, so
    it recorded the CSS ladder's resting 60px row instead of the fitted 44px one
@@ -1559,11 +1561,33 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
    `display: contents` on the panels drops them out of the box tree so their buttons
    wrap as one set, rather than each panel wrapping as an unbreakable block (which
    put them in three ragged rows). The cost is real and was measured before it was
-   taken: the deck goes 63px to 164px, and the batting rows 57px to 46px. */
+   taken: the deck goes 63px to 171px, and the batting rows 57px to 44px.
+
+   That 171 read 164 here until F44. Nothing had grown — the note counted the two
+   46px button rows and the 6px between them (98px) plus the core's 63 and the
+   deck's 3px rule, and left out the drawer's own padding and bottom rule, which
+   at the time was another 13px. F44 is what that 13px cost: 9 rows at the 44px
+   floor plus this deck came to 836px on an 834px screen, so the page scrolled by
+   2px at the one viewport the whole layout is built around. See the padding
+   below. */
 @media (min-width: 1100px) {
   .tab-content.active .qb-drawer {
     max-height: none; opacity: 1; overflow: visible;
-    padding: 8px 0 4px; border-bottom: 1px solid var(--line-soft);
+    /* 4/2 rather than the 8/4 the opening drawer uses below this width, and the
+       6px is not cosmetic — it is the fix for F44. Laid flat there is nothing
+       being revealed, so this padding is not framing a panel that just appeared;
+       it is dead space inside a bar that is always on screen, and the fit had
+       nowhere else to come from. 1194x834, resting state:
+
+                        --deck-h   --cell-h   page scroll
+         8px 0 4px        177px      44px         2px
+         4px 0 2px        171px      44px         0
+
+       The card does not move — the rows were already pinned to their 44px floor
+       and stay there; the deck's top edge drops 6px, so the gutter between the
+       last row and the deck goes 12px to 18px. Grow this back and the 2px comes
+       back with it; a case in run-tests.js asserts the 6px total. */
+    padding: 4px 0 2px; border-bottom: 1px solid var(--line-soft);
   }
   .qb-drawer .qbg-tabs { display: none; }
   .qb-drawer .qbg-panel { display: contents; }

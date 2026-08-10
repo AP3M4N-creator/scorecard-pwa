@@ -234,6 +234,40 @@ function stylesheetChecks() {
       return dead.length ? 'declared and never read: ' + dead.join(', ') : null;
     });
 
+    /* F44, both halves. Nothing here can measure the fit — jsdom has no layout, so
+       the 2px page scroll at 1194x834 was invisible to this suite and to the review
+       that found it. What the text can hold is the budget the fix spent, because it
+       came from two numbers that look like taste and are not:
+
+         the flat drawer's padding at >= 1100px   6px total, was 13px with its rule
+         FIT_MIN in ui.js                         44px, the row floor
+
+       Give either one back and the page scrolls again at the app's primary viewport.
+       Verified in a browser rather than here: `window.__ui.fit()` at 1194x834, then
+       `scrollHeight - clientHeight === 0` with the drawer at rest. */
+    check('the flat drawer keeps the padding the F44 fit was bought with', () => {
+      const at = css.indexOf('@media (min-width: 1100px)');
+      if (at < 0) return 'the min-width: 1100px block is gone — the drawer no longer lies flat (F9)';
+      // Generous window: the rule carries a long comment, and `code()` blanks
+      // comments to spaces rather than removing them, so the bytes stay.
+      const m = css.slice(at, at + 4000).match(/\.tab-content\.active \.qb-drawer\s*\{[^}]*?padding:\s*([^;]+);/);
+      if (!m) return 'could not read the flat drawer\'s padding out of the 1100px block';
+      const px = m[1].trim().split(/\s+/).map(v => parseFloat(v) || 0);
+      // padding: T H B — vertical is the first and last of three, or both of two.
+      const vert = px.length >= 3 ? px[0] + px[2] : px[0] * 2;
+      return vert <= 6
+        ? null
+        : `the flat drawer is back to ${vert}px of vertical padding — that is the 2px of page scroll at 1194x834 (F44)`;
+    });
+
+    check('the row floor has not been lowered to buy the fit instead', () => {
+      const m = code('ui.js').match(/FIT_MIN\s*=\s*(\d+)/);
+      if (!m) return 'no FIT_MIN in ui.js — the fit engine no longer has a row floor';
+      const n = Number(m[1]);
+      if (n < 44) return `FIT_MIN is ${n}px — below 44 a seven-mark pitch column is under 5.5px, which ui.js argues against for the phone (F44)`;
+      return n > 44 ? `FIT_MIN is ${n}px, and 44 is what the 1194x834 fit is measured against` : null;
+    });
+
     /* F28. At 844x390 both the iPad block and the phone-landscape block matched,
        so every iPad rule the phone block did not restate was in force on a
        390px-tall window. The height floor is what keeps them disjoint, and a

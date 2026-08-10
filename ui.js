@@ -164,7 +164,15 @@ document.addEventListener('keydown', function (e) {
   }
   /* At and above this the stylesheet lays the drawer flat and it stops being a
      drawer — every play button is on the deck all the time. Kept in step with the
-     `min-width: 1100px` block in styles.css. */
+     `min-width: 1100px` block in styles.css.
+
+     This is also the width where the fit is tightest, and where it failed: with the
+     whole flat deck reserved, nine rows at FIT_MIN plus the deck came to 836px on an
+     834px screen and the page scrolled by 2px (F44). The 2px was not found here —
+     nothing in this arithmetic is wrong — but in the flat drawer's own padding, which
+     that block now sets to 4/2 instead of 8/4. So the margin at 1194x834 is about 5px
+     and it is spent: growing that padding back, or lowering FIT_MIN to buy rows
+     instead, both land back on a scrolling page. */
   var FLAT_DRAWER = 1100;
   var root = document.documentElement, queued = false;
 
