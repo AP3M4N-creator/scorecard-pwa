@@ -42,7 +42,7 @@
     /^\.out-num\[data-team=/,
     /^input\[data-ls=/,
     /^input\[data-team="(visiting|home)"\]\[data-pitcher=/,
-    /^td\[data-field="era"\]\[data-team=/,
+    /^td\[data-field="(era|bs)"\]\[data-team=/,
     /^input\[data-field="(num|name|avg)"\]\[data-team=/,
     /^select\[data-field="pos"\]\[data-team=/
   ];
@@ -267,11 +267,14 @@
     const t = battingTeam === 'visiting' ? 'home' : 'visiting';
     return document.querySelector(`input[data-team="${t}"][data-pitcher="${i}"][data-field="${field}"]`).value;
   }
-  // ERA is derived, so it renders into a cell rather than an input.
-  function pEra(battingTeam, i) {
+  // ERA is derived, so it renders into a cell rather than an input. So is the
+  // balls-strikes split beside PC, for the same reason and through the same path.
+  function pDerived(battingTeam, i, field) {
     const t = battingTeam === 'visiting' ? 'home' : 'visiting';
-    return document.querySelector(`td[data-field="era"][data-team="${t}"][data-pitcher="${i}"]`).textContent;
+    return document.querySelector(`td[data-field="${field}"][data-team="${t}"][data-pitcher="${i}"]`).textContent;
   }
+  const pEra = (battingTeam, i) => pDerived(battingTeam, i, 'era');
+  const pBs = (battingTeam, i) => pDerived(battingTeam, i, 'bs');
   // Set regulation length the way the scorer does — through the select, so the
   // change handler and `setRegulationInnings` are both on the path.
   function setInnings(n) {
@@ -512,6 +515,109 @@
     pitch('S'); pitch('S'); pitch('S');
     clickId('k-swinging');
     eq('pitches', ab('visiting', 0, 0).pitches.join(''), 'SSS');
+  });
+
+  /* ---------------------------------------------------------------------------
+     The pitch track.
+
+     None of this had a case before the track was rewritten — the suite called
+     `renderPitches` in `reset()` and never looked at what came out, so the old
+     renderer's one real defect (it sorted the pitches into a balls column and a
+     strikes column, and the order they were thrown was gone) was invisible here
+     and only ever found by scoring a game with it.
+     --------------------------------------------------------------------------- */
+  const track = (team, p, col) => document.getElementById(`pt-${team}-${p}-${col}`);
+  // What the track says, one letter per mark, in the order it drew them: b for a
+  // ball, s for a strike, f for a foul. Read off the class rather than the glyph
+  // because a strike and a foul are the same ✕ and differ only by class and colour.
+  const marks = (team, p, col) => [...track(team, p, col).querySelectorAll('.pitch-mark')]
+    .map(m => m.className.replace('pitch-mark ', '')[0]).join('');
+  const cols = (team, p, col) => [...track(team, p, col).querySelectorAll('.pitch-col')]
+    .map(c => c.querySelectorAll('.pitch-mark').length);
+
+  test('the track draws the at-bat in the order it was thrown', () => {
+    sel('visiting', 0, 0);
+    pitch('B'); pitch('S'); pitch('F'); pitch('B');
+    eq('the sequence, not a tally', marks('visiting', 0, 0), 'bsfb');
+  });
+
+  test('a ball put in play leaves no mark', () => {
+    sel('visiting', 0, 0);
+    pitch('S'); pitch('B');
+    play('1B');                                  // pushes the synthetic 'H'
+    eq('three pitches on the line', ab('visiting', 0, 0).pitches.join(''), 'SBH');
+    eq('two marks on the card', marks('visiting', 0, 0), 'sb');
+  });
+
+  test('a short at-bat is one column, and an empty one is not drawn beside it', () => {
+    sel('visiting', 0, 0);
+    pitch('B'); pitch('S'); pitch('B');
+    eq('columns', JSON.stringify(cols('visiting', 0, 0)), '[3]');
+  });
+
+  test('the sixth pitch opens the second column, and the tenth fills it', () => {
+    sel('visiting', 0, 0);
+    for (let i = 0; i < 6; i++) pitch('F');
+    eq('five, then the overflow', JSON.stringify(cols('visiting', 0, 0)), '[5,1]');
+    for (let i = 0; i < 4; i++) pitch('F');
+    eq('ten sits evenly', JSON.stringify(cols('visiting', 0, 0)), '[5,5]');
+  });
+
+  /* The cap Adam chose: two columns however long the at-bat runs. A third would
+     open to the right, and the track sits over the top-left of a cell that has a
+     diamond in it. The marks divide instead — see --pm-n below. */
+  test('an at-bat past ten stays in two columns', () => {
+    sel('visiting', 0, 0);
+    for (let i = 0; i < 11; i++) pitch('F');
+    eq('eleven', JSON.stringify(cols('visiting', 0, 0)), '[6,5]');
+    for (let i = 0; i < 7; i++) pitch('F');
+    eq('eighteen, still two', JSON.stringify(cols('visiting', 0, 0)), '[9,9]');
+  });
+
+  /* The divisor the mark size comes off, handed to CSS because a `:has(:nth-child)`
+     ladder can only count as high as the rules somebody wrote. The floor is what
+     stops the marks resizing under the scorer mid-at-bat: everything up to ten
+     draws at the same size. */
+  test('the track carries its own mark density, floored at five', () => {
+    sel('visiting', 0, 0);
+    pitch('S');
+    eq('one pitch still divides by five', track('visiting', 0, 0).style.getPropertyValue('--pm-n'), '5');
+    for (let i = 0; i < 9; i++) pitch('F');
+    eq('and ten do too', track('visiting', 0, 0).style.getPropertyValue('--pm-n'), '5');
+    pitch('F');
+    eq('the eleventh is what shrinks them', track('visiting', 0, 0).style.getPropertyValue('--pm-n'), '6');
+  });
+
+  test('taking the last pitch back empties the track', () => {
+    sel('visiting', 0, 0);
+    pitch('S');
+    removePitch();
+    eq('no marks', marks('visiting', 0, 0), '');
+    eq('and no density left behind', track('visiting', 0, 0).style.getPropertyValue('--pm-n'), '');
+  });
+
+  /* ---------------------------------------------------------------------------
+     `pitchSplit` — the pitcher's half of the same array.
+     --------------------------------------------------------------------------- */
+  const split = s => JSON.stringify(pitchSplit(s.split('')));
+
+  test('the split counts what was thrown, not what the batter is looking at', () => {
+    // `getPitchCount` stops a foul adding strikes at two, because that is the count
+    // on the scoreboard. Every one of them is still a strike the pitcher threw.
+    eq('the batter’s count', JSON.stringify(getPitchCount('SFFF'.split(''))), '{"balls":0,"strikes":2}');
+    eq('the pitcher’s', split('SFFF'), '{"balls":0,"strikes":4}');
+  });
+
+  test('a ball put in play is a strike on the pitcher’s line', () => {
+    eq('a hit', split('BSH'), '{"balls":1,"strikes":2}');
+    eq('an out', split('BX'), '{"balls":1,"strikes":1}');
+  });
+
+  test('the split always adds up to the total it is printed beside', () => {
+    ['', 'B', 'SSS', 'BBBB', 'BFSFBSFH', 'FFFFFFFFFFFFX'].forEach(s => {
+      const r = pitchSplit(s.split(''));
+      eq(`${s || '(none)'} adds up`, r.balls + r.strikes, s.length);
+    });
   });
 
   test('a home run with two on scores three and credits three RBI', () => {
@@ -4478,6 +4584,32 @@
     eq('blank, not 0.00', pEra('visiting', 0), '');
   });
 
+  /* The balls-strikes split beside PC — the second thing anyone asks after the
+     count, and until now the card could not answer it anywhere. */
+  test('the pitching line splits the pitch count', () => {
+    sel('visiting', 0, 0);
+    pitch('B'); pitch('S'); pitch('F');
+    play('1B');                                     // 'H' — a strike he threw
+    eq('four pitches', pStat('visiting', 0, 'pc'), '4');
+    eq('split beside them', pBs('visiting', 0), '1-3');
+  });
+
+  test('the split adds up to the pitch count over a whole inning', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('BB'); play('K'); play('K');    // SSS + BBBB + SSS + SSS
+    const [b, s] = pBs('visiting', 0).split('-').map(Number);
+    eq('and it is the same number twice', b + s, Number(pStat('visiting', 0, 'pc')));
+    eq('the walk’s four balls', b, 4);
+  });
+
+  test('a pitcher who never came in has no split, not a nought', () => {
+    sel('visiting', 0, 0);
+    play('K');                                      // the starter only
+    eq('the starter', pBs('visiting', 0), '0-3');
+    eq('the man behind him', pBs('visiting', 1), '');
+    eq('and no ERA either, same rule', pEra('visiting', 1), '');
+  });
+
   test('a scoreless inning is an ERA of 0.00, not a blank', () => {
     sel('visiting', 0, 0);
     play('K'); play('K'); play('K');
@@ -5589,15 +5721,16 @@
   test('the panel counts pitches as they are thrown, not at the end of the at-bat', () => {
     sel('visiting', 0, 0);
     pitch('S');
-    eq('one pitch reads singular', lsText('ls-pitches'), '1 pitch');
+    eq('one pitch reads singular', lsText('ls-pitches'), '1 pitch (0-1)');
     pitch('B');
-    eq('and the second lands before any play does', lsText('ls-pitches'), '2 pitches');
+    eq('and the second lands before any play does', lsText('ls-pitches'), '2 pitches (1-1)');
     eq('while the pitching line has yet to move', pStat('visiting', 0, 'pc'), '');
     play('1B');                                       // the play adds its result pitch
     sel('visiting', 3, 0);
-    eq('the next batter carries the total forward', lsText('ls-pitches'), '3 pitches');
+    // The result pitch is a strike in the split: he threw it and it was hit.
+    eq('the next batter carries the total forward', lsText('ls-pitches'), '3 pitches (1-2)');
     pitch('B');
-    eq('and adds to it', lsText('ls-pitches'), '4 pitches');
+    eq('and adds to it', lsText('ls-pitches'), '4 pitches (2-2)');
   });
 
   test('the panel names the man on the mound and counts only his pitches', () => {
@@ -5605,14 +5738,15 @@
     eq('the starter, before anyone is written in', lsText('ls-pitcher'), 'Pitcher 1');
     sel('visiting', 0, 0); play('K');                 // three pitches, all his
     sel('visiting', 3, 0);
-    eq('his three', lsText('ls-pitches'), '3 pitches');
+    eq('his three', lsText('ls-pitches'), '3 pitches (0-3)');
     document.querySelector('input[data-team="home"][data-pitcher="1"][data-field="num"]').value = '31';
     document.querySelector('input[data-team="home"][data-pitcher="1"][data-field="name"]').value = 'Ramos';
     usePitcher(1);
     eq('the reliever is named as he comes in', lsText('ls-pitcher'), '#31 Ramos');
+    // No split on nought: "(0-0)" beside a nought is the same nothing said twice.
     eq('and comes in on none of his own', lsText('ls-pitches'), '0 pitches');
     pitch('S');
-    eq('the first is his', lsText('ls-pitches'), '1 pitch');
+    eq('the first is his', lsText('ls-pitches'), '1 pitch (0-1)');
     eq('and the starter keeps his three', pStat('visiting', 0, 'pc'), '3');
   });
 
@@ -5857,7 +5991,6 @@
       Object.defineProperty(window, 'innerWidth', { value: real, configurable: true });
       document.querySelectorAll('.qb-drawer').forEach(d => d.classList.remove('open', 'collapsed'));
       document.querySelectorAll('.qb-more-btn').forEach(b => b.classList.remove('open'));
-      document.body.classList.remove('drawer-open');
     }
   }
   const drawer = () => document.querySelector('#tab-visiting .qb-drawer');
@@ -5869,9 +6002,9 @@
       toggleQBDrawer();
       ok('one press folds it away', drawer().classList.contains('collapsed'));
       ok('and the button stops reading as open', !moreBtn().classList.contains('open'));
-      // Its height is reserved up here, so the card is never behind it — the grid must
-      // not take the overlay scroll F9-A gives the narrow drawer.
-      ok('the grid keeps the page scroll', !document.body.classList.contains('drawer-open'));
+      // It never uses the narrow drawer's class, so nothing can mistake a folded flat
+      // deck for one overlaying the card — which is what F9-A's grid scroll is for.
+      ok('and it is not the overlaying drawer', !drawer().classList.contains('open'));
       toggleQBDrawer();
       ok('and a second press brings it back', !drawer().classList.contains('collapsed'));
       ok('with the button open again', moreBtn().classList.contains('open'));
@@ -5884,11 +6017,8 @@
       toggleQBDrawer();
       ok('one press opens it', drawer().classList.contains('open'));
       ok('it never uses the flat class', !drawer().classList.contains('collapsed'));
-      // It opens *over* the card down here, so the rows behind it need their own scroll.
-      ok('the grid takes its own scroll', document.body.classList.contains('drawer-open'));
       toggleQBDrawer();
       ok('and a second press shuts it', !drawer().classList.contains('open'));
-      ok('releasing the grid scroll with it', !document.body.classList.contains('drawer-open'));
     });
   });
 
@@ -5915,7 +6045,6 @@
       width(real);
       document.querySelectorAll('.qb-drawer').forEach(d => d.classList.remove('open', 'collapsed'));
       document.querySelectorAll('.qb-more-btn').forEach(b => b.classList.remove('open'));
-      document.body.classList.remove('drawer-open');
     }
   });
 

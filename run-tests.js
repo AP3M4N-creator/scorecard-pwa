@@ -264,8 +264,27 @@ function stylesheetChecks() {
       const m = code('ui.js').match(/FIT_MIN\s*=\s*(\d+)/);
       if (!m) return 'no FIT_MIN in ui.js — the fit engine no longer has a row floor';
       const n = Number(m[1]);
-      if (n < 44) return `FIT_MIN is ${n}px — below 44 a seven-mark pitch column is under 5.5px, which ui.js argues against for the phone (F44)`;
+      if (n < 44) return `FIT_MIN is ${n}px — the pitch marks divide --cell-h, so every pixel off this comes off them first, which ui.js argues against for the phone (F44)`;
       return n > 44 ? `FIT_MIN is ${n}px, and 44 is what the 1194x834 fit is measured against` : null;
+    });
+
+    /* A shown sub row has to declare its own height. It cannot borrow one from its
+       content: F27 pinned every control in the lineup to its cell with `position:
+       absolute`, which contributes nothing to the row's intrinsic height, so without
+       this declaration the row comes out the height of its borders and the name in it
+       is unreadable — which is how it shipped, and how Adam found it mid-game.
+
+       Checked in text because it cannot be checked anywhere else: jsdom has no layout
+       (see the note above), so no case in the suite can observe that the row has a
+       height, and the browser check that found it is not repeatable here. All this
+       asserts is that the declaration is still present and still derived from
+       --cell-h — a fixed px value would stop tracking the fit. */
+    check('a shown sub row still declares a height', () => {
+      const m = css.match(/\.grid-wrap\.show-subs \.scoring-grid tr\.pos-sub\s*\{[^}]*?height:\s*([^;]+);/);
+      if (!m) return 'nothing gives a shown sub row a height — with absolute-positioned controls it collapses to its borders';
+      return /var\(\s*--cell-h/.test(m[1])
+        ? null
+        : `a sub row is ${m[1].trim()}, which does not move with the fit — it has to come off --cell-h`;
     });
 
     /* F28. At 844x390 both the iPad block and the phone-landscape block matched,

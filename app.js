@@ -605,7 +605,13 @@ function buildPitcherTable(team, containerId) {
   html += '<table class="pitcher-grid"><thead><tr>';
   html += '<th class="pitcher-num-col">#</th>';
   html += '<th class="pitcher-name-col">Pitcher</th>';
-  labels.forEach(l => html += `<th>${l}</th>`);
+  // B-S rides immediately behind PC rather than out at the end of the line: it is the
+  // pitch count read a second way, and a column between them would make it look like
+  // a third statistic instead of the same one broken open.
+  labels.forEach(l => {
+    html += `<th>${l}</th>`;
+    if (l === 'PC') html += '<th class="pitcher-bs-col">B-S</th>';
+  });
   html += '<th class="pitcher-era-col">ERA</th>';
   html += '</tr></thead><tbody>';
 
@@ -615,6 +621,10 @@ function buildPitcherTable(team, containerId) {
     html += `<td class="p-name"><input type="text" data-team="${team}" data-pitcher="${i}" data-field="name"></td>`;
     stats.forEach(s => {
       html += `<td class="p-stat"><input type="text" data-team="${team}" data-pitcher="${i}" data-field="${s}" maxlength="5"></td>`;
+      // A cell and not an input, for ERA's reason below: the split is derived from
+      // the same `pitches` arrays PC is, so there is nothing here for a scorer to
+      // correct that correcting PC would not contradict.
+      if (s === 'pc') html += `<td class="p-bs" data-team="${team}" data-pitcher="${i}" data-field="bs"></td>`;
     });
     // ERA is derived from this game's ER and IP, so it is a cell, not an input —
     // the header used to promise an ERA in the name column and no field ever
@@ -3755,6 +3765,20 @@ function getPitchCount(pitches) {
   return { balls, strikes };
 }
 
+/* The pitcher's half of the same array, and deliberately not `getPitchCount`.
+
+   That one is the *batter's* count — the thing on the scoreboard — so a foul stops
+   adding strikes once there are two, and a ball put in play is not a pitch it has any
+   use for. A pitcher's line counts what he threw: every foul is a strike thrown, and
+   so is the pitch that got hit. So balls are the 'B's and everything else is a strike,
+   which is what makes balls + strikes come to `pitches.length` — the split has to add
+   up to the total it is printed beside or it reads as a third figure. */
+function pitchSplit(pitches) {
+  let balls = 0;
+  for (const p of pitches) if (p === 'B') balls++;
+  return { balls, strikes: pitches.length - balls };
+}
+
 function addPitch(type) {
   if (!requireSelection()) return;
   const team = selectedCell.dataset.team;
@@ -3843,27 +3867,46 @@ function removePitch() {
   autoSave();
 }
 
+/* The pitch track: the at-bat as it was thrown, top to bottom.
+
+   This used to draw all the balls in one column and all the strikes in another, which
+   is a tally and not a record — the card could say a batter saw four balls and three
+   strikes but not that he was ahead 3-0 and fouled off five. The order is in
+   `ab.pitches` and always was; only the renderer was throwing it away.
+
+   Five to a column, then a second column to its right, and never a third: the track
+   sits over the top-left of the cell and a third column would run into the diamond.
+   Past ten the marks shrink to keep both columns — `PER_COL` is the floor, not the
+   count, so a fifteen-pitch at-bat is 8 and 7 rather than 5, 5 and 5.
+
+   The floor is also why a two-pitch at-bat draws at the same size as a nine-pitch one:
+   the divisor never drops below five, so nothing on the card changes size while the
+   scorer is watching, right up until the eleventh pitch. */
+const PER_COL = 5;
+
 function renderPitches(team, pIdx, innIdx) {
   const ab = gameState.teams[team].players[pIdx].atBats[innIdx];
   const el = document.getElementById(`pt-${team}-${pIdx}-${innIdx}`);
   if (!el) return;
-  const pitches = ab.pitches || [];
-  const balls = pitches.filter(p => p === 'B');
-  const strikes = pitches.filter(p => p === 'S' || p === 'F');
-  if (!balls.length && !strikes.length) { el.innerHTML = ''; return; }
-  const MAX = 7;
-  const groups = Math.max(Math.ceil(balls.length / MAX), Math.ceil(strikes.length / MAX), 1);
-  let html = '';
-  for (let g = 0; g < groups; g++) {
-    const gb = balls.slice(g * MAX, (g + 1) * MAX);
-    const gs = strikes.slice(g * MAX, (g + 1) * MAX);
-    html += '<div class="pitch-col">';
-    gb.forEach(() => { html += '<span class="pitch-mark ball">●</span>'; });
-    html += '</div><div class="pitch-col">';
-    gs.forEach(p => { html += p === 'F' ? '<span class="pitch-mark foul">✕</span>' : '<span class="pitch-mark strike">✕</span>'; });
-    html += '</div>';
-  }
+  /* 'H' and 'X' are the terminal pitch `applyPlay` pads in for a ball put in play —
+     they count towards the pitcher's total and have never had a mark of their own,
+     because the play text below is already saying what happened to them. */
+  const marks = (ab.pitches || []).filter(p => p === 'B' || p === 'S' || p === 'F');
+  if (!marks.length) { el.innerHTML = ''; el.style.removeProperty('--pm-n'); return; }
+  const perCol = Math.max(PER_COL, Math.ceil(marks.length / 2));
+  const glyph = p => p === 'B' ? '<span class="pitch-mark ball">●</span>'
+               : p === 'F' ? '<span class="pitch-mark foul">✕</span>'
+                           : '<span class="pitch-mark strike">✕</span>';
+  let html = '<div class="pitch-col">' + marks.slice(0, perCol).map(glyph).join('') + '</div>';
+  // No empty second column: `.pitch-track` is a flex row with a gap, and a bare one
+  // would push nothing 3px to the right of a column that has nothing beside it.
+  const rest = marks.slice(perCol);
+  if (rest.length) html += '<div class="pitch-col">' + rest.map(glyph).join('') + '</div>';
   el.innerHTML = html;
+  // The divisor the mark size is worked out from — see the note in styles.css. Handed
+  // over rather than derived in CSS because a `:has(:nth-child(n))` ladder can only
+  // count up to whatever rules someone remembered to write, and this has no ceiling.
+  el.style.setProperty('--pm-n', perCol);
 }
 
 function checkAutoTrigger(team, pIdx, innIdx) {
@@ -3932,19 +3975,27 @@ function livePitcherLabel(team, idx) {
    `ab.pitcher` is only stamped when the play is entered, so an unfinished at-bat is
    attributed the way `applyPlay` is about to attribute it — whoever the column says
    is on the mound. `battingTeam` picks the side whose at-bats hold the pitches;
-   these are the pitches thrown *at* them, by `battingTeam`'s opponent. */
+   these are the pitches thrown *at* them, by `battingTeam`'s opponent.
+
+   Returns the split as well as the total. A count on its own says how hard he has
+   been worked; the split is the first thing anyone asks next, and it is the same
+   walk over the same at-bats either way. */
 function livePitchCount(battingTeam, pitcherIdx) {
-  let n = 0;
+  let total = 0, balls = 0, strikes = 0;
   for (const player of gameState.teams[battingTeam].players) {
     for (let col = 0; col < player.atBats.length; col++) {
       const ab = player.atBats[col];
       const pitches = ab && ab.pitches;
       if (!pitches || !pitches.length) continue;
       const owner = ab.play ? (ab.pitcher || 0) : getEffectivePitcher(battingTeam, col);
-      if (owner === pitcherIdx) n += pitches.length;
+      if (owner !== pitcherIdx) continue;
+      const split = pitchSplit(pitches);
+      total += pitches.length;
+      balls += split.balls;
+      strikes += split.strikes;
     }
   }
-  return n;
+  return { total, balls, strikes };
 }
 
 /* Game Situation Panel */
@@ -4003,8 +4054,20 @@ function updateSituation() {
   }
   const lsPitches = document.getElementById('ls-pitches');
   if (lsPitches) {
-    const n = livePitchCount(team, pIdxOnMound);
-    lsPitches.textContent = n + (n === 1 ? ' pitch' : ' pitches');
+    /* Balls first, the way a scorer says a count. Suppressed at nought, where a
+       "(0-0)" would be three characters saying the same thing as the nought beside
+       it — and where the line is at its widest for no reason at all.
+
+       In three spans rather than one string because the phone cannot afford all of
+       it: at 10px mono the word costs 48px, and adding the split to the line as it
+       stood overflowed a 375px scoreboard strip by 43. The phone block hides `lsp-w`
+       and the line reads "30 (6-24)", under a row already labelled Pitcher — so the
+       word is carrying nothing there that the label isn't. `textContent` still reads
+       the whole sentence, which is what the panel's cases assert against. */
+    const pc = livePitchCount(team, pIdxOnMound);
+    lsPitches.innerHTML = `<span class="lsp-n">${pc.total}</span>`
+      + `<span class="lsp-w">${pc.total === 1 ? ' pitch' : ' pitches'}</span>`
+      + (pc.total ? `<span class="lsp-s"> (${pc.balls}-${pc.strikes})</span>` : '');
   }
 
   // Linescore highlight + auto-zeros for completed innings
@@ -5411,8 +5474,10 @@ function collectState() {
       const p = parseInt(inp.dataset.p);
       gameState.teams[team].players[p].avg = inp.value;
     });
-    // `era` is deliberately absent: it is derived in `updatePitcherStats` and
-    // rendered into a cell, so there is no input here to scrape.
+    // `era` and `bs` are deliberately absent: both are derived in
+    // `updatePitcherStats` and rendered into cells, so there is no input here to
+    // scrape — and scraping a derived figure back would let a stale one survive a
+    // recompute that disagreed with it.
     const pitcherStats = ['ip','pc','h','r','er','k','bb'];
     pitcherStats.forEach(stat => {
       document.querySelectorAll(`input[data-team="${team}"][data-field="${stat}"]`).forEach(inp => {
@@ -6150,7 +6215,7 @@ function updatePlayerStats(team) {
 // One shape for a pitcher's line, since three places build it and a field added to
 // only some of them (`faced`, M6) reads as NaN in the others.
 function emptyPitcherLine() {
-  return { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0, faced: 0, prov: false };
+  return { ip: 0, outs: 0, k: 0, bb: 0, h: 0, r: 0, er: 0, pc: 0, balls: 0, strikes: 0, faced: 0, prov: false };
 }
 
 function updatePitcherStats(battingTeam) {
@@ -6182,8 +6247,13 @@ function updatePitcherStats(battingTeam) {
       // carry: a reliever who retires nobody has 0 outs and so did read as an empty
       // row (M6).
       s.faced++;
-      // Pitch count
-      s.pc += (ab.pitches || []).length;
+      // Pitch count, and the same pitches split. Both off the one array so the two
+      // figures can never disagree about how many there were.
+      const thrown = ab.pitches || [];
+      const split = pitchSplit(thrown);
+      s.pc += thrown.length;
+      s.balls += split.balls;
+      s.strikes += split.strikes;
       // Outs are not counted here — see the outsLog pass below.
       // Strikeouts
       if (ab.play === 'K' || ab.play === 'ꓘ' || ab.play === 'K+WP') s.k++;
@@ -6232,6 +6302,15 @@ function updatePitcherStats(battingTeam) {
         pitchers[i][field] = String(fields[field]);
       }
     });
+
+    // The split, written the way ERA is below and for the same reason. Blank unless
+    // he actually threw something: a pitcher warming in the bullpen has appeared on
+    // nobody's line, and "0-0" on an empty row reads as a man who threw nothing while
+    // standing on the mound rather than a man who was never in the game.
+    const bsStr = s.pc > 0 ? `${s.balls}-${s.strikes}` : '';
+    pitchers[i].bs = bsStr;
+    const bsCell = document.querySelector(`td[data-field="bs"][data-team="${pitchingTeam}"][data-pitcher="${i}"]`);
+    if (bsCell) bsCell.textContent = bsStr;
 
     // ERA for this game's line: ER × 9 ÷ IP, which in outs is ER × 27 ÷ outs.
     // A pitcher charged an earned run without retiring anybody has an infinite
@@ -7076,11 +7155,16 @@ function toggleQBDrawer() {
     d.classList.toggle('open', !flat && show);
   });
   btns.forEach(b => { b.classList.toggle('open', show); b.textContent = show ? '∧' : '···'; });
-  // Only the overlaying drawer needs the grid to take its own scroll: laid flat its
-  // height is reserved, so the card is never behind it and the cell being scored
-  // cannot be hidden by it. The class is what the stylesheet keys that scroll off;
-  // `fit()` supplies the height (F9-A).
-  document.body.classList.toggle('drawer-open', !flat && show);
+  /* A `drawer-open` class went on the body here, and the stylesheet keyed the grid's
+     own scroll off it (F9-A). It reads it no longer: a shown sub row overflows the
+     card with the drawer shut, so the cap had to stop being about the drawer, and
+     `.grid-wrap` now takes `--grid-max-h` whenever `fit()` sets one — which it does
+     for the open drawer and for the sub rows alike. The class was left behind
+     write-only, which is the drift the stylesheet's own dead-token check exists to
+     catch, so it is gone rather than kept for a reader that no longer exists.
+
+     Laid flat none of this applies either way: the deck's height is reserved, so the
+     card is never behind it and there is nothing hidden to scroll to. */
   if (!flat && show && selectedCell && selectedCell.scrollIntoView) {
     // After `fit()`, which runs on the same click and is what makes the grid
     // scrollable in the first place — there is nowhere to scroll to before it.

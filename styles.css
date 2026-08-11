@@ -102,8 +102,11 @@
      Translucent, and the alphas are not arbitrary: the card's ink stays navy on
      every one of them, so each hue is set as bold as it can go while the smallest
      thing painted over it still clears 4.5:1. The binding constraint is never the
-     15px play text (it has 5.8:1 to spare here) but the 6-7px pitch marks, which
-     is the same reason these started life at 4-14%. Each value below is that
+     15px play text (it has 5.8:1 to spare here) but the pitch marks, ~8px at
+     rest and smaller the longer the at-bat runs, which is the same reason these
+     started life at 4-14%. (Contrast is a ratio, so the size does not move the
+     numbers below — it decides that 4.5:1 rather than 3:1 is the bar to clear,
+     and at no length do these marks get to be large text.) Each value below is that
      ceiling: navy ink lands at 5.81-5.86:1 and a strike mark at 4.50-4.54:1 on all
      four of the dark hues. Solid fills were tried and abandoned — they force the
      basepaths, the diamond and the pitch marks to white, and the scorer reads the
@@ -601,6 +604,41 @@ details.info-details > summary:hover { color: var(--navy); }
    something shows the row first. Per-slot rather than `show-subs`, which opens all
    eighteen and costs about half the visible batting slots on an iPad (F7). */
 .scoring-grid tr.pos-sub.revealed { visibility: visible; }
+/* ---------- A shown sub row is as tall as it says it is ----------
+
+   It had no height at all, and unlike `tr.pos-starter` — which declares --cell-h
+   right above — it could not fall back on its content for one: F27 pinned every
+   control in the lineup to its cell with `position: absolute; inset: 0`, and an
+   absolutely positioned child contributes nothing to its parent's intrinsic height.
+   So all four cells measured empty, the row came out the height of its own borders,
+   and a sub opened by SUB was a line the scorer could see appear and could not read.
+
+   Half a starter, and derived rather than fixed so it tracks the fit: 22px where the
+   flat drawer squeezes hardest, 31px on a roomy iPad. Subordinate to the starter at a
+   glance, which is the same thing the 16px name indent below is saying.
+
+   Declared on the shown states rather than on `tr.pos-sub` itself. A row under
+   `visibility: collapse` should contribute no height whatever is declared on it, but
+   "should" is doing the work in that sentence across four engines, and the resting
+   card — nine slots, no subs, the case that has to fit on one page — is not worth
+   staking on it. These are the same four selectors that turn the row on above.
+
+   fit() needs no change: it already measures these rows (`subs`, ui.js) and takes
+   them out of the starters' share. It has been measuring 2px slivers and will now
+   measure the truth. */
+.scoring-grid tr.pos-sub:has(input[data-field="name"]:not(:placeholder-shown)),
+.scoring-grid tr.pos-sub:focus-within,
+.scoring-grid tr.pos-sub.revealed,
+.grid-wrap.show-subs .scoring-grid tr.pos-sub { height: calc(var(--cell-h) / 2); }
+/* The controls have to fit the shorter row too, or the fix stops at the border and
+   the text inside is still cut. They inherit 6px of vertical padding from the lineup
+   rule above, which at a 22px row leaves 10px of content box for a 13px line. The
+   side padding is left alone — that is the name's indent and the # column's F13
+   fix, neither of which is about height. */
+.scoring-grid tr.pos-sub td.num-cell input,
+.scoring-grid tr.pos-sub td.player-cell input,
+.scoring-grid tr.pos-sub td.avg-cell input { padding-top: 1px; padding-bottom: 1px; }
+.scoring-grid tr.pos-sub td.pos-cell select { padding-top: 0; padding-bottom: 0; }
 /* Slot separation without a heavy rule */
 .scoring-grid tr.pos-starter > td { border-top: 2px solid var(--text); }
 .scoring-grid tbody tr.pos-sub:last-child > td { border-bottom: 1px solid var(--border-light); }
@@ -634,19 +672,29 @@ details.info-details > summary:hover { color: var(--navy); }
 .pitch-col { display: flex; flex-direction: column; }
 /* Long at-bats: step the marks down so a column of fouls can never run past the
    bottom of the cell. The ceiling is derived from --cell-h rather than hard-coded,
-   because the cell shrinks to 54/52/50px at the breakpoints below while a column of
+   because the cell shrinks to 55/58/60px at the breakpoints above while a column of
    marks would not: a column starts 3px down (the cell's 1px border plus the track's
    2px top) and has to stop 2px clear of the bottom padding edge, which leaves
    (--cell-h - 5px) to divide between n marks at line-height 1. 11px is the cap, so
    marks only shrink when the column is genuinely too tall to fit at full size.
-   app.js wraps at 7 per column, so 7 is the worst case. */
+
+   `--pm-n` is the marks-per-column renderPitches settled on, written onto the track
+   as it draws. It replaced a ladder of `:has(.pitch-mark:nth-child(n))` rules, one
+   per length, which could only count as high as somebody remembered to write a rule
+   for — 7, because that was the old wrap. Nothing wraps now: the track is capped at
+   two columns and a long at-bat goes on dividing, so the ladder had no top to reach.
+
+   The fallback of 5 is renderPitches' own floor, so a track that somehow paints
+   before the property lands is at its resting size rather than its largest. At the
+   fitted 44px iPad row that is 7.8px, up from the 5.6px the old 7-per-column worst
+   case gave — the marks are the binding constraint on the play tints above, so this
+   is slack the palette gains rather than spends. Past thirteen pitches they go under
+   6px and keep going: two columns whatever it costs, which is the trade Adam picked
+   over letting a third one open into the diamond. */
 .pitch-mark {
-  font-size: min(11px, calc((var(--cell-h) - 5px) / 4));
+  font-size: min(11px, calc((var(--cell-h) - 5px) / var(--pm-n, 5)));
   font-weight: 700; line-height: 1; font-family: var(--mono);
 }
-.pitch-col:has(.pitch-mark:nth-child(5)) .pitch-mark { font-size: min(11px, calc((var(--cell-h) - 5px) / 5)); }
-.pitch-col:has(.pitch-mark:nth-child(6)) .pitch-mark { font-size: min(11px, calc((var(--cell-h) - 5px) / 6)); }
-.pitch-col:has(.pitch-mark:nth-child(7)) .pitch-mark { font-size: min(11px, calc((var(--cell-h) - 5px) / 7)); }
 .pitch-mark.strike { color: var(--accent); }
 .pitch-mark.foul { color: #55504a; }
 .pitch-mark.ball { color: var(--navy); }
@@ -728,6 +776,15 @@ details.info-details > summary:hover { color: var(--navy); }
 .pitcher-grid td input:focus { outline: 2px solid var(--navy); outline-offset: -2px; }
 .pitcher-grid td.p-name input { text-align: left; padding-left: 8px; font-family: var(--font); font-weight: 600; }
 .pitcher-grid td.p-stat { width: 44px; }
+/* Wider than the 44px stat columns because it holds two figures and a hyphen: a
+   complete-game "52-83" is 5 characters of 12px mono, and a 44px cell with the
+   input padding these carry cut it. Sized for that rather than for a 3-digit half,
+   which would mean 260 pitches. */
+.pitcher-grid th.pitcher-bs-col { width: 58px; }
+.pitcher-grid td.p-bs {
+  width: 58px; text-align: center; font-family: var(--mono); font-size: 12px;
+  color: var(--text-light); background: var(--cream);
+}
 .pitcher-grid th.pitcher-era-col { width: 52px; }
 .pitcher-grid td.p-era {
   width: 52px; text-align: center; font-family: var(--mono); font-size: 13px;
@@ -1336,7 +1393,7 @@ details.info-details > summary::before { color: var(--rb-red); }
   background: var(--rb-blue); color: var(--rb-white); font-weight: 400;
   border-bottom: 3px solid var(--rb-red); border-color: rgba(255,255,255,0.2); border-bottom-color: var(--rb-red);
 }
-.pitcher-grid td.p-era { background: var(--paper-2); }
+.pitcher-grid td.p-era, .pitcher-grid td.p-bs { background: var(--paper-2); }
 .pitcher-grid td.p-stat.er-review { background: rgba(192,17,31,0.14); }
 .pitcher-grid td.p-stat.er-review::after { border-right-color: var(--rb-red); }
 .notes-box textarea, .spray-mini-svg { border-color: var(--line); }
@@ -1602,12 +1659,23 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
   }
 }
 
-/* Below that the drawer still opens over the card, and its height is still not
-   reserved — so the rows it covers need a way to be reached. The grid takes its own
-   scroll for exactly as long as the drawer is open; `--grid-max-h` is set by `fit()`,
-   which is the only thing that knows where the open drawer's top edge lands, and
-   removed again the moment it closes (F9-A). */
-body.drawer-open .tab-content.active .grid-wrap {
+/* When the card is taller than the space it has, the *grid* scrolls and the page
+   does not. `--grid-max-h` is set by `fit()`, which is the only thing that knows
+   where the box's bottom edge lands, and removed again the moment the card fits —
+   so at rest this rule resolves to `none` and changes nothing.
+
+   Two cases reach it. The drawer opening over the card is the older one (F9-A): its
+   height is not reserved, so the rows it covers need a way to be got at. A shown sub
+   row is the other, and it is why this stopped being gated on `body.drawer-open`.
+   Sub rows have real height now, and at 1194x834 the starters are already on their
+   44px floor with nothing left to give — so ~22px per open sub has to go somewhere,
+   and before this it went into scrolling the whole page. That takes the scoreboard,
+   the inning numbers and the count off the top of the screen: three things the
+   scorer is reading *while* he needs the row he scrolled to. Scrolling the grid
+   under its own sticky head row costs him none of them.
+
+   This is what the phone block already does full-time, for the same reason. */
+.tab-content.active .grid-wrap {
   max-height: var(--grid-max-h, none);
   overflow-y: auto;
 }
@@ -1967,14 +2035,27 @@ body.drawer-open .tab-content.active .grid-wrap {
   .live-matchup .ls-label-2 { grid-area: 2 / 1; margin-top: 0; }
   .live-matchup .ls-name { grid-area: 1 / 2; font-size: 13px; }
   .live-matchup .ls-name-sm { grid-area: 2 / 2; font-size: 12px; }
-  /* Right-hand column, and held at a width that fits "999 pitches" — the column
-     is `auto`, so a count appearing or growing a digit would otherwise take the
-     width out of the name beside it and re-shrink it mid-at-bat. Same reasoning
-     as the 835px block's min-height on this line, in the other axis. */
+  /* Right-hand column, and held at a width the longest form of this line fits —
+     the column is `auto`, so a count appearing, growing a digit, or gaining its
+     balls-strikes split would otherwise take the width out of the name beside it
+     and re-shrink it mid-at-bat. Same reasoning as the 835px block's min-height on
+     this line, in the other axis.
+
+     The word goes, and only here. Spelling it out costs 8 characters — 48px at this
+     size — and the strip does not have them: the split at full length wanted 19ch
+     against the 62px this held for "999 pitches", and overflowed a 375px strip by
+     43px. What is left is "142 (52-90)", 11 characters, under a row whose own label
+     two columns to the left already says Pitcher. The count is what the scorer came
+     for; the word was only ever naming it.
+
+     `ch` rather than px because the line is `--mono`, where a ch *is* the character
+     cell — so 11ch is exactly the longest string this can hold, not an estimate of
+     one. (62px was that same measurement made by hand.) */
   .live-matchup .ls-sub {
     display: block; grid-area: 2 / 3; font-size: 10px;
-    min-width: 62px; text-align: right;
+    min-width: 11ch; text-align: right;
   }
+  .live-matchup .ls-sub .lsp-w { display: none; }
 
   /* --- Control row: 124px (three wrapped rows) -> 38px (one) --- */
   .sec-bar {
@@ -2003,8 +2084,11 @@ body.drawer-open .tab-content.active .grid-wrap {
      --cell-h 48 the nine starters need 432px and the box measured 466 less a
      36px head row: 11px short, so the ninth slot hung over the edge with the
      deck up. Taken off the head row (above) and the deck's own padding rather
-     than off --cell-h, because 48px puts a seven-mark pitch column at 6.1px and
-     47 would put it at 6.0 — below where the iPad card sits. */
+     than off --cell-h, because the pitch marks divide it: 48px gives a resting
+     five-mark column 8.6px, and every pixel off --cell-h comes off them first.
+     (It read "a seven-mark column at 6.1px" while the track wrapped at 7. The
+     track is two columns now and 5 is the resting divisor, so the figure moved;
+     the reason for not spending --cell-h here did not.) */
   .qb-core { padding: 7px 0; }
 
   .deck-handle { min-height: 32px; padding: 5px 0 4px; }

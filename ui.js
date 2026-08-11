@@ -146,8 +146,10 @@ document.addEventListener('keydown', function (e) {
   /* A phone gets a higher floor than the iPad's 44px, because there is nothing
      to be won by going below it: the grid scrolls inside its own box either
      way (see the phone note below), so a shorter row buys no extra slot — it
-     only shrinks the pitch marks, which size off --cell-h and are already down
-     to 6-7px on the iPad. (44px would put a seven-mark column at 5.6px.) */
+     only shrinks the pitch marks, which size off --cell-h. At the resting five
+     per column that is 8.6px here against the iPad's 7.8px, and a long at-bat
+     divides further from there: the track holds two columns however many
+     pitches it is given, so --cell-h is the only thing standing under it. */
   var PHONE_MIN = 48;
   /* Kept verbatim in step with the two phone blocks at the end of styles.css —
      the 740px floor included, which is there because an SE in landscape is 667px
@@ -307,8 +309,28 @@ document.addEventListener('keydown', function (e) {
        Show-sub-rows toggle, all eighteen at once — stop shrinking and let it
        scroll. A 44px row is a bad trade for a scroll it does not prevent. */
     var h = Math.floor((body - subs) / STARTERS);
-    if (h < FIT_MIN) h = Math.floor(body / STARTERS);
+    var gaveUp = h < FIT_MIN;
+    if (gaveUp) h = Math.floor(body / STARTERS);
     root.style.setProperty('--cell-h', Math.max(FIT_MIN, Math.min(FIT_MAX, h)) + 'px');
+
+    /* ...and "let it scroll" has to say *what* scrolls, which it never did.
+
+       Nothing capped the grid outside the drawer case, so what scrolled was the
+       page — and that carries the scoreboard, the inning numbers and the count off
+       the top of the screen, which are the three things being read at the moment a
+       sub row is opened. Cap the grid at the box instead and the same overflow goes
+       under a head row that is already sticky.
+
+       Only when the rows genuinely could not absorb it. While `h` clears FIT_MIN the
+       fit has already paid for the sub rows out of the starters' height, the card
+       fits, and a max-height here would cap a grid that has nothing to scroll.
+
+       Left alone if the drawer above already set one: that measurement is to the
+       drawer's top edge, which is higher than this one, and the drawer is the thing
+       actually covering the rows. */
+    if (gaveUp && !openDrawer) {
+      root.style.setProperty('--grid-max-h', Math.max(160, body + headH) + 'px');
+    }
   }
 
   function refit() { if (!queued) { queued = true; requestAnimationFrame(fit); } }
