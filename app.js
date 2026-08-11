@@ -1617,6 +1617,21 @@ function rpBtnStyle(active, isOut) {
   return base + '#ccc;background:#fff;color:#555';
 }
 
+// The "on E" tick that rides alongside a runner's destinations. Same size and family
+// as the row it sits in so it reads as part of it, in the accent the out buttons wear:
+// an error is the defence's mistake, not a base the scorer is choosing.
+function rpErrStyle(active) {
+  const base = 'padding:3px 8px;font-size:11px;font-weight:600;border-radius:4px;cursor:pointer;font-family:var(--mono);margin-left:6px;border:1.5px solid ';
+  return active
+    ? base + 'var(--accent);background:var(--accent);color:#fff'
+    : base + '#ccc;background:#fff;color:var(--accent)';
+}
+
+function paintRpErr(btn, active) {
+  btn.style.cssText = rpErrStyle(active);
+  btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+}
+
 // Applied through here rather than assigned, so `setOptionBlocked` has something to
 // restore the button to when it stops being blocked.
 function paintRpBtn(btn, active) {
@@ -2086,6 +2101,25 @@ function countRunnersScored(team, prev) {
   return scored;
 }
 
+/* Rule 9.04(a): an RBI is credited only for a run that scores unaided by an error.
+   A runner the scorer ticked "on E" into home took that last base on the throw, so
+   the run is the error's and not the batter's — the batter keeps his hit and his time
+   at bat, and the RBI comes off. Without this the card credited one anyway and the
+   scorer had to take it back with RBI− every time, which is exactly the correction a
+   derived figure should not need.
+
+   `choices` is the Advance Runners popup's answer, keyed by the base each runner
+   started from, so only a tick that actually sent a man home suppresses anything —
+   one on a runner who stopped at third is about an error, not about an RBI. */
+function errorAidedRuns(choices) {
+  if (!choices || !choices.onError) return 0;
+  let n = 0;
+  for (let b = 0; b < 3; b++) {
+    if (choices.onError[b] && choices[b] === 3) n++;
+  }
+  return n;
+}
+
 // Can `play` legally be entered into this half-inning as it stands? Returns the
 // reason it can't, or null. Both cases would otherwise be recorded short: the
 // outs that run past three are refused by `recordOut`, so the inning ends up
@@ -2267,9 +2301,12 @@ function applyPlayEffects(team, pIdx, innIdx, play, prev, done, onCancel) {
       } else if (batterRetired) {
         recordBatterOut(team, innIdx, pIdx, ab);
       }
-      // RBI
+      // RBI. `Math.max` is the #4 backstop's shadow, not defensive noise: a set of
+      // choices that didn't come from the popup can carry a tick into home on a move
+      // `moveRunnerTo` then refuses, and that man is a suppression without a run
+      // behind it.
       if (!isErrorPlay(play)) {
-        ab.rbi = countRunnersScored(team, prev);
+        ab.rbi = Math.max(0, countRunnersScored(team, prev) - errorAidedRuns(choices));
       }
       done();
     }, { batterTakesBase: isHitOrError, batterPIdx: pIdx, batterRetired, onCancel });
@@ -2393,7 +2430,21 @@ function applyChosenAdvancements(team, innIdx, choices, reason, src) {
       // get here, so a refusal means imported or hand-edited state. The runner
       // keeps the base he is on rather than erasing whoever is on `dest`.
       if (!moveRunnerTo(inn, fromBase, dest, rn)) return;
-      for (let step = fromBase + 1; step <= dest; step++) markAdvance(rab, step, rsn, src);
+      // The scorer's "on E" tick, stamped on the *last* base only and only when he
+      // actually advanced — the popup clears a tick contradicted by its own row, and
+      // this is the backstop for a set of choices that didn't come from it.
+      //
+      // One 'E' per bad throw: `countErrorSignals` counts every exact 'E' on the
+      // card, so stamping both legs of a two-base advance would charge the defence
+      // twice for one of them. `applySBWithError` splits a steal the same way — the
+      // base the play gave him, then the base the error did.
+      const onErr = !!(choices.onError && choices.onError[fromBase]) && dest > fromBase;
+      for (let step = fromBase + 1; step <= dest; step++) {
+        markAdvance(rab, step, onErr && step === dest ? 'E' : rsn, src);
+      }
+      // Rule 9.16: he is only standing there because of the error, so his run is
+      // unearned unless the scorer says otherwise in the E/UE review.
+      if (onErr) rab.reachedOnError = true;
       renderDiamond(team, rn.p, rn.col);
     }
   });
@@ -3071,6 +3122,13 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     html += '<div style="font-size:10px;color:var(--accent,#c41e3a);margin:-4px 0 10px;line-height:1.4">' + escapeHtml(NO_RUN_508A) + '</div>';
   }
   const choices = {};
+  // Which runners took their last base on an error, by the base they started from.
+  // Kept beside `choices` rather than inside it until Confirm, so the destination
+  // buttons' own bookkeeping — `userPicked`, the collision refresh, the invalidation
+  // pass — never has to know this exists.
+  const errFlags = {};
+  // A tick only means anything on a row that is actually going somewhere.
+  const rowAdvances = base => choices[base] !== undefined && choices[base] > base;
 
   /* F11c — what may be filled in for the scorer, and what may not.
 
@@ -3106,6 +3164,19 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     for (let d = r.base + 1; d <= 3; d++) {
       html += `<button class="rp-btn rp-out" data-base="${r.base}" data-dest="-${d}" style="${rpBtnStyle(false, true)}">Out ${baseNames[d]}</button>`;
     }
+    // Which base he took is one question; *why* he took it is another, so this is a
+    // tick beside the row rather than a fourth destination — a runner can take one
+    // base on the hit and the next on the throw, and the popup has to be able to say
+    // so. Before it, an error made during somebody else's plate appearance was
+    // unrecordable anywhere on the card: `countErrorSignals` counts an error *play*
+    // on a batter's cell and an advancement reason of exactly 'E', which only the
+    // steal and pickoff paths ever wrote, and the E box is derived and readonly. A
+    // throwing error on a base hit therefore reached neither, so the opposing side's
+    // E read one short and the run it let in defaulted to earned.
+    //
+    // Deliberately not gated on which caller opened the popup. A wild pitch the
+    // catcher then threw away is the same play wearing a different name.
+    html += `<button class="rp-err" data-base="${r.base}" aria-pressed="false" title="He took the last of those bases on an error" style="${rpErrStyle(false)}">on E</button>`;
     html += `</div></div>`;
   });
 
@@ -3240,7 +3311,26 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
       this.parentElement.querySelectorAll('.rp-btn').forEach(b => {
         paintRpBtn(b, parseInt(b.dataset.dest) === dest);
       });
+      // Holding, or being thrown out, is the scorer answering this row in a way the
+      // tick contradicts — so the tick comes off, visibly, rather than being dropped
+      // without a word when Confirm gets to it.
+      if (baseKey !== 'batter' && errFlags[parseInt(baseKey)] && !rowAdvances(parseInt(baseKey))) {
+        errFlags[parseInt(baseKey)] = false;
+        const tick = popup.querySelector(`.rp-err[data-base="${baseKey}"]`);
+        if (tick) paintRpErr(tick, false);
+      }
       refreshRunnerAvailability();   // last: it repaints whatever it blocks
+    };
+  });
+
+  // The tick is free to be set before the destination — a scorer who saw the throw go
+  // wide answers "why" before "how far". A row that ends up not advancing clears it
+  // above, and `applyChosenAdvancements` ignores a flag on one that still doesn't.
+  popup.querySelectorAll('.rp-err').forEach(btn => {
+    btn.onclick = function() {
+      const base = parseInt(this.dataset.base);
+      errFlags[base] = !errFlags[base];
+      paintRpErr(this, errFlags[base]);
     };
   });
 
@@ -3293,6 +3383,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     }
 
     closePopup(popup);
+    choices.onError = errFlags;
     callback(choices);
   };
 }
@@ -4710,7 +4801,8 @@ function editRunners() {
     applyChosenAdvancements(team, innIdx, choices, batterLbl, src);
     // Rule 9.04(b) still applies to what the play was: a double play and a
     // K+WP drive in nobody however the runners moved.
-    const scored = countRunnersScored(team, prev);
+    // A run given by an error is nobody's RBI here either — see `errorAidedRuns`.
+    const scored = Math.max(0, countRunnersScored(team, prev) - errorAidedRuns(choices));
     const suppressed = ab.play === 'DP' || /^DP /.test(ab.play) || ab.play === 'K+WP' ||
       isErrorPlay(ab.play);
     if (scored && !suppressed) ab.rbi = (ab.rbi || 0) + scored;

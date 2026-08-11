@@ -309,13 +309,20 @@
 
   // "Advance Runners" popup. picks: { <fromBase>: dest, batter: dest }, where a
   // negative dest means "out at |dest|" (matches the popup's own data-dest).
-  function runnerPopup(picks) {
+  // `errs` is the bases whose "on E" tick to press, pressed after the destinations —
+  // the order a scorer works in, and the order the tick's own clearing rule assumes.
+  function runnerPopup(picks, errs) {
     const popup = document.getElementById('runner-popup');
     if (!visible('runner-popup')) fail('runner popup is not open');
     Object.keys(picks).forEach(k => {
       const btn = popup.querySelector(`.rp-btn[data-base="${k}"][data-dest="${picks[k]}"]`);
       if (!btn) fail(`runner popup has no option base=${k} dest=${picks[k]}`);
       btn.onclick();
+    });
+    (errs || []).forEach(b => {
+      const tick = popup.querySelector(`.rp-err[data-base="${b}"]`);
+      if (!tick) fail(`runner popup has no "on E" tick for base=${b}`);
+      tick.onclick();
     });
     clickId('rp-confirm');
   }
@@ -2353,6 +2360,122 @@
     play('1B');
     play('E5'); runnerPopup({ 0: -2, batter: 0 });  // lead runner out at 2nd
     eq('one error, not two', eTotal('home'), '1');
+  });
+
+  // The third way an error can happen, and the one the card had no room for: a bad
+  // throw made while somebody else was batting. It leaves no error play on any cell,
+  // and the runner popup stamped the batter's number on every base it moved a man to,
+  // so a single-plus-throwing-error charged nobody and the run it let in was earned.
+  // The "on E" tick is how the scorer says which base was the throw's.
+  test('a runner sent home on an error during a hit charges the error', () => {
+    sel('visiting', 0, 0);
+    play('2B');                                     // leadoff man on 2nd
+    play('1B'); runnerPopup({ 1: 3, batter: 0 }, [1]);
+    eq('the error is charged', eTotal('home'), '1');
+    eq('and to the fielding side only', eTotal('visiting'), '0');
+    eq("the last base is the throw's", ab('visiting', 0, 0).advReason[3], 'E');
+  });
+
+  // One bad throw, two bases — and `countErrorSignals` counts every exact 'E' on the
+  // card, so stamping both legs would charge the defence twice for one of them.
+  test('one bad throw is one error however many bases it gave', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 3, batter: 0 }, [0]);   // scores from 1st on the throw
+    const reasons = ab('visiting', 0, 0).advReason;
+    eq('one E on the card', reasons.filter(r => r === 'E').length, 1);
+    eq('on the base he finished at', reasons[3], 'E');
+    eq('the hit still owns the first leg', reasons[1], getBatterLabel('visiting', 3, 0));
+    eq('charged once', eTotal('home'), '1');
+  });
+
+  // Rule 9.16 — he is only standing there because of the error, so the run is
+  // unearned until the E/UE review says otherwise.
+  test('a base taken on an error makes the run unearned', () => {
+    sel('visiting', 0, 0);
+    play('2B');
+    play('1B'); runnerPopup({ 1: 3, batter: 0 }, [1]);
+    ok('flagged unearned', !!ab('visiting', 0, 0).reachedOnError);
+  });
+
+  test('a clean advance on the same play charges nothing', () => {
+    sel('visiting', 0, 0);
+    play('2B');
+    play('1B'); runnerPopup({ 1: 3, batter: 0 });   // he scored on the hit, no tick
+    eq('nobody is charged', eTotal('home'), '0');
+    ok('and the run is earned', !ab('visiting', 0, 0).reachedOnError);
+  });
+
+  // The tick may be pressed before the destination — a scorer who watched the throw
+  // go wide answers "why" before "how far". A row then answered with a hold has
+  // contradicted it, so it comes off visibly rather than being dropped in silence
+  // when Confirm gets to it.
+  test('answering the row with a hold takes the "on E" tick back off', () => {
+    sel('visiting', 0, 0);
+    play('2B');
+    play('1B');
+    const popup = document.getElementById('runner-popup');
+    popup.querySelector('.rp-err[data-base="1"]').onclick();               // why …
+    popup.querySelector('.rp-btn[data-base="1"][data-dest="1"]').onclick(); // … he held 2nd
+    eq('the tick is not left showing',
+      popup.querySelector('.rp-err[data-base="1"]').getAttribute('aria-pressed'), 'false');
+    clickId('rp-confirm');
+    eq('and nothing is charged', eTotal('home'), '0');
+  });
+
+  // Rule 9.04(a) — an RBI is credited only for a run that scores unaided by an error.
+  // The batter keeps the hit and the time at bat; the run belongs to the throw.
+  test('a run given by the error is not the batter’s RBI', () => {
+    sel('visiting', 0, 0);
+    play('2B');
+    play('1B'); runnerPopup({ 1: 3, batter: 0 }, [1]);
+    eq('the run is on the board', ab('visiting', 0, 0).bases[3], true);
+    eq('but nobody drove it in', ab('visiting', 3, 0).rbi, 0);
+    eq('the hit still counts', ab('visiting', 3, 0).play, '1B');
+  });
+
+  test('the same run scored cleanly is still an RBI', () => {
+    sel('visiting', 0, 0);
+    play('2B');
+    play('1B'); runnerPopup({ 1: 3, batter: 0 });    // no tick — he scored on the hit
+    eq('credited', ab('visiting', 3, 0).rbi, 1);
+  });
+
+  // Two runs on one play, one of them the throw's: the batter is credited for the one
+  // he actually drove in. A blanket suppression would have cost him both.
+  test('only the error’s run comes off, not the whole play', () => {
+    sel('visiting', 0, 0);
+    play('2B');
+    play('1B'); runnerPopup({ 1: 2, batter: 0 });     // lead man to 3rd, batter on 1st
+    play('1B'); runnerPopup({ 2: 3, 0: 3, batter: 0 }, [0]);
+    eq('two runs scored', ab('visiting', 0, 0).bases[3] && ab('visiting', 3, 0).bases[3], true);
+    eq('one of them is his', ab('visiting', 6, 0).rbi, 1);
+    eq('and one error is charged', eTotal('home'), '1');
+  });
+
+  // A tick on a man who stopped short is about an error, not about an RBI — there is
+  // no run of his to suppress, and the batter's other run must survive it.
+  test('a tick short of home leaves the RBI alone', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });     // runners on 1st and 2nd
+    play('1B'); runnerPopup({ 1: 3, 0: 2, batter: 0 }, [0]);
+    eq('the run counts as driven in', ab('visiting', 6, 0).rbi, 1);
+    eq('the error is still charged', eTotal('home'), '1');
+  });
+
+  // The correction path has to agree with the entry path, or the same play scores two
+  // different ways depending on whether it was entered or edited (#22's lesson).
+  test('an error ticked in the runners edit drives in nobody', () => {
+    sel('visiting', 0, 0);
+    play('2B');
+    play('1B'); runnerPopup({ 1: 1, batter: 0 });     // he held 2nd
+    eq('no RBI yet', ab('visiting', 3, 0).rbi, 0);
+    sel('visiting', 3, 0);
+    editRunners(); runnerPopup({ 1: 3, 0: 0 }, [1]);  // he came home on the throw after all
+    eq('still no RBI', ab('visiting', 3, 0).rbi, 0);
+    eq('the run is on the board', ab('visiting', 0, 0).bases[3], true);
+    eq('and the error is charged', eTotal('home'), '1');
   });
 
   test('clearing the error play takes E back off the board', () => {
