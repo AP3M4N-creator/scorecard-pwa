@@ -6093,13 +6093,20 @@
   });
 
   /* F17 — the hotkey guide is the app's only documentation and `?` / `/` was the
-     only way in, so an iPad with no hardware keyboard could not open it. */
-  test('the hotkey guide can be opened without a keyboard', () => {
+     only way in, so an iPad with no hardware keyboard could not open it.
+
+     "Guide", not "Shortcuts", since I6: the modal was titled and filed for a
+     keyboard on an app whose primary device has none, which buried its best
+     section — a plain-English glossary — under the one thing a beginner does
+     not have (B1). The name is the half of that a menu can fix. */
+  test('the guide can be opened without a keyboard', () => {
     const modal = document.getElementById('hotkey-modal');
     modal.classList.remove('active');
     const entry = document.querySelector('.hdr-menu-panel [data-act="showHotkeyModal"]');
     ok('the More menu offers it', !!entry);
-    eq('under a name a scorer would look for', entry.textContent.trim(), 'Shortcuts');
+    eq('under a name a scorer would look for', entry.textContent.trim(), 'Guide');
+    eq('and it is not named for a keyboard',
+      document.getElementById('hotkey-modal-title').textContent.trim(), 'Scoring Guide');
     entry.click();
     ok('and tapping it opens the guide', modal.classList.contains('active'));
     // Opening it from a menu means it must not be a toggle: a second tap on the
@@ -6695,8 +6702,12 @@
     return Array.from(rawAll(`input[data-field="name"][data-team="${team}"]`))
       .filter(i => i.value.trim()).map(i => i.value);
   }
+  // Scoped to the grids, which is what "play cells" has always meant here.
+  // Since I6 the card legend is real `.at-bat-cell` markup wearing the card's
+  // own classes — that is what stops it drifting from the thing it describes —
+  // so an unscoped `.play-text` sweep now finds its six tint swatches too.
   function filledPlayCells() {
-    return Array.from(rawAll('.play-text')).filter(c => c.textContent.trim()).length;
+    return Array.from(rawAll('.scoring-grid .play-text')).filter(c => c.textContent.trim()).length;
   }
 
   test('an import with an empty roster clears the last game off the card (F23)', () => {
@@ -7563,6 +7574,103 @@
     ok('the caveat is up in Expert', /Game is final/.test(toastText()));
     eq('and it is a notice, not a refusal',
       document.getElementById('play-reject').dataset.tone, 'notice');
+  });
+
+  /* ---- I6 / I15: the guide, and what it now explains ----------------------
+
+     B3: the card carries nine visual signals and explained none of them. The
+     legend is real card markup — the same `.at-bat-cell`, the same tint
+     classes, the same `diamondSVG` — because a legend drawn by hand is a
+     second copy of the card's appearance and the two drift the moment a tint
+     is retuned. So what these check is not that it *looks* right, which jsdom
+     could not see anyway, but that it is built out of the card and cannot come
+     apart from it. */
+
+  test('the legend is built from the card, not from a copy of it', () => {
+    buildCardLegend();
+    const host = document.getElementById('card-legend');
+    ok('it built something', host.children.length > 0);
+
+    // Every tint the card can paint has a swatch, and the swatch wears the
+    // class rather than a look-alike colour. A sixth tint added to the card
+    // with no legend entry is the drift this catches.
+    LEGEND_TINTS.forEach(([cls]) => {
+      ok(`${cls} has a swatch wearing its own class`,
+        !!host.querySelector('.at-bat-cell.' + cls));
+    });
+    const cardTints = ['play-hit', 'play-hr', 'play-k', 'play-bb', 'play-dp', 'play-go'];
+    eq('and the legend names exactly the card\'s tints',
+      LEGEND_TINTS.map(t => t[0]).sort().join(','), cardTints.sort().join(','));
+
+    // The diamond states, drawn by the card's own SVG rather than described.
+    ok('a basepath reached', !!host.querySelector('.diamond-svg .seg.reached'));
+    ok('a run scored', !!host.querySelector('.diamond-svg.scored'));
+    ok('an out on the bases', !!host.querySelector('.diamond-svg .out-on-path'));
+    ok('an advancement label with something in it',
+      [...host.querySelectorAll('.adv-label')].some(t => t.textContent.trim()));
+    ok('the unearned glyph', !!host.querySelector('.ue-mark:not([display])'));
+    ok('RBI dots', !!host.querySelector('.rbi-dot-mark'));
+    ok('the pitcher-change rule', !!host.querySelector('.pitcher-change-mark.active'));
+    ok('the substitution rule', !!host.querySelector('.sub-change-mark.active'));
+
+    // Every swatch says what it means. A legend of unlabelled pictures is the
+    // problem it was built to solve.
+    const items = [...host.querySelectorAll('.lg-item')];
+    ok('there are swatches to caption', items.length >= 12);
+    ok('and each one is captioned',
+      items.every(f => (f.querySelector('figcaption') || {}).textContent));
+  });
+
+  /* The legend wears `.at-bat-cell`, so it has to be unmistakable for a real
+     one. Every query the app makes for a cell is either a `closest()` from a
+     click — and nothing in the legend takes clicks — or is qualified by
+     `data-team` / `data-inn`. This pins the half that is a property of the
+     markup: no legend cell carries those attributes, so no qualified query can
+     ever return one. */
+  test('a legend cell cannot be mistaken for a cell on the card', () => {
+    buildCardLegend();
+    const host = document.getElementById('card-legend');
+    const cells = [...host.querySelectorAll('.at-bat-cell')];
+    ok('there are legend cells to check', cells.length > 0);
+    eq('none carries a team', cells.filter(c => c.dataset.team !== undefined).length, 0);
+    eq('none carries an inning', cells.filter(c => c.dataset.inn !== undefined).length, 0);
+    eq('none carries a batting spot', cells.filter(c => c.dataset.p !== undefined).length, 0);
+    eq('and none is inside a scoring grid',
+      cells.filter(c => c.closest('.scoring-grid')).length, 0);
+
+    // `diamondSVG` builds its ids from the team, so the legend's namespace has
+    // to be one no real team can produce.
+    eq('nor does any generated id collide with a card cell\'s',
+      [...host.querySelectorAll('[id]')]
+        .filter(e => /-(visiting|home)-/.test(e.id)).length, 0);
+  });
+
+  test('the guide fills the legend whichever way it is opened', () => {
+    const modal = document.getElementById('hotkey-modal');
+    const host = document.getElementById('card-legend');
+
+    modal.classList.remove('active');
+    host.innerHTML = '';
+    document.querySelector('.hdr-menu-panel [data-act="showHotkeyModal"]').click();
+    ok('the menu path fills it', host.children.length > 0);
+
+    // `?` reaches the same modal by a different function, and it opened empty
+    // while the legend was built only in `showHotkeyModal`.
+    modal.classList.remove('active');
+    host.innerHTML = '';
+    toggleHotkeyModal();
+    ok('and so does the keyboard path', host.children.length > 0);
+    toggleHotkeyModal();
+  });
+
+  // I15/B12 — pitch tracking read as mandatory. The deck half is a Beginner-only
+  // CSS rule that jsdom cannot see; what it can see is the half that is for
+  // everyone, in the guide.
+  test('the guide says pitch tracking is optional', () => {
+    const note = document.querySelector('.hk-note');
+    ok('the section carries a note', !!note);
+    ok('and it says the word', /optional/i.test(note.textContent));
+    ok('naming what you still get without it', /card is complete/i.test(note.textContent));
   });
 
   /* ---- I4: the play, in a sentence ---------------------------------------

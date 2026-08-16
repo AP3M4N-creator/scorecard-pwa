@@ -465,6 +465,26 @@ details.info-details > summary:hover { color: var(--navy); }
   font-family: var(--heading); font-size: 11px; font-weight: 600;
   letter-spacing: .1em; text-transform: uppercase; color: var(--text-light); margin-right: 2px;
 }
+
+/* I15/B12 — pitch tracking read as mandatory. "Pitch: S F B" leads the deck
+   and said nothing about being a choice, and the count it feeds lives up in
+   the linescore strip, far from the buttons producing it.
+
+   Beginner mode only, and free at every size, which is why it is a second line
+   on the label rather than a longer label. Measured at 844x390, the tightest
+   deck there is: the word sets at 8px and is narrower than "Pitch" at 11px, so
+   the label stays 43px and deck line one stays 746px in an 804px box — the
+   same numbers as without it. Height is free too: the row is 53px because the
+   buttons beside it are 40px, and a 21px label still clears it.
+
+   An expert is not told; he already scores without pitches when he wants to. */
+[data-mode="beginner"] .qb-label {
+  display: inline-flex; flex-direction: column; align-items: center; line-height: 1.1;
+}
+[data-mode="beginner"] .qb-label::after {
+  content: 'optional';
+  font-size: 8px; letter-spacing: .04em; font-weight: 600; opacity: .8;
+}
 .qb-more-btn {
   margin-left: auto; padding: 8px 14px; min-height: 40px; cursor: pointer;
   font-family: var(--heading); font-size: 13px; font-weight: 600; letter-spacing: .04em;
@@ -1317,6 +1337,55 @@ details.info-details > summary:hover { color: var(--navy); }
   text-align: center; color: var(--navy); background: var(--cream); border-radius: 2px;
 }
 .hk-table td:nth-child(3) { color: var(--text-light); font-size: 12px; }
+
+/* A sentence the tables cannot hold — a fact about the section rather than a
+   row in it. Used by I15 to say pitch tracking is optional. */
+.hk-note {
+  font-size: 13px; line-height: 1.5; color: var(--text-light);
+  margin: -2px 0 10px; max-width: 62ch;
+}
+
+/* ---------- The card legend (I6) ----------
+   Swatches are real `.at-bat-cell` markup wearing the card's own tint and mark
+   classes, so nothing here paints them — this only lays them out and undoes
+   the two things a cell inherits from being a table cell in a fitted grid:
+   its --cell-w/--cell-h sizing, and the `cursor: pointer` that would offer a
+   tap the legend does not take. */
+#card-legend { margin-bottom: 14px; }
+.lg-group { margin-bottom: 12px; }
+.lg-group h4 {
+  font-family: var(--heading); font-size: 11px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--text-light);
+  margin: 0 0 6px;
+}
+/* 215px, not 150: the swatch is a fixed 66px plus its 9px gutter, so a 150px
+   column left ~75px for the caption and broke every one of them over four
+   lines. This gives the words ~130px and lands three columns in the modal's
+   700px of content. */
+.lg-row {
+  display: grid; gap: 10px 14px;
+  grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+}
+.lg-item { margin: 0; display: flex; align-items: center; gap: 9px; }
+.lg-item figcaption { font-size: 12px; line-height: 1.35; color: var(--text); }
+.lg-swatch { flex: 0 0 auto; }
+/* Fixed at the cell's resting size rather than the fitted one: --cell-h is
+   written by `fit()` against the live card, and a legend that resized itself
+   when the deck folded would be describing a shape the reader is not looking
+   at. 66x56 is the ladder's own resting cell, less the padding a real one
+   spends on its play text. */
+.at-bat-cell.lg-cell {
+  width: 66px; height: 56px; cursor: default;
+  border: 1px solid var(--border-light); border-radius: 2px;
+}
+.at-bat-cell.lg-cell .diamond-svg { width: 44px; height: 44px; }
+.at-bat-cell.lg-cell .play-text.play-out { font-size: 13px; }
+.at-bat-cell.lg-cell .play-text.play-on { font-size: 12px; }
+/* The RBI dots ride at the bottom-left of a real cell; in a swatch there is no
+   play text to sit beside, so they are placed rather than inline. */
+.at-bat-cell.lg-cell .rbi-dot-mark { position: absolute; bottom: 3px; }
+.at-bat-cell.lg-cell .rbi-dot-mark:nth-of-type(1) { left: 4px; }
+.at-bat-cell.lg-cell .rbi-dot-mark:nth-of-type(2) { left: 11px; }
 .hotkey-close {
   /* Reachable from the More menu now (F17), so it is closed by finger as often
      as by Escape — the glyph alone was a ~17x26 target. */

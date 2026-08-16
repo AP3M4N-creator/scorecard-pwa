@@ -8870,16 +8870,136 @@ function applyFieldPosFromEl(el) {
   applyFieldPos(el.dataset.team, Number(el.dataset.p), el.dataset.pos, el.dataset.inn);
 }
 
-/* The hotkey guide — 46 rows over 8 sections, including the buttons that have no
-   hotkey at all — is the only documentation the app has, and `?` / `/` was the
-   only way to open it. On an iPad with no hardware keyboard there was no way in.
-   The More menu has it now; the keyboard path still toggles, which is what `?`
-   has always done (F17). */
+/* ------------------------------------------- what's on the card (I6) ---
+
+   The card carries nine visual signals and explained none of them (B3): the
+   filled diamond, the thickened basepath, the slash across it, the UE glyph,
+   the four corner labels, the RBI dots, the two red borders and the five play
+   tints. The tints are the loudest thing on it and the least documented — a
+   beginner sees a green cell and a purple one and has nowhere to learn the
+   difference.
+
+   Built from the card's own classes and its own `diamondSVG`, not from
+   look-alike markup. That is the whole design of it: a legend drawn by hand
+   is a second copy of the card's appearance, and the two drift the first time
+   a tint is retuned — which they would have done twice already, once when the
+   play tints were set against the pitch marks and once when `--play-*` moved
+   into tokens. These swatches are painted by the same rules as the cells they
+   describe, so they cannot say the wrong thing.
+
+   Ids are namespaced under a `legend` team so `diamondSVG`'s generated ids
+   (`d-<team>-<p>-<inn>`) cannot collide with a real cell's. */
+const LEGEND_TINTS = [
+  ['play-hit', '1B', 'A hit — single, double, triple'],
+  ['play-hr',  'HR', 'Home run'],
+  ['play-k',   'K',  'Strikeout'],
+  ['play-bb',  'BB', 'Walk, hit by pitch, catcher’s interference'],
+  ['play-dp',  'DP', 'Double or triple play'],
+  ['play-go',  'GO', 'Any other out — no colour of its own']
+];
+
+// One labelled swatch. `body` is real card markup; `cap` is what it means.
+function legendItem(body, cap, cls) {
+  return '<figure class="lg-item' + (cls ? ' ' + cls : '') + '">'
+    + '<div class="lg-swatch">' + body + '</div>'
+    + '<figcaption>' + cap + '</figcaption></figure>';
+}
+
+// A cell-sized swatch wearing whatever classes the card would give it.
+function legendCell(inner, cls) {
+  return '<div class="at-bat-cell lg-cell' + (cls ? ' ' + cls : '') + '">' + inner + '</div>';
+}
+
+/* One diamond, with the segments the caller asks for. `reached` is how many
+   bases he took (1-4), `outAt` the segment he was thrown out on, `advLabel`
+   the corner mark and which corner it belongs in. Same SVG the card draws. */
+function legendDiamond(id, opts) {
+  const o = opts || {};
+  const wrap = document.createElement('div');
+  wrap.innerHTML = diamondSVG('legend', id, 0);
+  const svg = wrap.firstElementChild;
+  for (let s = 0; s < (o.reached || 0); s++) {
+    const seg = svg.querySelector('.seg[data-seg="' + s + '"]');
+    if (seg) seg.classList.add('reached');
+  }
+  if (o.scored) svg.classList.add('scored');
+  if (o.outAt !== undefined) {
+    const g = svg.querySelector('#oob-d-legend-' + id + '-0-' + o.outAt);
+    if (g) g.removeAttribute('display');
+  }
+  if (o.adv) {
+    const t = svg.querySelector('#adv-d-legend-' + id + '-0-' + (o.advSeg || 0));
+    if (t) t.textContent = o.adv;
+  }
+  if (o.ue) {
+    const ue = svg.querySelector('#ue-d-legend-' + id + '-0');
+    if (ue) ue.removeAttribute('display');
+  }
+  return '<div class="diamond-wrap">' + svg.outerHTML + '</div>';
+}
+
+function buildCardLegend() {
+  const host = document.getElementById('card-legend');
+  if (!host) return;
+  let h = '';
+
+  h += '<div class="lg-group"><h4>The diamond in each cell</h4><div class="lg-row">';
+  h += legendItem(legendCell(legendDiamond(1, { reached: 1 })),
+    'Reached 1st — the basepath he ran is thickened');
+  h += legendItem(legendCell(legendDiamond(2, { reached: 4, scored: true }) +
+      '<span class="play-text play-on">2B</span>', 'play-hit'),
+    'Scored — all four paths run and the diamond filled in');
+  h += legendItem(legendCell(legendDiamond(3, { reached: 1, outAt: 1 }) +
+      '<span class="out-num">2</span>'),
+    'Out on the bases — a slash across the path he was thrown out on');
+  h += legendItem(legendCell(legendDiamond(4, { reached: 2, adv: 'SB', advSeg: 1 })),
+    'How he moved, in the corner: SB, CS, E, WP, PB or BK');
+  h += legendItem(legendCell(legendDiamond(5, { reached: 4, scored: true, ue: true })),
+    'UE — he scored, but the run is unearned');
+  h += '</div></div>';
+
+  h += '<div class="lg-group"><h4>What the cell colour means</h4><div class="lg-row">';
+  LEGEND_TINTS.forEach(([cls, code, what]) => {
+    h += legendItem(legendCell('<span class="play-text play-out">' + code + '</span>', cls), what);
+  });
+  h += '</div></div>';
+
+  h += '<div class="lg-group"><h4>Marks around the cell</h4><div class="lg-row">';
+  h += legendItem(legendCell(legendDiamond(6, { reached: 1 }) +
+      '<span class="rbi-dot-mark"></span><span class="rbi-dot-mark"></span>', 'play-hit'),
+    'Red dots — runs batted in, one dot each');
+  h += legendItem(legendCell('<div class="pitcher-change-mark active" data-pnum="2"></div>' +
+      legendDiamond(7, {})),
+    'Red line across the top — a new pitcher started here');
+  h += legendItem(legendCell('<div class="sub-change-mark active"></div>' + legendDiamond(8, {})),
+    'Red line down the left — a substitute took this spot');
+  h += '</div></div>';
+
+  host.innerHTML = h;
+}
+
+/* The guide — the legend above, then 46 hotkey rows over 8 sections, including
+   the buttons that have no hotkey at all — is the only documentation the app
+   has, and `?` / `/` was the only way to open it. On an iPad with no hardware
+   keyboard there was no way in. The More menu has it now; the keyboard path
+   still toggles, which is what `?` has always done (F17).
+
+   It was also *titled* for a keyboard — "Keyboard Shortcuts" — on an app whose
+   primary device has none, which filed its best section, a plain-English
+   glossary, under the one thing a beginner does not have (B1). It is the
+   Scoring Guide now, and the legend is its first section rather than its
+   ninth. The legend is built on open rather than at boot: it is a modal most
+   sessions never show, and `diamondSVG` x8 is not work to do on the way up. */
 function showHotkeyModal() {
+  buildCardLegend();
   document.getElementById('hotkey-modal').classList.add('active');
 }
 function toggleHotkeyModal() {
-  document.getElementById('hotkey-modal').classList.toggle('active');
+  const el = document.getElementById('hotkey-modal');
+  // Built before it is shown, and only then — the `?` path reaches the same
+  // modal as the menu one, so both have to fill the legend or one opens empty.
+  if (!el.classList.contains('active')) buildCardLegend();
+  el.classList.toggle('active');
 }
 function closeHotkeyModal() {
   document.getElementById('hotkey-modal').classList.remove('active');

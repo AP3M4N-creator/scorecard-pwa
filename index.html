@@ -83,7 +83,7 @@
         <div class="hdr-menu-panel">
           <button data-act="showGameSummary">Summary</button>
           <button data-act="openGameLibrary">Games</button>
-          <button data-act="showHotkeyModal">Shortcuts</button>
+          <button data-act="showHotkeyModal">Guide</button>
           <!-- A device preference, not a card rule, which is why it is here
                and not in Details beside regulation innings and re-entry (I1).
 
@@ -428,8 +428,19 @@
 <div class="hotkey-modal" id="hotkey-modal" data-act="closeModalOnBackdrop" role="dialog" aria-modal="true" aria-labelledby="hotkey-modal-title">
   <div class="hotkey-modal-inner" style="position:relative">
     <button class="hotkey-close" data-act="closeHotkeyModal">&times;</button>
-    <h2 id="hotkey-modal-title">Keyboard Shortcuts</h2>
+    <h2 id="hotkey-modal-title">Scoring Guide</h2>
+    <!-- I6. Filled by `buildCardLegend` from the card's own classes, so a
+         retuned tint changes the legend with it. First section, not last:
+         these are the marks a beginner is looking at while wondering what
+         they mean, and the hotkey tables below are for someone who already
+         knows. -->
+    <h3>What’s on the card?</h3>
+    <div id="card-legend"></div>
     <h3>Pitch Tracking</h3>
+    <!-- I15/B12. The deck leads with "Pitch: S F B" and said nothing about
+         being optional, so it read as a step you had to do. -->
+    <p class="hk-note">Pitch tracking is optional. Score the plays alone and
+      the card is complete — the count and the pitch totals simply stay empty.</p>
     <table class="hk-table">
       <tr><td>S</td><td>Strike (swinging/called)</td><td>Red ✕ marker</td></tr>
       <tr><td>F</td><td>Foul ball</td><td>Navy ✕ marker</td></tr>
