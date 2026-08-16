@@ -2259,6 +2259,10 @@ function dismissPopupById(id) {
 // is — and all it writes is `hitLoc`. Undo dismisses it instead: the play it was
 // asking about is the one being taken back.
 const PENDING_ENTRY_POPUPS = [
+  // The guided builder holds up to five answers and has written nothing yet, so
+  // a stray tap on the backdrop must not throw them away (I2). It is `pos-popup`'s
+  // kind of pending, not `runner-popup`'s: nothing is on the card behind it.
+  'guide-popup',
   'runner-popup', 'outcome-popup', 'base-picker', 'pos-popup', 'k-popup',
   'edit-play-popup', 'move-runner-popup', 'er-review-popup', 'recompute-popup',
   // Both defer their write until a choice is made, and both write a whole
@@ -3504,7 +3508,7 @@ const CONTROL_RULES = [
 // entry control wears the same reason (INNING_OVER).
 const ENTRY_ACTS = ['applyPlay', 'promptGroundout', 'promptPositionPlay', 'promptErrorPlay',
                     'applyRunnerEvent', 'promptSBBase', 'promptCSBase', 'promptPickoff',
-                    'moveRunner', 'addPitch'];
+                    'moveRunner', 'addPitch', 'promptGuidedPlay'];
 
 /* Why this control cannot do anything right now, or '' if it can. Asked of the
    same state the press itself would ask — `inn.bases`, `inn.outs` — so a dimmed
@@ -6613,6 +6617,31 @@ function posPadTypeIt() {
   const v = input.value; input.value = ''; input.value = v;
 }
 
+/* The map as markup, given the id its container should carry.
+
+   Two surfaces mount it now — the position popup and the guided builder's
+   "who got it?" step (I2) — and the reason this is a function rather than a
+   second copy is the same reason `FIELD_MAP` is one table: nine keys solved to
+   the pixel against 36 pairwise separations do not survive being maintained
+   twice. The suite reads `FIELD_MAP` and then reads whatever this built, so a
+   nudge to either one has to move both or fail. */
+function fieldMapMarkup(id) {
+  let keys = '<div id="' + id + '" class="pos-map" style="display:block'
+    + ';--pm-w:' + FIELD_MAP.w + 'px;--pm-h:' + FIELD_MAP.h + 'px'
+    + ';--pk-w:' + FIELD_MAP.kw + 'px;--pk-h:' + FIELD_MAP.kh + 'px">'
+    + fieldMapSVG();
+  for (let i = 1; i <= POSITIONS; i++) {
+    const [x, y] = FIELD_MAP.at[i];
+    keys += '<button class="pos-key" data-d="' + i + '" type="button"'
+      + ' aria-label="' + i + ', ' + FIELDING_NAME[i - 1] + '"'
+      + ' style="left:' + fieldPct(x, FIELD_MAP.w) + '%;top:' + fieldPct(y, FIELD_MAP.h) + '%">'
+      + '<span class="pk-n">' + i + '</span>'
+      + '<span class="pk-p">' + FIELDING_POS[i - 1] + '</span>'
+      + '</button>';
+  }
+  return keys + '</div>';
+}
+
 function showPositionPopup(prefix, placeholder, target) {
   // Capture the cell now — entering the fielders takes long enough for the scorer
   // to tap somewhere else first (#1).
@@ -6632,20 +6661,7 @@ function showPositionPopup(prefix, placeholder, target) {
     // because the suite asks whether the keypad is on screen the only way it
     // can under jsdom — by reading `style.display` — and a class alone leaves
     // that empty. Everything else about the map is in styles.css.
-    let keys = '<div id="pos-keypad" class="pos-map" style="display:block'
-      + ';--pm-w:' + FIELD_MAP.w + 'px;--pm-h:' + FIELD_MAP.h + 'px'
-      + ';--pk-w:' + FIELD_MAP.kw + 'px;--pk-h:' + FIELD_MAP.kh + 'px">'
-      + fieldMapSVG();
-    for (let i = 1; i <= POSITIONS; i++) {
-      const [x, y] = FIELD_MAP.at[i];
-      keys += '<button class="pos-key" data-d="' + i + '" type="button"'
-        + ' aria-label="' + i + ', ' + FIELDING_NAME[i - 1] + '"'
-        + ' style="left:' + fieldPct(x, FIELD_MAP.w) + '%;top:' + fieldPct(y, FIELD_MAP.h) + '%">'
-        + '<span class="pk-n">' + i + '</span>'
-        + '<span class="pk-p">' + FIELDING_POS[i - 1] + '</span>'
-        + '</button>';
-    }
-    keys += '</div>';
+    const keys = fieldMapMarkup('pos-keypad');
     popup.innerHTML = '<div id="pos-label" class="jsp-title jsp-title--centred"></div>'
       + '<input id="pos-input" class="jsp-readout" type="text" inputmode="numeric"'
       + ' maxlength="' + POS_MAX + '" readonly autocomplete="off">'
@@ -6737,6 +6753,363 @@ function promptGroundout() {
 /* Error detail popup (Feature 14) */
 function promptErrorPlay() {
   showPositionPopup('E', '6');
+}
+
+/* ==================================================== I2 — the guided builder ===
+
+   "Walk me through it." A beginner watching a ground ball to short knows every
+   fact the scorebook wants — it bounced, the shortstop got it, he threw, the
+   runner was out — and knows none of the notation that records them. So this
+   asks for the facts in the order they happen on the field and assembles `6-3`
+   in front of them while they answer. The strip is the teaching: the code is
+   never presented, it is watched being built out of things they already said.
+
+   **It is a front end and nothing else.** Every branch below ends at
+   `applyPlay`, with a code the engine already understood before this existed —
+   no new scoring logic, no new state shape, and the runner walkthrough that the
+   audit calls question four is `applyPlayEffects` opening the popup it always
+   opens. That is what keeps a feature this size off the scoring tests.
+
+   **Full-screen, because Part C leaves no alternative.** At 1194x834 the deck
+   has ~5px of margin and at phone landscape the deck's first line has 14.6px,
+   so a twelfth centred popup carrying a map, a strip and five answers was never
+   going to fit beside anything. Full-screen costs nothing against either budget.
+
+   Adam's four rulings, asked with measured numbers per the standing rule:
+
+   - **Hits are covered too.** The audit's four questions had no path to a
+     single: question two asked "who got it?" with no "nobody did", and all
+     three of question three's outcomes were fielder-got-it outcomes. So the map
+     gains "Nobody got it", question three gains "he beat the throw", and a
+     "how far?" question routes to 1B/2B/3B/HR. The point of the ruling: deciding
+     hit-vs-out on a grounder to short is the judgment a beginner *cannot* make,
+     so it must be something the walkthrough helps with rather than a
+     precondition for entering it.
+   - **The entry point replaces, it does not add.** Nothing fits by addition —
+     14.6px of slack against an 89.7px cheapest key. In Beginner mode the four
+     out keys (219.5px with their gaps) hide and this one takes their place, the
+     `qb-fix-that` precedent exactly. Measured after: Beginner's first line goes
+     789.4px → 667.9px in an 804px box, so the swap hands back 121.5px rather
+     than spending any. The four it replaces are precisely the plays it walks
+     you through, and the g/x/p/l hotkeys still reach them because the keydown
+     handler calls the prompts rather than the buttons — a test pins that.
+   - **"Never put in play" finishes inside the sheet** — struck out swinging or
+     looking, walked, hit by a pitch. A walkthrough that hands you back to the
+     deck partway through has failed at the one moment you asked it for help.
+   - **The three air balls are three answers**, not one. F8, L7 and P2 are three
+     codes, and high-and-lazy vs hard-and-flat vs straight-up is a distinction a
+     beginner can actually see. Five answers on the first screen is the price;
+     writing P2 as F8 in a feature whose whole purpose is teaching notation is
+     not a price worth taking. */
+
+const GUIDE_HIT = [
+  { key: 'ground', pre: '',  label: 'On the ground',     note: 'A grounder or a bunt',          said: 'Ground ball' },
+  { key: 'fly',    pre: 'F', label: 'A fly ball',        note: 'It went up, and it came down',  said: 'Fly ball' },
+  { key: 'line',   pre: 'L', label: 'A line drive',      note: 'Hard and flat',                 said: 'Line drive' },
+  { key: 'pop',    pre: 'P', label: 'A pop-up',          note: 'Straight up, near the plate',   said: 'Pop-up' },
+  { key: 'none',   pre: null, label: 'Never put in play', note: 'Strikeout, walk, hit by a pitch', said: '' }
+];
+
+// Ball never in play. The four codes reachable without a fielder touching
+// anything — which is why this branch skips the map instead of dead-ending.
+const GUIDE_PLATE = [
+  { code: 'K',   label: 'Struck out swinging' },
+  { code: 'ꓘ',   label: 'Struck out looking',  note: 'Took strike three' },
+  { code: 'BB',  label: 'Walked' },
+  { code: 'HBP', label: 'Hit by the pitch' }
+];
+
+const GUIDE_BATTER = [
+  { key: 'out',   label: 'Out',                            note: 'They got him' },
+  { key: 'hit',   label: 'Safe — he beat the throw',       note: 'An infield hit' },
+  { key: 'error', label: 'Safe on an error',               note: 'Booted, dropped, or thrown away' },
+  { key: 'fc',    label: 'Safe — they went after a runner', note: "A fielder's choice" }
+];
+
+const GUIDE_FAR = [
+  { code: '1B', label: 'First — a single' },
+  { code: '2B', label: 'Second — a double' },
+  { code: '3B', label: 'Third — a triple' },
+  { code: 'HR', label: 'All the way — a home run' }
+];
+
+/* Where a batted ball went, as the sentence says it. `FIELDING_NAME` is the
+   position's own name — "first base", "left field" — which is what a screen
+   reader wants read off a key but not what English does after "to": a ball goes
+   to *first base* and to *left field*, never to "the left field". */
+const FIELDING_TO = ['the pitcher', 'the catcher', 'first base', 'second base',
+                     'third base', 'shortstop', 'left field', 'center field', 'right field'];
+
+const GUIDE_TITLE = {
+  hit:    'Was the ball hit?',
+  plate:  'What happened at the plate?',
+  who:    'Who got it?',
+  batter: 'What happened to the batter?',
+  erred:  'Who made the error?',
+  far:    'How far did he get?'
+};
+
+// The one live answer sheet. Null when the builder is closed, which is also
+// what every handler below checks before touching the DOM.
+let guideState = null;
+
+function guideHit(key) { return GUIDE_HIT.find(h => h.key === key) || null; }
+
+/* The code as it stands, complete or not — this is what the strip prints, so a
+   half-answered play has to come back as the half of it that is known. Pure, and
+   deliberately so: every branch of the sheet is a row in the suite's table. */
+function guideCode(g) {
+  if (!g || !g.hit) return '';
+  if (g.hit === 'none') return g.plate || '';
+  if (g.nobody) return g.far || '';
+  const pre = guideHit(g.hit).pre;
+  if (!g.chain) return '';
+  /* Charged to one fielder, who is asked for by name when the chain holds more
+     than one — the error is the whole reason the batter is standing on a base,
+     so guessing which man made it would be inventing the fact that matters most.
+
+     Until that answer lands the strip keeps showing the bare chain. It read `—`
+     before, which meant the strip went *backwards* — `6-4` built up under four
+     taps and then blanked at the exact moment the scorer was asked a follow-up
+     about it. Nothing this strip has already shown may disappear while the same
+     play is still being answered. No prefix here: the code is about to become
+     `E4`, and `F6-4` on the way to it would be a shape that never exists. */
+  if (g.outcome === 'error') return g.errBy ? 'E' + g.errBy : g.chain;
+  if (g.outcome === 'hit') return '1B';
+  if (g.outcome === 'fc') return 'FC ' + g.chain;
+  // 'out', and also the map step itself: `6` becoming `6-3` under the scorer's
+  // taps is the thing this feature exists to show.
+  return pre + g.chain;
+}
+
+// Enough answers to write the play. Separate from `guideCode` because the strip
+// wants the partial code and `applyPlay` must never be handed one.
+function guideComplete(g) {
+  if (!g || !g.hit) return false;
+  if (g.hit === 'none') return !!g.plate;
+  if (g.nobody) return !!g.far;
+  if (!g.chain) return false;
+  if (g.outcome === 'error') return !!g.errBy;
+  return g.outcome === 'out' || g.outcome === 'hit' || g.outcome === 'fc';
+}
+
+/* The strip's sentence. Once the play is complete this is `playSentence` — I4's
+   renderer, the same one the echo line and the screen-reader region read — so
+   the words the builder promises are the words the card gives back. Only the
+   half-answered states are written here, because there is no finished play for
+   the shared renderer to describe yet. */
+function guideSentence(g) {
+  if (guideComplete(g)) return playSentence(guideCode(g));
+  if (!g || !g.hit) return '';
+  if (g.hit === 'none') return 'The ball was never put in play.';
+  const h = guideHit(g.hit);
+  if (g.nobody) return h.said + ', and nobody got to it.';
+  if (!g.chain) return h.said + '.';
+  const first = parseInt(g.chain, 10);
+  return h.said + ' to ' + FIELDING_TO[first - 1] + '.';
+}
+
+// The fielders tapped so far, as the "who made the error?" question needs them.
+function guideChainDigits(g) {
+  return String((g && g.chain) || '').split('-').filter(Boolean);
+}
+
+/* Where "← Back" goes, and what it takes back with it. Unsetting the answer the
+   step being returned to had made is the whole point: a scorer who backs out of
+   "who got it?" wants the map empty, not the four taps that sent them looking
+   for the Back button in the first place. */
+const GUIDE_PREV = {
+  plate:  { step: 'hit',    clear: ['plate'] },
+  who:    { step: 'hit',    clear: ['chain', 'nobody'] },
+  batter: { step: 'who',    clear: ['outcome'] },
+  erred:  { step: 'batter', clear: ['errBy', 'outcome'] },
+  far:    { step: 'who',    clear: ['far', 'nobody'] }
+};
+
+function guideBack() {
+  const g = guideState;
+  const prev = g && GUIDE_PREV[g.step];
+  if (!prev) return;
+  prev.clear.forEach(k => { delete g[k]; });
+  if (prev.clear.includes('chain')) g.chain = '';
+  g.step = prev.step;
+  renderGuide();
+}
+
+// The map builds a chain the way the position pad does — `6` then `6-3` — because
+// it is the same notation and a scorer who learns it here can use the fast pad
+// later without relearning where the dashes come from.
+function guideTapFielder(d) {
+  const g = guideState;
+  if (!g) return;
+  if (g.chain.length >= POS_MAX) return;
+  g.chain = /[0-9]$/.test(g.chain) ? g.chain + '-' + d : g.chain + d;
+  renderGuide();
+}
+
+function guideUntapFielder() {
+  const g = guideState;
+  if (!g) return;
+  // The dash arrived with the digit, so it leaves with it.
+  g.chain = g.chain.slice(0, -1).replace(/-$/, '');
+  renderGuide();
+}
+
+function guideListMarkup(items, act) {
+  let html = '<div class="jsp-body jsp-list" id="guide-body">';
+  items.forEach((o, i) => {
+    html += '<button class="jsp-list-btn" data-guide="' + act + '" data-idx="' + i + '">'
+      + escapeHtml(o.label)
+      + (o.note ? '<div class="jsp-list-note">' + escapeHtml(o.note) + '</div>' : '')
+      + '</button>';
+  });
+  return html + '</div>';
+}
+
+/* One screen per question, rebuilt whole on every answer. Cheap — the largest
+   body is nine keys — and it means the strip, the title and the answers cannot
+   disagree about which step is showing, which is the bug a partial update in a
+   six-state machine eventually ships. */
+function renderGuide() {
+  const g = guideState;
+  const popup = document.getElementById('guide-popup');
+  if (!g || !popup) return;
+  const code = guideCode(g);
+
+  // Title first in the DOM because `labelPopup` names a dialog by its first
+  // child, and the question is the right name for the screen. The strip is
+  // lifted above it by `order` in the stylesheet, where the audit wants it.
+  let html = '<div class="jsp-title" id="guide-title">' + escapeHtml(GUIDE_TITLE[g.step]) + '</div>'
+    + '<div class="guide-strip">'
+    + '<div class="guide-code" aria-hidden="true">' + escapeHtml(code || '—') + '</div>'
+    + '<div class="guide-said">' + escapeHtml(guideSentence(g)) + '</div>'
+    + '</div>';
+
+  if (g.step === 'hit')    html += guideListMarkup(GUIDE_HIT, 'hit');
+  if (g.step === 'plate')  html += guideListMarkup(GUIDE_PLATE, 'plate');
+  if (g.step === 'batter') html += guideListMarkup(GUIDE_BATTER, 'batter');
+  if (g.step === 'far')    html += guideListMarkup(GUIDE_FAR, 'far');
+  if (g.step === 'erred') {
+    html += guideListMarkup(guideChainDigits(g).map(d => ({
+      label: d + ' — ' + FIELDING_NAME[parseInt(d, 10) - 1]
+    })), 'erred');
+  }
+  if (g.step === 'who') {
+    html += '<div class="jsp-body">' + fieldMapMarkup('guide-map') + '</div>'
+      + '<div class="jsp-actions">'
+      + '<button class="jsp-btn jsp-btn--minor" data-guide="untap">⌫ Undo tap</button>'
+      + '<button class="jsp-btn jsp-btn--minor" data-guide="nobody">Nobody got it</button>'
+      + '</div>';
+  }
+
+  html += '<div class="jsp-actions">'
+    + '<button class="jsp-btn jsp-btn--minor" data-guide="cancel">Cancel</button>'
+    + (GUIDE_PREV[g.step]
+        ? '<button class="jsp-btn jsp-btn--minor" data-guide="back">← Back</button>' : '')
+    + (g.step === 'who'
+        ? '<button class="jsp-btn jsp-btn--primary jsp-btn--lg" data-guide="next">Next →</button>' : '')
+    + '</div>';
+
+  popup.innerHTML = html;
+  labelPopup(popup);
+  popup.querySelectorAll('[data-guide]').forEach(btn => {
+    btn.onclick = function () { guideAnswer(this.dataset.guide, this.dataset.idx); };
+  });
+  popup.querySelectorAll('#guide-map .pos-key').forEach(btn => {
+    btn.onclick = function () { guideTapFielder(this.dataset.d); };
+  });
+}
+
+function guideAnswer(act, idx) {
+  const g = guideState;
+  if (!g) return;
+  const i = parseInt(idx, 10);
+  if (act === 'cancel') { closeGuide(); return; }
+  if (act === 'back')   { guideBack(); return; }
+  if (act === 'untap')  { guideUntapFielder(); return; }
+
+  if (act === 'hit') {
+    const h = GUIDE_HIT[i];
+    g.hit = h.key;
+    g.chain = '';
+    delete g.nobody; delete g.outcome; delete g.errBy; delete g.far; delete g.plate;
+    g.step = h.key === 'none' ? 'plate' : 'who';
+    renderGuide();
+    return;
+  }
+  if (act === 'plate') { g.plate = GUIDE_PLATE[i].code; guideApply(); return; }
+  if (act === 'far')   { g.far = GUIDE_FAR[i].code; guideApply(); return; }
+  if (act === 'nobody') {
+    // Nothing to charge to a fielder nobody touched, so the chain goes with it.
+    g.nobody = true; g.chain = '';
+    g.step = 'far';
+    renderGuide();
+    return;
+  }
+  if (act === 'next') {
+    // The one refusal this sheet owns. Everything else it can ask is a button.
+    if (!g.chain) { showPlayReject('Tap whoever got the ball — or “Nobody got it”.'); return; }
+    g.step = 'batter';
+    renderGuide();
+    return;
+  }
+  if (act === 'batter') {
+    g.outcome = GUIDE_BATTER[i].key;
+    // One fielder in the chain is the man who erred; two or more and it matters
+    // which, so it is asked rather than assumed.
+    if (g.outcome === 'error') {
+      const digits = guideChainDigits(g);
+      if (digits.length > 1) { g.step = 'erred'; renderGuide(); return; }
+      g.errBy = digits[0];
+    }
+    guideApply();
+    return;
+  }
+  if (act === 'erred') { g.errBy = guideChainDigits(g)[i]; guideApply(); return; }
+}
+
+/* The handoff, and the only place this feature writes anything. `applyPlay` does
+   the rest exactly as it does for a deck key — including opening the runner
+   walkthrough, which is the audit's fourth question and not a line of code here.
+   `normalizePlayCode` is a no-op on everything assembled above; it runs anyway so
+   that "only canonical codes reach state" stays one rule in one place. */
+function guideApply() {
+  const g = guideState;
+  if (!g || !guideComplete(g)) return;
+  const code = guideCode(g);
+  const t = g.target;
+  closeGuide();
+  applyPlay(normalizePlayCode(code), t);
+}
+
+function closeGuide() {
+  const popup = document.getElementById('guide-popup');
+  if (popup) closePopup(popup);
+  guideState = null;
+}
+
+/* The entry point. It refuses up front on the three conditions `applyPlay` would
+   refuse on at the end, because walking a beginner through five questions and
+   *then* saying the inning is over is the exact failure L2 and I5 are both
+   about — the refusal has to arrive before the work, not after it. */
+function promptGuidedPlay() {
+  if (entryInProgress()) { showPlayReject('Finish the open entry first.'); return; }
+  const t = currentTarget();
+  if (!t) { showPlayReject(NO_CELL); return; }
+  if (getInnState(t.team, t.innIdx).outs >= 3) { showPlayReject(INNING_OVER); return; }
+  const ab = gameState.teams[t.team].players[t.pIdx].atBats[t.innIdx];
+  if (ab.play) { showPlayReject('That cell already has a play — change or clear it first.'); return; }
+
+  let popup = document.getElementById('guide-popup');
+  if (!popup) {
+    popup = document.createElement('div');
+    popup.id = 'guide-popup';
+    popup.className = 'jsp jsp--sheet';
+    document.body.appendChild(popup);
+  }
+  guideState = { target: t, step: 'hit', chain: '' };
+  renderGuide();
+  openPopup(popup);
 }
 
 /* Render RBI badge in at-bat cell (Feature 2) */

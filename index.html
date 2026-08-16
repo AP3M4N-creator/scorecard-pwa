@@ -168,10 +168,20 @@
           <button class="quick-btn hit" data-word="triple" data-act="applyPlay" data-arg="3B">3B<small>3</small></button>
           <button class="quick-btn hit" data-word="homer" data-act="applyPlay" data-arg="HR">HR<small>4</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn out" data-word="grounder" data-act="promptGroundout">GO<small>g</small></button>
-          <button class="quick-btn out" data-word="fly ball" data-act="promptPositionPlay" data-arg="F">FO<small>x</small></button>
-          <button class="quick-btn out" data-word="pop-up" data-act="promptPositionPlay" data-arg="P">PO<small>p</small></button>
-          <button class="quick-btn out" data-word="liner" data-act="promptPositionPlay" data-arg="L">LO<small>l</small></button>
+          <!-- I2. Nothing fits by addition here — 14.6px of deck slack at phone
+               landscape against an 89.7px cheapest key — so in Beginner mode the
+               four keys below hide and this one takes their place, exactly as
+               `qb-fix-that` replaces the nine correction keys. Frees 219.5px,
+               spends 101.9px, and takes Beginner's first line from 789.4px to
+               667.9px. The four it replaces are precisely the plays it
+               walks you through, and g/x/p/l still reach them from a hardware
+               keyboard: the keydown handler calls the prompts, not these
+               buttons. Reasoning in full at the I2 block in app.js. -->
+          <button class="quick-btn out qb-guide" data-word="walk me through" data-act="promptGuidedPlay">Guide</button>
+          <button class="quick-btn out qb-out-four" data-word="grounder" data-act="promptGroundout">GO<small>g</small></button>
+          <button class="quick-btn out qb-out-four" data-word="fly ball" data-act="promptPositionPlay" data-arg="F">FO<small>x</small></button>
+          <button class="quick-btn out qb-out-four" data-word="pop-up" data-act="promptPositionPlay" data-arg="P">PO<small>p</small></button>
+          <button class="quick-btn out qb-out-four" data-word="liner" data-act="promptPositionPlay" data-arg="L">LO<small>l</small></button>
           <span class="qb-sep"></span>
           <button class="quick-btn undo-play" data-act="undoLastPlay">Undo<small>u</small></button>
           <button class="qb-more-btn" data-act="toggleQBDrawer">More plays</button>
@@ -303,10 +313,20 @@
           <button class="quick-btn hit" data-word="triple" data-act="applyPlay" data-arg="3B">3B<small>3</small></button>
           <button class="quick-btn hit" data-word="homer" data-act="applyPlay" data-arg="HR">HR<small>4</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn out" data-word="grounder" data-act="promptGroundout">GO<small>g</small></button>
-          <button class="quick-btn out" data-word="fly ball" data-act="promptPositionPlay" data-arg="F">FO<small>x</small></button>
-          <button class="quick-btn out" data-word="pop-up" data-act="promptPositionPlay" data-arg="P">PO<small>p</small></button>
-          <button class="quick-btn out" data-word="liner" data-act="promptPositionPlay" data-arg="L">LO<small>l</small></button>
+          <!-- I2. Nothing fits by addition here — 14.6px of deck slack at phone
+               landscape against an 89.7px cheapest key — so in Beginner mode the
+               four keys below hide and this one takes their place, exactly as
+               `qb-fix-that` replaces the nine correction keys. Frees 219.5px,
+               spends 101.9px, and takes Beginner's first line from 789.4px to
+               667.9px. The four it replaces are precisely the plays it
+               walks you through, and g/x/p/l still reach them from a hardware
+               keyboard: the keydown handler calls the prompts, not these
+               buttons. Reasoning in full at the I2 block in app.js. -->
+          <button class="quick-btn out qb-guide" data-word="walk me through" data-act="promptGuidedPlay">Guide</button>
+          <button class="quick-btn out qb-out-four" data-word="grounder" data-act="promptGroundout">GO<small>g</small></button>
+          <button class="quick-btn out qb-out-four" data-word="fly ball" data-act="promptPositionPlay" data-arg="F">FO<small>x</small></button>
+          <button class="quick-btn out qb-out-four" data-word="pop-up" data-act="promptPositionPlay" data-arg="P">PO<small>p</small></button>
+          <button class="quick-btn out qb-out-four" data-word="liner" data-act="promptPositionPlay" data-arg="L">LO<small>l</small></button>
           <span class="qb-sep"></span>
           <button class="quick-btn undo-play" data-act="undoLastPlay">Undo<small>u</small></button>
           <button class="qb-more-btn" data-act="toggleQBDrawer">More plays</button>

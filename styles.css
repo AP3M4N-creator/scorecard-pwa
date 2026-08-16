@@ -497,6 +497,32 @@ details.info-details > summary:hover { color: var(--navy); }
 [data-mode="beginner"] .qb-fix-that { display: inline-flex; }
 [data-mode="beginner"] .qb-fix-nine { display: none; }
 
+/* I2 — the four out keys become one walkthrough in Beginner mode. Same swap as
+   I14 above and for the same reason: measured at 844x390 in Beginner mode the
+   deck's first line left 14.6px of slack, and the cheapest key that could carry
+   this label is 89.7px. Addition was never available.
+
+   Measured after building it, at 844x390: GO/FO/PO/LO come to 219.5px with
+   their gaps, the Guide key spends 101.9px with its own, and Beginner's first
+   line goes from 789.4px to 667.9px in an 804px box — 14.6px of slack becomes
+   136.1px. Expert is untouched at 746.4px, as the mode contract requires.
+
+   The hotkeys are untouched. `g`, `x`, `p` and `l` are read by the keydown
+   handler, which calls `promptGroundout` and `promptPositionPlay` directly —
+   so a Magic Keyboard scorer in Beginner mode keeps the fast path to the very
+   codes the sheet is teaching, which is the point at which they stop needing
+   the sheet.
+
+   **The `.quick-btn` in each selector is load-bearing, not noise.** I8's
+   `[data-mode="beginner"] .quick-btn[data-word]` above is three selectors of
+   specificity and sets `display: inline-flex` on every worded key — which these
+   five are. Written as plainly as I14's pair (`.qb-fix-nine`, two selectors)
+   they lose to it and all five keys show at once. I14 never hit this because
+   the nine correction keys carry no words. Do not "simplify" these back. */
+.quick-btn.qb-guide { display: none; }
+[data-mode="beginner"] .quick-btn.qb-guide { display: inline-flex; }
+[data-mode="beginner"] .quick-btn.qb-out-four { display: none; }
+
 /* ---------- The play, in a sentence, kept on screen (I4, Beginner half) ----
 
    Expert mode gets nothing here — since I1 a completed play is recorded in
@@ -1096,6 +1122,68 @@ details.info-details > summary:hover { color: var(--navy); }
 /* The strikeout picker and the base picker are a title and a row of choices
    with nothing to read, so they centre and set in the display face. */
 .jsp--centred { text-align: center; font-family: var(--heading); }
+
+/* ---------- The guided builder's sheet (I2) ----------------------------------
+
+   The one popup that fills the screen, and it has to. Part C's two budgets are
+   both spent — ~5px of margin at 1194x834, 14.6px on the deck's first line at
+   phone landscape — so a twelfth centred popup carrying the field map, a live
+   code strip and five answers had nowhere to be. Full-screen costs nothing
+   against either budget, which is exactly why the audit specified it.
+
+   It is still a `.jsp`: same border colour, same tokens, same `.jsp-body`
+   scroller, same named controls. Only the box changes, so everything I11 swept
+   onto the vocabulary applies here without a second palette to keep in step.
+
+   The height it has to fit, worst case, is the map step at 844x390: the map is
+   180, the two action rows are 40 each, the strip about 48 and the title 18 —
+   326 plus padding and gaps against 390. It fits, and `.jsp-body` takes the
+   scroll if a future answer list ever does not. The 40px readout the position
+   popup spends on `#pos-input` is what pays for the strip: the strip *is* the
+   readout here, and a better one, because it carries the sentence too. */
+.jsp--sheet {
+  top: 0; left: 0; transform: none;
+  width: 100%; height: 100%;
+  min-width: 0; max-width: none; max-height: none;
+  border-width: 0; border-radius: 0;
+  padding: calc(8px + var(--sa-t)) calc(12px + var(--sa-r)) 8px calc(12px + var(--sa-l));
+  align-items: center;
+}
+
+/* Full-screen is a height decision, not a width one. At 844x390 the sheet is
+   full of what it is asking; at 1194x834 the same content left ~350px of dead
+   space under the map and stretched two action rows across the full 1194, which
+   read as an unfinished screen rather than a deliberate one. So the column is
+   capped and centred — 520px clears the 300px map with room either side — and
+   the body centres what it holds between the strip and the actions.
+
+   Only the *body* centres. The strip stays pinned at the top, where the audit
+   put it and where a scorer's eye returns to watch the code grow, and the
+   actions stay pinned at the bottom, where every other popup in the app keeps
+   them. It is the answers in the middle that move. */
+.jsp--sheet > * { width: 100%; max-width: 520px; }
+.jsp--sheet .jsp-body { justify-content: center; }
+
+/* The code being built, and what it says. Lifted above the question by `order`
+   rather than by being written first: `labelPopup` names a dialog after its
+   first child, and the question is the right name for the screen — "6-3" is
+   not. Both wants are satisfied because `.jsp` is already a flex column. */
+.guide-strip {
+  order: -1; flex: 0 0 auto;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px 8px; background: var(--cream); border-radius: 4px;
+}
+/* The notation, in the face the card writes it in and at the size the card
+   writes it at — this is a preview of the mark about to be made, so it should
+   not be the first time the scorer sees that shape. */
+.guide-code {
+  font-family: var(--mono); font-size: 22px; font-weight: 700;
+  letter-spacing: 1px; color: var(--navy); line-height: 1.1;
+}
+.guide-said {
+  font-size: 12px; line-height: 1.3; color: var(--text); text-align: center;
+  min-height: 1.3em;   /* holds its line, so answering does not jump the list */
+}
 
 /* app.js opens popups with `display: flex` or `display: block` through
    `openPopup`, which writes the inline value — so the class only has to

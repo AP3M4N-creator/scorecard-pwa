@@ -122,7 +122,7 @@
     'runner-popup', 'outcome-popup', 'base-picker', 'edit-play-popup',
     'move-runner-popup', 'pos-popup', 'k-popup', 'spray-popup', 'er-review-popup',
     'pitcher-popup', 'recompute-popup', 'popup-backdrop', 'play-reject',
-    'sub-popup', 'dh-popup', 'pos-change-popup', 'backup-reminder'
+    'sub-popup', 'dh-popup', 'pos-change-popup', 'backup-reminder', 'guide-popup'
   ];
 
   // The lineup inputs and position selects hold state the grid never rebuilds
@@ -6476,6 +6476,11 @@
     open('pitcher-popup', () => changePitcher());
     open('pos-popup', () => promptGroundout());
     dismissPopupById('pos-popup');
+    // The twelfth shell, and the first full-screen one — `.jsp--sheet` changes
+    // the box and nothing else, so it owes the same vocabulary as the other
+    // eleven and is swept here rather than trusted (I2).
+    open('guide-popup', () => promptGuidedPlay());
+    dismissPopupById('guide-popup');
     open('k-popup', () => showStrikeoutPopup(cellOf('visiting', 0, 0)));
     dismissPopupById('k-popup');
     open('outcome-popup', () => { play('1B'); play('FC 6'); });
@@ -7081,6 +7086,7 @@
     ['spray-popup', () => { sel('visiting', 0, 0); play('1B'); }],
     ['k-popup', () => { sel('visiting', 0, 0); pitch('S'); pitch('S'); pitch('S'); }],
     ['pos-popup', () => { sel('visiting', 0, 0); promptPositionPlay('GO '); }],
+    ['guide-popup', () => { sel('visiting', 0, 0); promptGuidedPlay(); }],
     ['runner-popup', () => {
       sel('visiting', 0, 0); play('1B'); clickId('spray-skip');
       sel('visiting', 3, 0); play('2B');
@@ -8241,5 +8247,358 @@
     eq('the man on 1st is on 2nd', onB('visiting', 0, 1), first);
     eq('the man on 2nd is on 3rd', onB('visiting', 0, 2), second);
     eq('and 1st is empty behind them', onB('visiting', 0, 0), null);
+  });
+
+  /* ---- I2: the guided play builder ----------------------------------------
+
+     Five questions in the order a scorer watches them happen, assembling `6-3`
+     in a strip while they are answered. The whole feature is a front end: every
+     branch ends at `applyPlay` with a code the engine understood before it
+     existed, and the audit's fourth question — where the runners went — is
+     `applyPlayEffects` opening the popup it always opens.
+
+     So the contract worth pinning is narrow and it is exactly two things:
+     **the answers assemble the code the scorer was promised**, and **the code
+     is one the app can already name and score**. Everything else here is the
+     engine's, and is tested where the engine is. */
+
+  const gp     = () => document.getElementById('guide-popup');
+  const gCode  = () => gp().querySelector('.guide-code').textContent;
+  const gSaid  = () => gp().querySelector('.guide-said').textContent;
+  const gTitle = () => gp().querySelector('.jsp-title').textContent;
+  const gList  = () => Array.prototype.slice.call(gp().querySelectorAll('.jsp-list-btn'));
+  const gPick  = (n) => gList()[n].click();
+  const gKey   = (d) => gp().querySelector(`#guide-map .pos-key[data-d="${d}"]`).click();
+  const gAct   = (a) => gp().querySelector(`[data-guide="${a}"]`).click();
+  // The answer index on each screen, by what it says rather than by number, so
+  // reordering a list is not a silent rewrite of what these cases mean.
+  const gSay   = (label) => {
+    const i = gList().findIndex(b => b.firstChild.textContent === label);
+    if (i < 0) fail(`no answer reading "${label}" on the "${gTitle()}" screen`);
+    gPick(i);
+  };
+
+  /* Every shape the sheet can produce, as answers in and code out. The fourth
+     column is the check that matters most: `playTitle` falling back to printing
+     the code it was given is how the app says "I do not know this play", and a
+     builder that teaches notation the card cannot read back would be worse than
+     no builder. */
+  const GUIDE_CASES = [
+    ['a ground out',        { hit: 'ground', chain: '6-3', outcome: 'out' },              '6-3',    'Ground out, 6-3.'],
+    ['an unassisted one',   { hit: 'ground', chain: '3',   outcome: 'out' },              '3',      null],
+    ['a fly out',           { hit: 'fly',    chain: '8',   outcome: 'out' },              'F8',     'Fly out, 8.'],
+    ['a line out',          { hit: 'line',   chain: '7',   outcome: 'out' },              'L7',     'Line out, 7.'],
+    ['a pop-up',            { hit: 'pop',    chain: '2',   outcome: 'out' },              'P2',     'Pop out, 2.'],
+    ['an error',            { hit: 'ground', chain: '6',   outcome: 'error', errBy: '6' },'E6',     'Error by 6.'],
+    ['one blamed further down the chain',
+                            { hit: 'ground', chain: '6-4', outcome: 'error', errBy: '4' },'E4',     'Error by 4.'],
+    ["a fielder's choice",  { hit: 'ground', chain: '6-4', outcome: 'fc' },               'FC 6-4', "Fielder's choice, 6-4."],
+    ['an infield hit',      { hit: 'ground', chain: '6',   outcome: 'hit' },              '1B',     'Single.'],
+    ['one through the hole',{ hit: 'ground', nobody: true, far: '2B' },                   '2B',     'Double.'],
+    ['one out of the park', { hit: 'fly',    nobody: true, far: 'HR' },                   'HR',     'Home run.'],
+    ['a strikeout',         { hit: 'none',   plate: 'K' },                                'K',      'Strikeout.'],
+    ['one looking',         { hit: 'none',   plate: 'ꓘ' },                                'ꓘ',      'Strikeout looking.'],
+    ['a walk',              { hit: 'none',   plate: 'BB' },                               'BB',     'Walk.'],
+    ['a hit batsman',       { hit: 'none',   plate: 'HBP' },                              'HBP',    'Hit by pitch.']
+  ];
+
+  test('the answers assemble the code, for every shape the sheet can reach', () => {
+    GUIDE_CASES.forEach(([name, answers, code, sentence]) => {
+      const g = Object.assign({ chain: '' }, answers);
+      eq(`${name} writes ${code}`, guideCode(g), code);
+      ok(`${name} is a finished answer`, guideComplete(g));
+      if (sentence) eq(`${name} reads back as itself`, guideSentence(g), sentence);
+    });
+  });
+
+  /* The one case above with a null sentence. A ground ball fielded by one man
+     with no throw is a bare `3`, which `playTitle` cannot name — so the sheet
+     prints the code and says nothing more. That is deliberate and it is the
+     app's existing rule for bare codes, not a gap: the alternative is writing
+     `3U` on the card, a `U` the scorer never tapped, in a strip whose whole
+     claim is that it shows what they answered. */
+  test('a bare fielder code is left to speak for itself', () => {
+    const g = { hit: 'ground', chain: '3', outcome: 'out' };
+    eq('the code is what was tapped', guideCode(g), '3');
+    eq('and the app agrees it cannot name it', playTitle('3'), '3');
+    ok('but it still scores as an out', isOutPlay('3'));
+  });
+
+  test('every code the sheet can write is one the card can already read', () => {
+    GUIDE_CASES.forEach(([name, , code]) => {
+      if (code === '3') return;   // the bare-fielder case, checked above
+      ok(`${name} (${code}) is a play the app can name`, playTitle(code) !== code);
+      eq(`${code} is already canonical`, normalizePlayCode(code), code);
+    });
+  });
+
+  test('a half-answered play is never handed to the engine', () => {
+    [['nothing yet', {}],
+     ['only the ball type', { hit: 'ground', chain: '' }],
+     ['a fielder but no outcome', { hit: 'ground', chain: '6' }],
+     ['an error with nobody blamed', { hit: 'ground', chain: '6-4', outcome: 'error' }],
+     ['nobody got it, no base yet', { hit: 'ground', nobody: true }],
+     ['not in play, nothing picked', { hit: 'none' }]
+    ].forEach(([name, answers]) => {
+      ok(`${name} is not finished`, !guideComplete(Object.assign({ chain: '' }, answers)));
+    });
+  });
+
+  /* The strip is the teaching, so it may only ever grow. It read `—` while the
+     "who made the error?" question was up: four taps built `6-4` and then it
+     blanked at the exact moment the scorer was asked a follow-up *about* those
+     four taps. Nothing already shown may vanish while the same play is still
+     being answered. */
+  test('the strip never goes backwards while a play is being answered', () => {
+    const built = { hit: 'ground', chain: '6-4' };
+    eq('the map step shows the chain', guideCode(built), '6-4');
+    const asking = Object.assign({}, built, { outcome: 'error' });
+    eq('and it survives being asked who erred', guideCode(asking), '6-4');
+    eq('until the answer replaces it', guideCode(Object.assign({}, asking, { errBy: '4' })), 'E4');
+  });
+
+  test('the sentence keeps up with the answers, before there is a play to name', () => {
+    eq('nothing answered', guideSentence({ chain: '' }), '');
+    eq('ball type alone', guideSentence({ hit: 'fly', chain: '' }), 'Fly ball.');
+    // "to first base", never "to the first base" — `FIELDING_NAME` is the
+    // position's name, which is not what English does after "to".
+    eq('and where it went', guideSentence({ hit: 'ground', chain: '3' }), 'Ground ball to first base.');
+    eq('the outfield reads the same way', guideSentence({ hit: 'fly', chain: '7' }), 'Fly ball to left field.');
+    eq('so does the battery', guideSentence({ hit: 'ground', chain: '1' }), 'Ground ball to the pitcher.');
+    eq('nobody at all', guideSentence({ hit: 'ground', chain: '', nobody: true }),
+       'Ground ball, and nobody got to it.');
+  });
+
+  test('a walkthrough puts the play it built on the card', () => {
+    beginner();
+    sel('visiting', 0, 0);
+    promptGuidedPlay();
+    ok('the sheet opens', visible('guide-popup'));
+    eq('asking the first question', gTitle(), 'Was the ball hit?');
+    eq('with nothing assembled yet', gCode(), '—');
+
+    gSay('On the ground');
+    eq('now it wants the fielder', gTitle(), 'Who got it?');
+    gKey(6);
+    eq('the code starts building', gCode(), '6');
+    eq('and says what that means', gSaid(), 'Ground ball to shortstop.');
+    gKey(3);
+    eq('a second tap adds the dash the scorer did not type', gCode(), '6-3');
+    gAct('untap');
+    eq('and Undo tap takes the digit and its dash together', gCode(), '6');
+    gKey(3);
+
+    gAct('next');
+    eq('then what became of the batter', gTitle(), 'What happened to the batter?');
+    gSay('Out');
+
+    ok('the sheet is done', !visible('guide-popup'));
+    eq('and the play is on the card', ab('visiting', 0, 0).play, '6-3');
+    eq('named in the words the strip promised', echoText(), 'Ground out, 6-3. 1 out.');
+  });
+
+  test('the map is the way to a hit as well as to an out', () => {
+    beginner();
+    sel('visiting', 0, 0);
+    promptGuidedPlay();
+    gSay('On the ground');
+    gAct('nobody');
+    eq('it asks how far he got', gTitle(), 'How far did he get?');
+    eq('and says why it is asking', gSaid(), 'Ground ball, and nobody got to it.');
+    gSay('Second — a double');
+    eq('a double goes on the card', ab('visiting', 0, 0).play, '2B');
+  });
+
+  test('a ball never put in play is finished in the sheet, not handed back', () => {
+    beginner();
+    sel('visiting', 0, 0);
+    promptGuidedPlay();
+    gSay('Never put in play');
+    eq('it asks about the plate', gTitle(), 'What happened at the plate?');
+    ok('and the map is not on screen for it', !gp().querySelector('#guide-map'));
+    gSay('Walked');
+    ok('the sheet closed', !visible('guide-popup'));
+    eq('with a walk recorded', ab('visiting', 0, 0).play, 'BB');
+  });
+
+  test('two fielders means the sheet asks which one erred', () => {
+    beginner();
+    sel('visiting', 0, 0);
+    promptGuidedPlay();
+    gSay('On the ground'); gKey(6); gKey(4); gAct('next');
+    gSay('Safe on an error');
+    eq('it asks', gTitle(), 'Who made the error?');
+    eq('offering only the men who touched it', gList().length, 2);
+    eq('by number and by name', gList()[1].firstChild.textContent, '4 — second base');
+    gSay('4 — second base');
+    eq('and charges the one named', ab('visiting', 0, 0).play, 'E4');
+  });
+
+  test('one fielder is not asked about — there is nobody else to blame', () => {
+    beginner();
+    sel('visiting', 0, 0);
+    promptGuidedPlay();
+    gSay('On the ground'); gKey(6); gAct('next');
+    gSay('Safe on an error');
+    ok('it does not ask', !visible('guide-popup'));
+    eq('it just charges him', ab('visiting', 0, 0).play, 'E6');
+  });
+
+  /* The audit's fourth question. It is not built here and must not be: the
+     runner walkthrough belongs to `applyPlayEffects`, which opens it for a deck
+     key exactly as it does for this. The title it opens under is I9's, naming
+     the play the sheet just assembled — which is the proof the handoff carried
+     the code and not just the effects. */
+  test('where the runners went is still the engine\'s question', () => {
+    beginner();
+    sel('visiting', 0, 0);
+    play('1B');
+    dismissPopupById('spray-popup');
+    sel('visiting', 3, 0);
+    promptGuidedPlay();
+    gSay('On the ground'); gKey(6); gKey(4); gAct('next');
+    gSay('Out');
+    ok('the sheet is out of the way', !visible('guide-popup'));
+    ok('and the runner popup is asking', visible('runner-popup'));
+    eq('under the name of the play the sheet built',
+       document.querySelector('#runner-popup .jsp-title').textContent, 'Ground Out — Who Moved');
+    clickId('rp-cancel');
+  });
+
+  test('Back takes the answer back, not just the screen', () => {
+    beginner();
+    sel('visiting', 0, 0);
+    promptGuidedPlay();
+    gSay('On the ground'); gKey(6); gKey(3);
+    gAct('next');
+    gAct('back');
+    eq('it is asking who got it again', gTitle(), 'Who got it?');
+    eq('with the taps still there', gCode(), '6-3');
+    gAct('back');
+    eq('and again from the top', gTitle(), 'Was the ball hit?');
+    eq('with the map answer discarded', gCode(), '—');
+    ok('there is nothing behind the first question', !gp().querySelector('[data-guide="back"]'));
+    gAct('cancel');
+    ok('Cancel closes it', !visible('guide-popup'));
+    eq('and writes nothing', ab('visiting', 0, 0).play, '');
+  });
+
+  test('the map step will not go on with nobody named', () => {
+    beginner();
+    sel('visiting', 0, 0);
+    promptGuidedPlay();
+    gSay('On the ground');
+    gAct('next');
+    ok('it refuses', rejected());
+    ok('and names the way out', /nobody got it/i.test(toastText()));
+    eq('staying where it was', gTitle(), 'Who got it?');
+    gAct('cancel');
+  });
+
+  /* The refusals arrive *before* the five questions, not after them. Walking a
+     beginner through a whole play and then saying the inning was already over
+     is the dead press L2 exists to forbid, made five taps more expensive. */
+  test('the sheet refuses up front, on everything applyPlay would refuse at the end', () => {
+    beginner();
+    if (selectedCell) selectedCell.classList.remove('selected');
+    selectedCell = null;
+    promptGuidedPlay();
+    ok('no cell, no sheet', rejected() && !visible('guide-popup'));
+
+    sel('visiting', 0, 0);
+    play('K');
+    sel('visiting', 0, 0);
+    promptGuidedPlay();
+    ok('a full cell is refused', rejected());
+    ok('and says the cell is the problem', /already has a play/i.test(toastText()));
+    ok('with nothing opened', !visible('guide-popup'));
+
+    sel('visiting', 3, 0); play('K');
+    sel('visiting', 6, 0); play('K');
+    sel('visiting', 9, 0);
+    promptGuidedPlay();
+    ok('and a finished half-inning is refused', rejected());
+    eq('with the reason the rest of the deck gives', toastText(), INNING_OVER);
+    ok('still nothing opened', !visible('guide-popup'));
+  });
+
+  /* ---- I2: the entry point ------------------------------------------------
+
+     Nothing fits by addition on this deck — 14.6px of slack at 844x390 against
+     an 89.7px cheapest key — so Beginner mode hides the four out keys and shows
+     one in their place, which is `qb-fix-that`'s trade exactly. jsdom loads no
+     stylesheet and so cannot see either state; what it can check is that the
+     swap has both halves and that nothing was deleted to make room. */
+
+  test('the walkthrough has a key, and it replaces rather than adds', () => {
+    ['visiting', 'home'].forEach(t => {
+      const deck = document.getElementById(`qb-${t}`);
+      const guide = deck.querySelector('.qb-guide');
+      ok(`${t} has the walkthrough key`, !!guide);
+      eq(`${t}: it opens the builder`, guide.dataset.act, 'promptGuidedPlay');
+      eq(`${t}: and the four it stands in for are marked`,
+        deck.querySelectorAll('.qb-out-four').length, 4);
+    });
+    // Expert keeps all four. The stylesheet is what hides them, so this is a
+    // check that the swap deleted nothing — the same guarantee I14 wanted.
+    ['promptGroundout', 'promptPositionPlay'].forEach(a =>
+      ok(`${a} is still on the deck`, !!document.querySelector(`#qb-visiting .quick-btn[data-act="${a}"]`)));
+    ok('and the builder is a real action', typeof promptGuidedPlay === 'function');
+  });
+
+  /* The hotkeys were the thing this could quietly have cost. `g`, `x`, `p` and
+     `l` are read by the keydown handler, which calls the prompts directly — so
+     hiding the buttons leaves a Magic Keyboard scorer in Beginner mode the fast
+     path to the very codes the sheet is teaching. */
+  test('hiding the out keys does not take their hotkeys with them', () => {
+    beginner();
+    sel('visiting', 0, 0);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'g', bubbles: true, cancelable: true }));
+    ok('g still reaches the position pad in Beginner mode', visible('pos-popup'));
+    dismissPopupById('pos-popup');
+  });
+
+  test('the builder is an entry path like any other', () => {
+    ok('it is dimmed by the same rule as the rest of the deck when the inning ends',
+      ENTRY_ACTS.includes('promptGuidedPlay'));
+    // Five answers and nothing written yet: a stray tap on the backdrop must
+    // not throw them away. `pos-popup`'s kind of pending, not `runner-popup`'s.
+    ok('and a stray tap cannot discard a half-answered play',
+      PENDING_ENTRY_POPUPS.includes('guide-popup'));
+    ok('but it is not a half-written play the card is already holding',
+      !ENTRY_IN_PROGRESS_POPUPS.includes('guide-popup'));
+  });
+
+  /* The map is mounted twice now — the position popup and the sheet — and the
+     nine keys are solved to the pixel against 36 pairwise separations. One
+     generator, one geometry table, or the two copies drift the first time
+     somebody nudges a fielder by eye. */
+  test('both maps come out of the one table', () => {
+    beginner();
+    sel('visiting', 0, 0);
+    promptGuidedPlay();
+    gSay('On the ground');
+    const map = gp().querySelector('#guide-map');
+    ok('the sheet mounted a map', !!map);
+    eq('with the nine', map.querySelectorAll('.pos-key').length, 9);
+    eq('sized from the table', map.style.getPropertyValue('--pm-w').trim(), FIELD_MAP.w + 'px');
+    for (let i = 1; i <= 9; i++) {
+      const btn = map.querySelector(`.pos-key[data-d="${i}"]`);
+      const [x, y] = FIELD_MAP.at[i];
+      eq(`${i} sits where the table puts it`,
+        btn.style.left, fieldPct(x, FIELD_MAP.w) + '%');
+      eq(`${i} at the depth the table gives it`,
+        btn.style.top, fieldPct(y, FIELD_MAP.h) + '%');
+    }
+    gAct('cancel');
+
+    // And the position popup's copy is the same markup from the same call.
+    promptGroundout();
+    const pad = document.getElementById('pos-keypad');
+    eq('the pad has the nine too', pad.querySelectorAll('.pos-key').length, 9);
+    eq('and 6 is in the same place on both',
+      pad.querySelector('.pos-key[data-d="6"]').style.left,
+      fieldPct(FIELD_MAP.at[6][0], FIELD_MAP.w) + '%');
+    dismissPopupById('pos-popup');
   });
 })();
