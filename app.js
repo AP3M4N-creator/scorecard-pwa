@@ -600,7 +600,7 @@ function buildPitcherTable(team, containerId) {
   const labels = ['IP','PC','H','R','ER','K','BB'];
   let html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">';
   html += '<h3 style="margin:0">Pitchers</h3>';
-  html += '<button type="button" data-act="recomputePitcherAssignments" title="Re-attribute recorded at-bats to the correct pitcher based on pitching changes" style="font-size:10px;font-weight:700;padding:2px 7px;border:1px solid var(--navy,#003278);border-radius:3px;background:#fff;color:var(--navy,#003278);cursor:pointer;font-family:var(--heading,inherit);letter-spacing:0.3px">↻ Fix Stats</button>';
+  html += '<button type="button" data-act="recomputePitcherAssignments" title="Re-attribute recorded at-bats to the correct pitcher based on pitching changes" class="fix-stats-btn">↻ Fix Stats</button>';
   html += '</div>';
   html += '<table class="pitcher-grid"><thead><tr>';
   html += '<th class="pitcher-num-col">#</th>';
@@ -1770,20 +1770,14 @@ function setOptionBlocked(btn, blocked, why) {
     btn.removeAttribute('title');
     delete btn.dataset.why;
   }
-  btn.style.opacity = blocked ? '0.35' : '1';
-  btn.style.cursor = blocked ? 'not-allowed' : 'pointer';
-  if (blocked) {
-    btn.style.borderColor = '#ccc';
-    btn.style.background = '#f0f0f0';
-    btn.style.color = '#999';
-  } else if (btn.dataset.style) {
-    // Put back the look it should be wearing. Unblocking used to reset the opacity
-    // and the cursor and nothing else, so an option greyed out by one choice and
-    // made legal again by the next stayed grey — including, since F11c, a
-    // pre-selected force whose chosen state would silently disappear while
-    // `choices` went on holding it.
-    btn.style.cssText = btn.dataset.style;
-  }
+  // The look is `.jsp-chip:disabled` now, so there is nothing to paint and,
+  // more to the point, nothing to *put back* (I11). This used to grey the
+  // button by hand and restore it from a `dataset.style` snapshot, and the
+  // restore was the fragile half: an option greyed out by one choice and made
+  // legal again by the next stayed grey wherever no snapshot had been taken —
+  // which was every button in the outcome popup, since only `paintRpBtn` ever
+  // wrote one. Driving the look off `disabled` and `aria-pressed` means the
+  // two states compose in the cascade instead of overwriting each other.
 }
 
 /* Say, under the rows, why the greyed-out options are greyed out.
@@ -1808,40 +1802,24 @@ function paintBlockedNote(el, btns, skip) {
   el.style.display = reasons.length ? 'block' : 'none';
 }
 
-/* The three states an advancement button can be in, in one place, so the force
-   pre-selected at render time and the same button tapped at click time cannot drift
-   apart. The chosen state was a pale blue tint a shade off the unchosen one; on a
-   popup whose whole job is to show you what you have answered, it needs to be
-   unmistakable (F11b). */
-function rpBtnStyle(active, isOut) {
-  const base = 'padding:3px 8px;font-size:11px;font-weight:600;border-radius:4px;cursor:pointer;opacity:1;font-family:var(--mono);border:1.5px solid ';
-  if (active && isOut) return base + 'var(--accent);background:var(--accent);color:#fff';
-  if (active) return base + 'var(--navy);background:var(--navy);color:var(--gold)';
-  if (isOut) return base + '#ccc;background:#fff;color:var(--accent)';
-  return base + '#ccc;background:#fff;color:#555';
-}
+/* The chosen state of an advancement button, in one place, so the force
+   pre-selected at render time and the same button tapped at click time cannot
+   drift apart. It was a pale blue tint a shade off the unchosen one; on a popup
+   whose whole job is to show you what you have answered, it needs to be
+   unmistakable (F11b), so it fills — see `.jsp-chip[aria-pressed]`.
 
-// The "on E" tick that rides alongside a runner's destinations. Same size and family
-// as the row it sits in so it reads as part of it, in the accent the out buttons wear:
-// an error is the defence's mistake, not a base the scorer is choosing.
-function rpErrStyle(active) {
-  const base = 'padding:3px 8px;font-size:11px;font-weight:600;border-radius:4px;cursor:pointer;font-family:var(--mono);margin-left:6px;border:1.5px solid ';
-  return active
-    ? base + 'var(--accent);background:var(--accent);color:#fff'
-    : base + '#ccc;background:#fff;color:var(--accent)';
-}
-
+   Three functions and a `dataset.style` snapshot before I11: one to build the
+   selected css, one for the "on E" tick's, and one to apply either without
+   trampling a blocked button. All three said the same thing in inline colours,
+   and the reason the snapshot existed at all was that they fought `setOptionBlocked`
+   for the same `style` attribute. One attribute settles it — chosen and blocked
+   are different properties now and the cascade composes them. */
 function paintRpErr(btn, active) {
-  btn.style.cssText = rpErrStyle(active);
   btn.setAttribute('aria-pressed', active ? 'true' : 'false');
 }
 
-// Applied through here rather than assigned, so `setOptionBlocked` has something to
-// restore the button to when it stops being blocked.
 function paintRpBtn(btn, active) {
-  const css = rpBtnStyle(active, btn.classList.contains('rp-out'));
-  btn.dataset.style = css;
-  if (!isOptionBlocked(btn)) btn.style.cssText = css;
+  btn.setAttribute('aria-pressed', String(active));
 }
 
 function isOptionBlocked(btn) {
@@ -1882,11 +1860,11 @@ function showPlayToast(msg, tone) {
     // Top of the scale. This is the thing that says why a press refused, so it
     // has to clear whatever refused it — including the backdrop's own "Finish
     // the open entry first", which at 400 was painted under the summary (F29).
-    el.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);color:#fff;padding:10px 18px;border-radius:6px;z-index:var(--z-toast);font-family:var(--heading);font-size:13px;font-weight:700;letter-spacing:0.5px;text-align:center;max-width:80vw;box-shadow:0 4px 20px rgba(0,0,0,0.35);';
+    el.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);color:var(--gold);padding:10px 18px;border-radius:6px;z-index:var(--z-toast);font-family:var(--heading);font-size:13px;font-weight:700;letter-spacing:0.5px;text-align:center;max-width:80vw;box-shadow:0 4px 20px rgba(0,0,0,0.35);';
     document.body.appendChild(el);
   }
   el.dataset.tone = tone === 'notice' ? 'notice' : 'reject';
-  el.style.background = tone === 'notice' ? 'var(--navy,#003278)' : 'var(--accent,#c62828)';
+  el.style.background = tone === 'notice' ? 'var(--navy)' : 'var(--accent)';
   el.textContent = msg;
   el.style.display = 'block';
   if (playRejectTimer) clearTimeout(playRejectTimer);
@@ -2137,7 +2115,14 @@ function openPopup(el, display) {
     // Where focus goes back to on close. Held on the element, not in one
     // variable, because a popup can open over another one.
     el.__returnFocus = document.activeElement;
-    el.style.display = display || 'block';
+    // A `.jsp` shell is a flex column — title, then a body that scrolls, then
+    // the action row pinned under it — and `block` breaks all three of those:
+    // `.jsp-body`'s `flex: 1 1 auto; min-height: 0` is what bounds it against
+    // the shell's max-height, and outside a flex context it bounds nothing. The
+    // popup then paints its full content height and clips it, which is the
+    // defect I11 exists to fix, arriving through the display value instead.
+    // Every caller that passes one explicitly still wins.
+    el.style.display = display || (el.classList.contains('jsp') ? 'flex' : 'block');
     // The container, not the first control: focusing a button would read the
     // button and skip the title the popup was just given.
     if (!el.getAttribute('tabindex')) el.setAttribute('tabindex', '-1');
@@ -2793,7 +2778,7 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback, opts) {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'outcome-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:300px;font-family:var(--font);';
+    popup.className = 'jsp';
     document.body.appendChild(popup);
   }
 
@@ -2859,57 +2844,68 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback, opts) {
     return !!oc && oc.action === action && oc.dest === dest;
   };
 
-  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:12px;font-family:var(--heading)">' + play + ' — Runner Outcomes</div>';
+  // The three parts of a `.jsp`: a fixed title, a body that scrolls when the
+  // runners outnumber the screen, and an action row pinned below it. Bases
+  // loaded at 844x390 this popup is 534px tall against 390px of viewport — it
+  // was 426px and clipped at both ends before the shell could scroll (H2).
+  let html = '<div class="jsp-title">' + play + ' — Runner Outcomes</div>';
+  html += '<div class="jsp-body">';
+
+  // One chip. `aria-pressed` paints the selected state *and* says so out loud,
+  // which is the half H4 was missing — the colour was the only signal, and no
+  // assistive tech could read it at all.
+  //
+  // `pressed` is passed in rather than always asked of `opensOn` because the
+  // batter's Out is the one chip with no destination: `outcomes.batter.dest`
+  // stays 0 whether he is safe or out, so a dest comparison would read it as
+  // never selected. Its caller hands in the same `!batterSafe` the markup
+  // used before.
+  const ocChip = (base, action, dest, label, pressed) => {
+    if (pressed === undefined) pressed = opensOn(base, action, dest);
+    return `<button class="oc-btn jsp-chip${action === 'out' ? ' jsp-chip--out' : ''}"`
+      + ` data-base="${base}" data-action="${action}"`
+      + (dest === undefined ? '' : ` data-dest="${dest}"`)
+      + ` aria-pressed="${pressed}">${label}</button>`;
+  };
 
   runners.forEach(r => {
-    html += `<div class="oc-row" data-base="${r.base}" style="margin-bottom:8px;padding:6px;background:var(--cream);border-radius:4px">`;
-    html += `<div style="font-size:11px;font-weight:600;margin-bottom:4px">${escapeHtml(r.name)} <span style="color:var(--text-light)">(on ${r.fromLabel})</span></div>`;
-    html += `<div style="display:flex;gap:4px;flex-wrap:wrap">`;
+    html += `<div class="oc-row jsp-group" data-base="${r.base}">`;
+    html += `<div class="jsp-group-head">${escapeHtml(r.name)} <span class="jsp-from">(on ${r.fromLabel})</span></div>`;
+    html += `<div class="jsp-chips">`;
     // Hold option — keep the runner on their current base (e.g. runner on 3rd during a DP)
-    {
-      const isDefault = opensOn(r.base, 'safe', r.base);
-      html += `<button class="oc-btn" data-base="${r.base}" data-action="safe" data-dest="${r.base}" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid ${isDefault ? '#2e7d32' : '#ccc'};border-radius:3px;background:${isDefault ? '#e8f5e9' : '#fff'};color:${isDefault ? '#2e7d32' : '#555'};cursor:pointer;font-family:var(--mono)">Hold ${r.fromLabel}</button>`;
-    }
+    html += ocChip(r.base, 'safe', r.base, `Hold ${r.fromLabel}`);
     // Safe options
-    for (let d = r.base + 1; d <= 3; d++) {
-      const isDefault = opensOn(r.base, 'safe', d);
-      html += `<button class="oc-btn" data-base="${r.base}" data-action="safe" data-dest="${d}" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid ${isDefault ? '#2e7d32' : '#ccc'};border-radius:3px;background:${isDefault ? '#e8f5e9' : '#fff'};color:${isDefault ? '#2e7d32' : '#555'};cursor:pointer;font-family:var(--mono)">Safe ${baseNames[d]}</button>`;
-    }
+    for (let d = r.base + 1; d <= 3; d++) html += ocChip(r.base, 'safe', d, `Safe ${baseNames[d]}`);
     // Out options
-    for (let d = r.base + 1; d <= 3; d++) {
-      const isDefault = opensOn(r.base, 'out', d);
-      html += `<button class="oc-btn" data-base="${r.base}" data-action="out" data-dest="${d}" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid ${isDefault ? 'var(--accent)' : '#ccc'};border-radius:3px;background:${isDefault ? '#fce4ec' : '#fff'};color:${isDefault ? 'var(--accent)' : '#555'};cursor:pointer;font-family:var(--mono)">Out at ${baseNames[d]}</button>`;
-    }
+    for (let d = r.base + 1; d <= 3; d++) html += ocChip(r.base, 'out', d, `Out at ${baseNames[d]}`);
     html += `</div></div>`;
   });
 
   // Batter outcome
-  html += `<div class="oc-row" data-base="batter" style="margin-bottom:8px;padding:6px;background:var(--cream);border-radius:4px">`;
-  html += `<div style="font-size:11px;font-weight:600;margin-bottom:4px">Batter</div>`;
-  html += `<div style="display:flex;gap:4px;flex-wrap:wrap">`;
   const batterSafe = !isDP;
   const baseLabels = ['1st','2nd','3rd'];
-  for (let d = 0; d < 3; d++) {
-    const isDefault = d === 0 && batterSafe;
-    html += `<button class="oc-btn" data-base="batter" data-action="safe" data-dest="${d}" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid ${isDefault ? '#2e7d32' : '#ccc'};border-radius:3px;background:${isDefault ? '#e8f5e9' : '#fff'};color:${isDefault ? '#2e7d32' : '#555'};cursor:pointer;font-family:var(--mono)">Safe ${baseLabels[d]}</button>`;
-  }
-  html += `<button class="oc-btn" data-base="batter" data-action="out" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid ${!batterSafe ? 'var(--accent)' : '#ccc'};border-radius:3px;background:${!batterSafe ? '#fce4ec' : '#fff'};color:${!batterSafe ? 'var(--accent)' : '#555'};cursor:pointer;font-family:var(--mono)">Out</button>`;
+  html += `<div class="oc-row jsp-group" data-base="batter">`;
+  html += `<div class="jsp-group-head">Batter</div>`;
+  html += `<div class="jsp-chips">`;
+  for (let d = 0; d < 3; d++) html += ocChip('batter', 'safe', d, `Safe ${baseLabels[d]}`);
+  html += ocChip('batter', 'out', undefined, 'Out', !batterSafe);
   html += `</div></div>`;
+  html += '</div>';
 
   // Rule 5.08(a) — see NO_RUN_508A. Hidden until the chosen outcomes make the
   // batter's out the third one, which they can stop doing again on the next click.
-  html += `<div id="oc-508a" style="display:none;font-size:10px;color:var(--accent);margin:2px 0 6px;line-height:1.4">${escapeHtml(NO_RUN_508A)}</div>`;
+  html += `<div id="oc-508a" class="jsp-note" style="display:none">${escapeHtml(NO_RUN_508A)}</div>`;
   // Why the greyed-out Safe options are greyed out — see paintBlockedNote (F26).
   // Same slot and same voice as the bar above it, filled on every refresh.
-  html += `<div id="oc-blocked" style="display:none;font-size:10px;color:var(--accent);margin:2px 0 6px;line-height:1.4"></div>`;
-  html += `<div style="display:flex;gap:6px;margin-top:6px">`;
-  html += `<button id="oc-confirm" style="flex:1;padding:7px;font-size:12px;font-weight:700;background:var(--navy);color:var(--gold);border:none;border-radius:4px;cursor:pointer;font-family:var(--heading);letter-spacing:0.5px;text-transform:uppercase">Confirm</button>`;
+  html += `<div id="oc-blocked" class="jsp-note" style="display:none"></div>`;
+  html += `<div class="jsp-actions">`;
+  html += `<button id="oc-confirm" class="jsp-btn jsp-btn--primary">Confirm</button>`;
   // The same trap F11b closed on the Advance Runners popup, still open in its
   // sibling: DP/FC/TP pressed by mistake could only be escaped by confirming an
   // entry you did not want and then undoing it (F25). What Cancel takes back
   // depends on the caller, so it is handed in — both of this popup's callers are
   // inside `applyPlay` and have a play and a result pitch already written.
-  html += `<button id="oc-cancel" data-dismiss="cancel" style="padding:7px 12px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer;font-family:var(--font)">Cancel</button>`;
+  html += `<button class="jsp-btn jsp-btn--minor" id="oc-cancel" data-dismiss="cancel" >Cancel</button>`;
   html += `</div>`;
   popup.innerHTML = html;
   openPopup(popup);
@@ -2957,9 +2953,10 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback, opts) {
       const isOut = b.dataset.action === 'out';
       const dest = b.dataset.dest ? parseInt(b.dataset.dest) : (isOut ? undefined : 0);
       const isActive = !!oc && oc.action === b.dataset.action && (isOut ? true : oc.dest === dest);
-      b.style.borderColor = isActive ? (isOut ? 'var(--accent)' : '#2e7d32') : '#ccc';
-      b.style.background = isActive ? (isOut ? '#fce4ec' : '#e8f5e9') : '#fff';
-      b.style.color = isActive ? (isOut ? 'var(--accent)' : '#2e7d32') : '#555';
+      // One attribute where three inline colours used to be. `.jsp-chip` reads
+      // it for the safe tone and `.jsp-chip--out` for the out one, so the
+      // repaint no longer has to know which of the two it is painting (I11).
+      b.setAttribute('aria-pressed', String(isActive));
     });
   }
 
@@ -3042,10 +3039,7 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback, opts) {
           if (row) {
             const firstSafe = row.querySelector('.oc-btn[data-action="safe"]');
             row.querySelectorAll('.oc-btn').forEach(b => {
-              const act = b === firstSafe;
-              b.style.borderColor = act ? '#2e7d32' : '#ccc';
-              b.style.background = act ? '#e8f5e9' : '#fff';
-              b.style.color = act ? '#2e7d32' : '#555';
+              b.setAttribute('aria-pressed', String(b === firstSafe));
             });
           }
           outKeys.splice(outKeys.indexOf(revertKey), 1);
@@ -3061,11 +3055,7 @@ function showRunnerOutcomePopup(team, innIdx, play, isDP, callback, opts) {
       }
       // Update button styles in this row
       this.closest('.oc-row').querySelectorAll('.oc-btn').forEach(b => {
-        const isActive = b === this;
-        const isOut = b.dataset.action === 'out';
-        b.style.borderColor = isActive ? (isOut ? 'var(--accent)' : '#2e7d32') : '#ccc';
-        b.style.background = isActive ? (isOut ? '#fce4ec' : '#e8f5e9') : '#fff';
-        b.style.color = isActive ? (isOut ? 'var(--accent)' : '#2e7d32') : '#555';
+        b.setAttribute('aria-pressed', String(b === this));
       });
       refreshOutcomeAvailability();   // last: it repaints whatever it blocks
     };
@@ -3330,7 +3320,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     // Was white-and-#333, the one popup in the set still wearing the old chrome —
     // and it does the same job as the DP/FC outcome popup, which wears the app's
     // navy. Two popups asking the same question should not look like two apps (F11b).
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:300px;font-family:var(--font);';
+    popup.className = 'jsp';
     document.body.appendChild(popup);
   }
 
@@ -3338,14 +3328,14 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
   // pitch or a passed ball is asking a narrower question than "advance runners", and
   // a scorer answering it should be able to see which event he is answering for (m1).
   const title = (opts && opts.title) || 'Advance Runners';
-  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;color:var(--navy);font-family:var(--heading)">' + escapeHtml(title) + '</div>';
+  let html = '<div class="jsp-title">' + escapeHtml(title) + '</div><div class="jsp-body">';
   // Rule 5.08(a) — see NO_RUN_508A. `opts.batterRetired` is the caller saying this
   // play puts the batter out; with two already gone that out is the third, so Home
   // comes off the board for everybody. Said in words as well as greyed out, because
   // an option that is simply missing reads as the app losing track.
   const runBarred = !!(opts && opts.batterRetired) && inn.outs >= 2;
   if (runBarred) {
-    html += '<div style="font-size:10px;color:var(--accent,#c41e3a);margin:-4px 0 10px;line-height:1.4">' + escapeHtml(NO_RUN_508A) + '</div>';
+    html += '<div class="jsp-note">' + escapeHtml(NO_RUN_508A) + '</div>';
   }
   const choices = {};
   // Which runners took their last base on an error, by the base they started from.
@@ -3379,10 +3369,10 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
 
   runners.forEach(r => {
     choices[r.base] = forcedDest(r);
-    html += `<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">`;
-    html += `<span style="font-size:11px;font-weight:600;min-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(r.name)}</span>`;
-    html += `<span style="font-size:10px;color:var(--text-light);min-width:24px">${r.fromLabel}→</span>`;
-    html += `<div style="display:flex;gap:3px;flex-wrap:wrap">`;
+    html += `<div class="jsp-runner">`;
+    html += `<span class="jsp-runner-name">${escapeHtml(r.name)}</span>`;
+    html += `<span class="jsp-runner-from">${r.fromLabel}→</span>`;
+    html += `<div class="jsp-chips">`;
     /* B9 — one vocabulary across both runner popups. This one said "Hold / 2nd /
        3rd / Home / Out 2nd"; its sibling `showRunnerOutcomePopup` said "Hold 1st /
        Safe 2nd / Out at 2nd" for the identical question. The comment above records
@@ -3395,10 +3385,10 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
        base on Hold costs nothing and says which row you are looking at. */
     for (let d = r.minDest; d <= 3; d++) {
       const label = (d === r.base ? 'Hold ' : 'Safe ') + baseNames[d];
-      html += `<button class="rp-btn" data-base="${r.base}" data-dest="${d}" style="${rpBtnStyle(d === choices[r.base], false)}">${label}</button>`;
+      html += `<button class="rp-btn jsp-chip" data-base="${r.base}" data-dest="${d}" aria-pressed="${d === choices[r.base]}">${label}</button>`;
     }
     for (let d = r.base + 1; d <= 3; d++) {
-      html += `<button class="rp-btn rp-out" data-base="${r.base}" data-dest="-${d}" style="${rpBtnStyle(false, true)}">Out at ${baseNames[d]}</button>`;
+      html += `<button class="rp-btn rp-out jsp-chip jsp-chip--out" data-base="${r.base}" data-dest="-${d}" aria-pressed="false">Out at ${baseNames[d]}</button>`;
     }
     // Which base he took is one question; *why* he took it is another, so this is a
     // tick beside the row rather than a fourth destination — a runner can take one
@@ -3412,7 +3402,7 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     //
     // Deliberately not gated on which caller opened the popup. A wild pitch the
     // catcher then threw away is the same play wearing a different name.
-    html += `<button class="rp-err" data-base="${r.base}" aria-pressed="false" title="He took the last of those bases on an error" style="${rpErrStyle(false)}">on E</button>`;
+    html += `<button class="rp-err jsp-chip jsp-chip--out jsp-chip--tick" data-base="${r.base}" aria-pressed="false" title="He took the last of those bases on an error">on E</button>`;
     html += `</div></div>`;
   });
 
@@ -3431,34 +3421,35 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     const batterName = (opts && opts.batterPIdx !== undefined)
       ? getActivePlayerName(team, opts.batterPIdx, innIdx)
       : (selectedCell ? getActivePlayerName(selectedCell.dataset.team, parseInt(selectedCell.dataset.p), parseInt(selectedCell.dataset.inn)) : 'Batter');
-    html += `<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid var(--border-light,#ddd);padding-top:8px">`;
-    html += `<span style="font-size:11px;font-weight:600;min-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(batterName)}</span>`;
-    html += `<span style="font-size:10px;color:var(--text-light);min-width:24px">Batter→</span>`;
-    html += `<div style="display:flex;gap:3px;flex-wrap:wrap">`;
+    html += `<div class="jsp-runner jsp-runner--batter">`;
+    html += `<span class="jsp-runner-name">${escapeHtml(batterName)}</span>`;
+    html += `<span class="jsp-runner-from">Batter→</span>`;
+    html += `<div class="jsp-chips">`;
     for (let d = batterDefaultBase; d <= 2; d++) {
       // Same dialect as the runner rows above, and as the outcome popup's own
       // batter row, which has always said "Safe 1st" (B9).
-      html += `<button class="rp-btn" data-base="batter" data-dest="${d}" style="${rpBtnStyle(d === choices.batterDest, false)}">Safe ${baseNames[d]}</button>`;
+      html += `<button class="rp-btn jsp-chip" data-base="batter" data-dest="${d}" aria-pressed="${d === choices.batterDest}">Safe ${baseNames[d]}</button>`;
     }
     html += `</div></div>`;
   }
 
   if (everyRunnerForced) {
-    html += '<div style="font-size:10px;color:var(--text-light);margin:2px 0 8px;line-height:1.4">Every runner is forced, so the card has filled them in. Tap a base to change one.</div>';
+    html += '<div class="jsp-hint">Every runner is forced, so the card has filled them in. Tap a base to change one.</div>';
   }
 
   // Why the greyed-out bases are greyed out — see paintBlockedNote (F26). The same
   // line as the DP popup's, because it is the same constraint refusing the same way.
-  html += `<div id="rp-blocked" style="display:none;font-size:10px;color:var(--accent);margin:2px 0 6px;line-height:1.4"></div>`;
-  html += `<div style="display:flex;gap:6px;margin-top:6px">`;
-  html += `<button id="rp-confirm" style="flex:1;padding:7px;font-size:12px;font-weight:700;background:var(--navy);color:var(--gold);border:none;border-radius:4px;cursor:pointer;font-family:var(--heading);letter-spacing:0.5px;text-transform:uppercase">Confirm</button>`;
+  html += '</div>';
+  html += `<div id="rp-blocked" class="jsp-note" style="display:none"></div>`;
+  html += `<div class="jsp-actions">`;
+  html += `<button id="rp-confirm" class="jsp-btn jsp-btn--primary">Confirm</button>`;
   // There was no way out of this popup at all — no Cancel, and Escape did nothing —
   // so a play button pressed by mistake meant completing a wrong entry and then
   // undoing it. What Cancel has to take back depends on the caller: the two inside
   // `applyPlay` have already written the play and its result pitch, and hand in a
   // rollback; a wild pitch or an Advance Runners edit writes nothing until Confirm,
   // so for those closing is enough (F11b).
-  html += `<button id="rp-cancel" data-dismiss="cancel" style="padding:7px 12px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer;font-family:var(--font)">Cancel</button>`;
+  html += `<button class="jsp-btn jsp-btn--minor" id="rp-cancel" data-dismiss="cancel" >Cancel</button>`;
   html += `</div>`;
   popup.innerHTML = html;
   openPopup(popup);
@@ -4155,18 +4146,18 @@ function showStrikeoutPopup(target) {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'k-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:20px 24px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);text-align:center;font-family:var(--heading);';
-    popup.innerHTML = '<div style="font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:14px">Strikeout</div>'
-      + '<div style="display:flex;gap:12px;justify-content:center">'
-      + '<button id="k-swinging" style="padding:10px 24px;font-size:16px;font-weight:700;font-family:var(--heading);background:var(--navy);color:var(--gold);border:none;border-radius:6px;cursor:pointer;letter-spacing:1px">K<br><span style=font-size:10px>SWINGING</span></button>'
-      + '<button id="k-looking" style="padding:10px 24px;font-size:16px;font-weight:700;font-family:var(--heading);background:var(--navy);color:var(--gold);border:none;border-radius:6px;cursor:pointer;letter-spacing:1px">ꓘ<br><span style=font-size:10px>LOOKING</span></button>'
+    popup.className = 'jsp jsp--centred';
+    popup.innerHTML = '<div class="jsp-title jsp-title--centred">Strikeout</div>'
+      + '<div class="jsp-actions jsp-actions--centred">'
+      + '<button id="k-swinging" class="jsp-btn jsp-btn--primary jsp-btn--glyph">K<small>SWINGING</small></button>'
+      + '<button id="k-looking" class="jsp-btn jsp-btn--primary jsp-btn--glyph">ꓘ<small>LOOKING</small></button>'
       + '</div>'
       // This popup opens by itself at the third strike and offered only the two
       // ways an at-bat ends there — and being on the pending list it disables the
       // undo that would otherwise be the way out. A foul tip the catcher held, a
       // dropped third strike, a miscounted pitch: all of them left the scorer
       // with a popup and no exit (F6).
-      + '<button id="k-cancel" style="margin-top:12px;width:100%;padding:6px;font-size:11px;font-family:var(--font);border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel — not a strikeout</button>';
+      + '<button class="jsp-btn jsp-btn--wide" id="k-cancel" >Cancel — not a strikeout</button>';
     document.body.appendChild(popup);
   }
   // Rebound on every open so the handlers apply to the batter captured above,
@@ -4675,23 +4666,22 @@ function showBasePickerPopup(title, options, callback) {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'base-picker';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);text-align:center;font-family:var(--heading);';
+    popup.className = 'jsp jsp--centred';
     document.body.appendChild(popup);
   }
-  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:12px">' + title + '</div>';
-  html += '<div style="display:flex;flex-direction:column;gap:6px">';
+  let html = '<div class="jsp-title">' + title + '</div>';
+  html += '<div class="jsp-body jsp-list">';
   options.forEach(o => {
-    const isError = o.extra === 'error';
-    const bg = isError ? 'var(--accent)' : 'var(--navy)';
-    const fg = isError ? '#fff' : 'var(--gold)';
-    html += '<button class="bp-opt" data-from="' + o.from + '" data-extra="' + (o.extra || '') + '" style="padding:8px 20px;font-size:13px;font-weight:600;font-family:var(--heading);background:' + bg + ';color:' + fg + ';border:none;border-radius:5px;cursor:pointer;letter-spacing:0.5px">' + o.label + '</button>';
+    // On an error the base was given, not taken, and the accent says so.
+    const cls = o.extra === 'error' ? ' jsp-btn--onerror' : '';
+    html += '<button class="bp-opt jsp-btn jsp-btn--primary jsp-btn--wide' + cls + '" data-from="' + o.from + '" data-extra="' + (o.extra || '') + '">' + o.label + '</button>';
   });
   html += '</div>';
   // SB, CS and PK all come through here, and none of them had a way out: the
   // picker offered only the bases and rendered with no backdrop, so the way to
   // escape a mis-tapped SB was to tap the card behind it — which is the tap that
   // switched the half-inning under the picker in the first place (F6).
-  html += '<button id="bp-cancel" style="margin-top:10px;width:100%;padding:6px;font-size:11px;font-family:var(--font);border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button>';
+  html += '<button class="jsp-btn jsp-btn--wide" id="bp-cancel" >Cancel</button>';
   popup.innerHTML = html;
   openPopup(popup);
   popup.querySelectorAll('.bp-opt').forEach(btn => {
@@ -4935,23 +4925,23 @@ function editPlayType() {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'edit-play-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:280px;font-family:var(--font);';
+    popup.className = 'jsp';
     document.body.appendChild(popup);
   }
   const plays = ['1B','2B','3B','HR','K','ꓘ','BB','IBB','HBP','SF','SH','CI','IF','K+WP','E'];
-  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:10px;font-family:var(--heading)">Change Play Type</div>';
-  html += '<div style="font-size:11px;color:var(--text-light);margin-bottom:8px">Current: <b>' + ab.play + '</b> — pitches kept</div>';
-  html += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">';
+  let html = '<div class="jsp-title">Change Play Type</div><div class="jsp-body">';
+  html += '<div class="jsp-hint">Current: <b>' + ab.play + '</b> — pitches kept</div>';
+  html += '<div class="jsp-chips">';
   plays.forEach(p => {
     const isCur = p === ab.play;
-    html += '<button class="ep-btn" data-play="' + p + '" style="padding:4px 10px;font-size:11px;font-weight:600;border:1.5px solid ' + (isCur ? 'var(--navy)' : '#ccc') + ';border-radius:4px;background:' + (isCur ? 'var(--navy)' : '#fff') + ';color:' + (isCur ? 'var(--gold)' : '#555') + ';cursor:pointer;font-family:var(--mono)">' + p + '</button>';
+    html += '<button class="ep-btn jsp-chip jsp-chip--pick" data-play="' + p + '" aria-pressed="' + isCur + '">' + p + '</button>';
   });
   html += '</div>';
-  html += '<div style="display:flex;gap:4px;margin-bottom:6px"><span style="font-size:10px;color:var(--text-light)">Or position play:</span>';
-  html += '<input id="ep-custom" type="text" maxlength="10" placeholder="GO 6-3, DP 6-4-3, FC 6..." style="flex:1;font-size:11px;font-family:var(--mono);padding:3px 6px;border:1.5px solid #ccc;border-radius:4px">';
-  html += '</div>';
-  html += '<div style="display:flex;gap:6px"><button id="ep-confirm" style="flex:1;padding:6px;font-size:12px;font-weight:700;background:var(--navy);color:var(--gold);border:none;border-radius:4px;cursor:pointer;font-family:var(--heading);text-transform:uppercase">Apply</button>';
-  html += '<button id="ep-cancel" style="padding:6px 12px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button></div>';
+  html += '<div class="jsp-inline"><span class="jsp-hint">Or position play:</span>';
+  html += '<input id="ep-custom" class="jsp-input" type="text" maxlength="10" placeholder="GO 6-3, DP 6-4-3, FC 6...">';
+  html += '</div></div>';
+  html += '<div class="jsp-actions"><button id="ep-confirm" class="jsp-btn jsp-btn--primary">Apply</button>';
+  html += '<button class="jsp-btn jsp-btn--minor" id="ep-cancel" >Cancel</button></div>';
   popup.innerHTML = html;
   openPopup(popup);
   let chosen = ab.play;
@@ -4959,8 +4949,7 @@ function editPlayType() {
     btn.onclick = function() {
       chosen = this.dataset.play;
       document.getElementById('ep-custom').value = '';
-      popup.querySelectorAll('.ep-btn').forEach(b => { b.style.borderColor = '#ccc'; b.style.background = '#fff'; b.style.color = '#555'; });
-      this.style.borderColor = 'var(--navy)'; this.style.background = 'var(--navy)'; this.style.color = 'var(--gold)';
+      popup.querySelectorAll('.ep-btn').forEach(b => b.setAttribute('aria-pressed', String(b === this)));
     };
   });
   document.getElementById('ep-cancel').onclick = function() { closePopup(popup); };
@@ -5128,26 +5117,26 @@ function moveRunner() {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'move-runner-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:260px;font-family:var(--font);';
+    popup.className = 'jsp';
     document.body.appendChild(popup);
   }
-  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:10px;font-family:var(--heading)">Move Runner</div>';
+  let html = '<div class="jsp-title">Move Runner</div><div class="jsp-body">';
   runners.forEach(r => {
-    html += '<div style="margin-bottom:8px;padding:6px;background:var(--cream);border-radius:4px">';
-    html += '<div style="font-size:11px;font-weight:600;margin-bottom:4px">' + escapeHtml(r.name) + ' <span style="color:var(--text-light)">(on ' + baseNames[r.base] + ')</span></div>';
-    html += '<div style="display:flex;gap:4px">';
+    html += '<div class="jsp-group">';
+    html += '<div class="jsp-group-head">' + escapeHtml(r.name) + ' <span class="jsp-from">(on ' + baseNames[r.base] + ')</span></div>';
+    html += '<div class="jsp-chips">';
     for (let d = 0; d <= 3; d++) {
       if (d === r.base) continue;
       // This is the manual override, but it still can't put two men on one base (#4):
       // an occupied destination isn't offered. Move the other runner first.
       if (d < 3 && inn.bases[d] !== null) continue;
-      html += '<button class="mr-btn" data-from="' + r.base + '" data-to="' + d + '" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid #ccc;border-radius:3px;background:#fff;color:#555;cursor:pointer;font-family:var(--mono)">→ ' + baseNames[d] + '</button>';
+      html += '<button class="mr-btn jsp-chip" data-from="' + r.base + '" data-to="' + d + '" aria-pressed="false">→ ' + baseNames[d] + '</button>';
     }
     // Was "Remove" — see the handler below (m3). It records the out it always was.
-    html += '<button class="mr-btn mr-out" data-from="' + r.base + '" data-to="out" style="padding:3px 8px;font-size:10px;font-weight:600;border:1.5px solid var(--accent);border-radius:3px;background:#fff;color:var(--accent);cursor:pointer;font-family:var(--mono)">Out ' + baseNames[r.base] + '</button>';
+    html += '<button class="mr-btn mr-out jsp-chip jsp-chip--out" data-from="' + r.base + '" data-to="out" aria-pressed="false">Out ' + baseNames[r.base] + '</button>';
     html += '</div></div>';
   });
-  html += '<button data-act="hidePopupById" data-arg="move-runner-popup" style="margin-top:4px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Close</button>';
+  html += '</div><button class="jsp-btn jsp-btn--wide" data-act="hidePopupById" data-arg="move-runner-popup">Close</button>';
   popup.innerHTML = html;
   openPopup(popup);
   popup.querySelectorAll('.mr-btn').forEach(btn => {
@@ -5384,18 +5373,18 @@ function reviewEarnedRuns() {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'er-review-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card,#fff);border:2px solid var(--navy,#003278);border-radius:8px;padding:14px 16px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,0,0,0.35);min-width:280px;max-width:360px;font-family:var(--font)';
+    popup.className = 'jsp';
     document.body.appendChild(popup);
   }
 
   const teamName = (team === 'visiting' ? gameState.info.visitingTeam : gameState.info.homeTeam) || (team === 'visiting' ? 'Visiting' : 'Home');
-  let html = `<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--navy,#003278);margin-bottom:8px">Earned Run Review — ${escapeHtml(teamName)}, Inn ${realInn + 1}</div>`;
+  let html = `<div class="jsp-title">Earned Run Review — ${escapeHtml(teamName)}, Inn ${realInn + 1}</div><div class="jsp-body">`;
 
   if (!erReviewList.length) {
-    html += '<div style="font-size:12px;color:var(--text-light,#666);margin-bottom:10px">No runs scored in this inning.</div>';
+    html += '<div class="jsp-hint">No runs scored in this inning.</div>';
   } else {
     if (inningErProvisional(team, realInn)) {
-      html += '<div style="font-size:11px;color:var(--accent,#c41e3a);margin-bottom:10px;line-height:1.4">This inning had an error, passed ball, or interference. Mark any run that would <b>not</b> have scored without it as <b>unearned</b>.</div>';
+      html += '<div class="jsp-note">This inning had an error, passed ball, or interference. Mark any run that would <b>not</b> have scored without it as <b>unearned</b>.</div>';
     }
     erReviewList.forEach((r, i) => {
       // Three things this got wrong (L1). The man is the one who *ran*, not the one
@@ -5407,15 +5396,15 @@ function reviewEarnedRuns() {
       // `rowLabel` does all three.
       const label = rowLabel(team, r.pIdx + runRowOf(r.ab));
       const unearned = !!r.ab.reachedOnError;
-      html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--border-light,#ddd)">';
-      html += `<div style="font-size:12px;line-height:1.3"><div style="font-weight:600">${escapeHtml(label)}</div><div style="font-size:10px;color:var(--text-light,#666)">${escapeHtml(describeReach(r.ab))}</div></div>`;
-      html += '<div style="display:flex;gap:4px;flex:0 0 auto">';
-      html += `<button data-act="markRunEarned" data-argnum="${i}" style="padding:5px 9px;font-size:11px;font-weight:700;border:1.5px solid ${!unearned ? '#1565c0' : '#ccc'};border-radius:4px;background:${!unearned ? '#e3f2fd' : '#fff'};color:${!unearned ? '#1565c0' : '#666'};cursor:pointer">Earned</button>`;
-      html += `<button data-act="markRunUnearned" data-argnum="${i}" style="padding:5px 9px;font-size:11px;font-weight:700;border:1.5px solid ${unearned ? 'var(--accent,#c41e3a)' : '#ccc'};border-radius:4px;background:${unearned ? '#fdecef' : '#fff'};color:${unearned ? 'var(--accent,#c41e3a)' : '#666'};cursor:pointer">Unearned</button>`;
+      html += '<div class="jsp-split">';
+      html += `<div class="jsp-split-text"><div class="jsp-split-name">${escapeHtml(label)}</div><div class="jsp-split-sub">${escapeHtml(describeReach(r.ab))}</div></div>`;
+      html += '<div class="jsp-chips jsp-chips--tight">';
+      html += `<button data-act="markRunEarned" data-argnum="${i}" class="jsp-chip jsp-chip--pick" aria-pressed="${!unearned}">Earned</button>`;
+      html += `<button data-act="markRunUnearned" data-argnum="${i}" class="jsp-chip jsp-chip--out" aria-pressed="${unearned}">Unearned</button>`;
       html += '</div></div>';
     });
   }
-  html += '<button data-act="hidePopupById" data-arg="er-review-popup" style="margin-top:10px;width:100%;padding:6px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Done</button>';
+  html += '</div><button class="jsp-btn jsp-btn--wide" data-act="hidePopupById" data-arg="er-review-popup">Done</button>';
 
   popup.innerHTML = html;
   openPopup(popup);
@@ -6327,14 +6316,12 @@ function showPositionPopup(prefix, placeholder, target) {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'pos-popup';
-    // Was `#333` — the one dark popup in an otherwise white/navy set. This is the
-    // card/navy the base picker and the strikeout popup use.
-    // `padding` and `gap` are the two figures the phone-landscape block has to
-    // reach to give the field map its extra 20px back, so they live in
-    // styles.css under #pos-popup — an inline style beats an id selector, and
-    // leaving them here made that override silently dead. The rest of this
-    // stays inline with the other ten popups until I11 sweeps them all.
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;z-index:var(--z-popup);display:flex;flex-direction:column;align-items:stretch;box-shadow:0 8px 40px rgba(0,50,120,0.4);font-family:var(--heading);';
+    // Was `#333` — the one dark popup in an otherwise white/navy set. Now the
+    // shared shell, like the other thirteen (I11). The padding and gap the
+    // phone-landscape block trims to buy the field map its 20px are part of
+    // `.jsp`, which is also what made that override reachable: an inline
+    // style beats an id selector and the trim was silently dead before.
+    popup.className = 'jsp';
     // `display:block` is written inline rather than left to the stylesheet
     // because the suite asks whether the keypad is on screen the only way it
     // can under jsdom — by reading `style.display` — and a class alone leaves
@@ -6353,21 +6340,20 @@ function showPositionPopup(prefix, placeholder, target) {
         + '</button>';
     }
     keys += '</div>';
-    const minorStyle = 'flex:1;padding:7px 0;font-size:11px;font-family:var(--font);border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer';
-    popup.innerHTML = '<div id="pos-label" style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);text-align:center"></div>'
-      + '<input id="pos-input" type="text" inputmode="numeric" maxlength="' + POS_MAX + '" readonly'
-      + ' style="width:100%;box-sizing:border-box;font-size:22px;font-family:var(--mono);font-weight:700;padding:6px 8px;border:2px solid var(--navy);border-radius:6px;text-align:center;text-transform:uppercase;background:#fff;color:var(--navy)" autocomplete="off">'
+    popup.innerHTML = '<div id="pos-label" class="jsp-title jsp-title--centred"></div>'
+      + '<input id="pos-input" class="jsp-readout" type="text" inputmode="numeric"'
+      + ' maxlength="' + POS_MAX + '" readonly autocomplete="off">'
       + keys
-      + '<div style="display:flex;gap:6px">'
-      + '<button id="pos-back" style="' + minorStyle + '">⌫ Back</button>'
-      + '<button id="pos-type" style="' + minorStyle + '">Type it</button>'
+      + '<div class="jsp-actions">'
+      + '<button id="pos-back" class="jsp-btn jsp-btn--minor">⌫ Back</button>'
+      + '<button id="pos-type" class="jsp-btn jsp-btn--minor">Type it</button>'
       + '</div>'
       // No Done and no Cancel before: the popup could only be completed with a
       // hardware Return and only escaped with a hardware Escape, neither of which
       // a scorer holding an iPad has (F10).
-      + '<div style="display:flex;gap:6px">'
-      + '<button id="pos-cancel" style="' + minorStyle + '">Cancel</button>'
-      + '<button id="pos-done" style="flex:2;padding:9px 0;font-size:14px;font-weight:700;font-family:var(--heading);letter-spacing:1px;background:var(--navy);color:var(--gold);border:none;border-radius:6px;cursor:pointer">DONE</button>'
+      + '<div class="jsp-actions">'
+      + '<button id="pos-cancel" class="jsp-btn jsp-btn--minor">Cancel</button>'
+      + '<button id="pos-done" class="jsp-btn jsp-btn--primary jsp-btn--lg">DONE</button>'
       + '</div>';
     document.body.appendChild(popup);
     // The pad writes into the field and closes over nothing, so it binds once.
@@ -6676,19 +6662,19 @@ function changePitcher() {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'pitcher-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border:2px solid #333;border-radius:8px;padding:14px 18px;z-index:var(--z-popup);box-shadow:0 6px 30px rgba(0,0,0,0.35);min-width:220px;font-family:var(--font);';
+    popup.className = 'jsp';
     document.body.appendChild(popup);
   }
 
   const pitchers = gameState.teams[pitchingTeam].pitchers;
-  let html = '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;color:#333">Select Pitcher</div>';
+  let html = '<div class="jsp-title">Select Pitcher</div><div class="jsp-body jsp-list">';
   pitchers.forEach((p, i) => {
     const name = p.name || `Pitcher ${i + 1}`;
     const num = p.num ? '#' + p.num + ' ' : '';
     const isActive = getEffectivePitcher(battingTeam, innIdx) === i;
-    html += `<button data-act="setPitcher" data-argnum="${i}" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-bottom:4px;border:1.5px solid ${isActive ? '#1565c0' : '#ccc'};border-radius:4px;background:${isActive ? '#e3f2fd' : '#fff'};cursor:pointer;font-size:12px;font-weight:${isActive ? '700' : '500'};font-family:var(--font)">${escapeHtml(num)}${escapeHtml(name)}</button>`;
+    html += `<button data-act="setPitcher" data-argnum="${i}" class="jsp-list-btn" aria-pressed="${isActive}">${escapeHtml(num)}${escapeHtml(name)}</button>`;
   });
-  html += '<button data-act="hidePopupById" data-arg="pitcher-popup" style="margin-top:6px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button>';
+  html += '</div><button class="jsp-btn jsp-btn--wide" data-act="hidePopupById" data-arg="pitcher-popup">Cancel</button>';
   popup.innerHTML = html;
   openPopup(popup);
 }
@@ -6959,25 +6945,24 @@ function promptSubRemoval(team, pIdx, innIdx) {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'sub-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:280px;max-width:min(92vw,380px);font-family:var(--font);';
+    popup.className = 'jsp';
     document.body.appendChild(popup);
   }
 
   const heading = nextRow !== null ? 'Change this spot?' : 'Take the sub out?';
-  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:8px;font-family:var(--heading)">' + heading + ' <span style="font-size:11px;color:var(--accent);font-weight:600;margin-left:6px">' + escapeHtml(innLabel) + '</span></div>';
-  html += '<div style="font-size:11px;color:var(--text-light);margin-bottom:10px">' + escapeHtml(sub) +
+  let html = '<div class="jsp-title">' + heading + ' <span class="jsp-when">' + escapeHtml(innLabel) + '</span></div><div class="jsp-body jsp-list">';
+  html += '<div class="jsp-hint">' + escapeHtml(sub) +
     ' is batting in spot ' + (Math.floor(pIdx / ROWS_PER_POS) + 1) + ' for ' + escapeHtml(prev) + '.</div>';
   opts.forEach(o => {
-    html += '<button class="sub-opt" data-key="' + o.key + '" style="display:block;width:100%;text-align:left;padding:7px 10px;margin-bottom:6px;border:1.5px solid ' +
-      (o.warn ? 'var(--accent)' : '#ccc') + ';border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-weight:600;font-family:var(--font)">' +
+    html += '<button class="sub-opt jsp-list-btn' + (o.warn ? ' jsp-list-btn--warn' : '') + '" data-key="' + o.key + '">' +
       escapeHtml(o.label) +
-      '<div style="font-size:10px;font-weight:400;margin-top:2px;color:' + (o.warn ? 'var(--accent)' : 'var(--text-light)') + '">' + escapeHtml(o.note) + '</div></button>';
+      '<div class="jsp-list-note">' + escapeHtml(o.note) + '</div></button>';
   });
   if (run.before && !allowed) {
-    html += '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text-light);margin:2px 0 8px">' +
+    html += '<label class="jsp-check">' +
       '<input type="checkbox" id="sub-allow-reentry"> This league allows re-entry — stop warning</label>';
   }
-  html += '<button class="sub-opt" data-key="cancel" style="display:block;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer;font-family:var(--font)">Cancel</button>';
+  html += '<button class="sub-opt jsp-btn jsp-btn--wide" data-key="cancel" >Cancel</button>';
   popup.innerHTML = html;
   openPopup(popup);
 
@@ -7162,17 +7147,18 @@ function promptDHChoice(team, spec) {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'dh-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:280px;max-width:min(92vw,380px);font-family:var(--font);';
+    popup.className = 'jsp';
     document.body.appendChild(popup);
   }
-  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:8px;font-family:var(--heading)">' + escapeHtml(spec.title) + '</div>';
-  html += '<div style="font-size:11px;color:var(--text-light);margin-bottom:10px">' + escapeHtml(spec.body) + '</div>';
+  let html = '<div class="jsp-title">' + escapeHtml(spec.title) + '</div><div class="jsp-body jsp-list">';
+  html += '<div class="jsp-hint">' + escapeHtml(spec.body) + '</div>';
   spec.options.forEach((o, i) => {
-    html += '<button class="dh-opt" data-idx="' + i + '" style="display:block;width:100%;text-align:left;padding:7px 10px;margin-bottom:6px;border:1.5px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-weight:600;font-family:var(--font)">' +
+    html += '<button class="dh-opt jsp-list-btn" data-idx="' + i + '">' +
       escapeHtml(o.label) +
-      (o.note ? '<div style="font-size:10px;font-weight:400;margin-top:2px;color:var(--text-light)">' + escapeHtml(o.note) + '</div>' : '') +
+      (o.note ? '<div class="jsp-list-note">' + escapeHtml(o.note) + '</div>' : '') +
       '</button>';
   });
+  html += '</div>';
   popup.innerHTML = html;
   openPopup(popup);
   popup.querySelectorAll('.dh-opt').forEach(btn => {
@@ -7197,7 +7183,7 @@ function changeFieldPos() {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'pos-change-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:220px;font-family:var(--font);';
+    popup.className = 'jsp';
     document.body.appendChild(popup);
   }
   const positions = ['P','C','1B','2B','3B','SS','LF','CF','RF','DH'];
@@ -7206,15 +7192,15 @@ function changeFieldPos() {
   const halfLabel = team === 'visiting' ? 'T' : 'B';
   const realInn = getRealInning(team, innIdx) + 1;
   const innLabel = halfLabel + realInn;
-  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:10px;font-family:var(--heading)">Position Change <span style="font-size:11px;color:var(--accent);font-weight:600;margin-left:6px">' + innLabel + '</span></div>';
-  html += '<div style="font-size:11px;margin-bottom:8px;color:var(--text-light)">' + escapeHtml(name) + ' — current: <b>' + escapeHtml(current || 'none') + '</b></div>';
-  html += '<div style="display:flex;gap:4px;flex-wrap:wrap">';
+  let html = '<div class="jsp-title">Position Change <span class="jsp-when">' + innLabel + '</span></div><div class="jsp-body">';
+  html += '<div class="jsp-hint">' + escapeHtml(name) + ' — current: <b>' + escapeHtml(current || 'none') + '</b></div>';
+  html += '<div class="jsp-chips">';
   positions.forEach(pos => {
     const isCurrent = pos === current;
-    html += `<button data-act="applyFieldPosFromEl" data-arg="this" data-team="${team}" data-p="${starterP}" data-pos="${pos}" data-inn="${escapeHtml(innLabel)}" style="padding:5px 10px;font-size:11px;font-weight:${isCurrent?'700':'600'};border:1.5px solid ${isCurrent?'var(--navy)':'#ccc'};border-radius:4px;background:${isCurrent?'var(--cream)':'#fff'};color:${isCurrent?'var(--navy)':'#555'};cursor:pointer;font-family:var(--mono)">${pos}</button>`;
+    html += `<button data-act="applyFieldPosFromEl" data-arg="this" data-team="${team}" data-p="${starterP}" data-pos="${pos}" data-inn="${escapeHtml(innLabel)}" class="jsp-chip jsp-chip--pick" aria-pressed="${isCurrent}">${pos}</button>`;
   });
-  html += '</div>';
-  html += '<button data-act="hidePopupById" data-arg="pos-change-popup" style="margin-top:10px;width:100%;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button>';
+  html += '</div></div>';
+  html += '<button class="jsp-btn jsp-btn--wide" data-act="hidePopupById" data-arg="pos-change-popup">Cancel</button>';
   popup.innerHTML = html;
   openPopup(popup);
 }
@@ -7422,17 +7408,17 @@ function recomputePitcherAssignments() {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'recompute-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card,#fff);border:2px solid var(--navy,#003278);border-radius:8px;padding:16px 18px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,0,0,0.35);min-width:260px;max-width:340px;font-family:var(--font);';
+    popup.className = 'jsp';
     document.body.appendChild(popup);
   }
-  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--navy,#003278);margin-bottom:8px">Recompute Pitcher Stats</div>';
+  let html = '<div class="jsp-title">Recompute Pitcher Stats</div>';
   if (!plan.length) {
-    html += '<div style="font-size:12px;color:var(--text-light,#666);margin-bottom:10px">All at-bats are already attributed to the correct pitcher. Nothing to change.</div>';
-    html += '<button data-act="hidePopupById" data-arg="recompute-popup" style="width:100%;padding:6px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Close</button>';
+    html += '<div class="jsp-hint">All at-bats are already attributed to the correct pitcher. Nothing to change.</div>';
+    html += '<button class="jsp-btn jsp-btn--wide" data-act="hidePopupById" data-arg="recompute-popup" >Close</button>';
   } else {
-    html += '<div style="font-size:12px;color:var(--text-light,#666);margin-bottom:10px">Re-attributes <b>' + plan.length + '</b> at-bat' + (plan.length === 1 ? '' : 's') + ' to the correct pitcher based on the pitching changes recorded on the card. This updates IP, PC, H, R, ER, K and BB. It cannot be auto-undone.</div>';
-    html += '<div style="display:flex;gap:6px"><button id="rc-apply" style="flex:1;padding:7px;font-size:12px;font-weight:700;background:var(--navy,#003278);color:var(--gold,#ffffff);border:none;border-radius:4px;cursor:pointer;text-transform:uppercase">Apply</button>';
-    html += '<button id="rc-cancel" style="padding:7px 12px;font-size:12px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer">Cancel</button></div>';
+    html += '<div class="jsp-hint">Re-attributes <b>' + plan.length + '</b> at-bat' + (plan.length === 1 ? '' : 's') + ' to the correct pitcher based on the pitching changes recorded on the card. This updates IP, PC, H, R, ER, K and BB. It cannot be auto-undone.</div>';
+    html += '<div class="jsp-actions"><button id="rc-apply" class="jsp-btn jsp-btn--primary">Apply</button>';
+    html += '<button class="jsp-btn jsp-btn--minor" id="rc-cancel" >Cancel</button></div>';
   }
   popup.innerHTML = html;
   openPopup(popup);
@@ -8109,22 +8095,22 @@ function promptPitcherDecision(which) {
   if (!popup) {
     popup = document.createElement('div');
     popup.id = 'decision-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:16px 20px;z-index:var(--z-popup);box-shadow:0 8px 40px rgba(0,50,120,0.4);min-width:240px;font-family:var(--font);';
+    popup.className = 'jsp';
     document.body.appendChild(popup);
   }
-  let html = '<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--navy);margin-bottom:10px;font-family:var(--heading)">' + title + '</div>';
+  let html = '<div class="jsp-title">' + title + '</div><div class="jsp-body jsp-list">';
   if (!appeared.length) {
-    html += '<div style="font-size:11px;color:var(--text-light);margin-bottom:10px">No pitcher on that side has recorded an out.</div>';
+    html += '<div class="jsp-hint">No pitcher on that side has recorded an out.</div>';
   }
   appeared.forEach(i => {
-    html += '<button class="dp-opt" data-idx="' + i + '" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-bottom:4px;border:1.5px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-family:var(--font)">' +
-      escapeHtml(pitcherLabel(team, i)) + ' <span style="color:var(--text-light);font-size:10px">' + outsToIP(outs[i]) + ' IP</span></button>';
+    html += '<button class="dp-opt jsp-list-btn" data-idx="' + i + '">' +
+      escapeHtml(pitcherLabel(team, i)) + ' <span class="jsp-list-aside">' + outsToIP(outs[i]) + ' IP</span></button>';
   });
   if (which === 'sv') {
-    html += '<button class="dp-opt" data-idx="none" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-bottom:4px;border:1.5px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-family:var(--font)">No save</button>';
+    html += '<button class="dp-opt jsp-list-btn" data-idx="none">No save</button>';
   }
-  html += '<button class="dp-opt" data-idx="auto" style="display:block;width:100%;text-align:left;padding:6px 10px;margin-top:6px;border:1.5px solid var(--navy);border-radius:4px;background:var(--cream);cursor:pointer;font-size:12px;font-weight:700;font-family:var(--font)">Auto (apply the rules)</button>';
-  html += '<button id="dp-cancel" style="display:block;width:100%;margin-top:6px;padding:5px;font-size:11px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer;font-family:var(--font)">Cancel</button>';
+  html += '<button class="dp-opt jsp-list-btn jsp-list-btn--lead" data-idx="auto">Auto (apply the rules)</button>';
+  html += '</div><button class="jsp-btn jsp-btn--wide" id="dp-cancel">Cancel</button>';
   popup.innerHTML = html;
   openPopup(popup);
   popup.querySelectorAll('.dp-opt').forEach(btn => {
@@ -8436,7 +8422,9 @@ function showGameSummary() {
     html += '<div class="gs-hl-detail" style="color:var(--text-light)">' + escapeHtml(potg.team) + '</div></div>';
   }
   if (decisions.winTeam) {
-    const change = w => '<button data-act="promptPitcherDecision" data-arg="' + w + '" style="margin-left:6px;font-size:9px;padding:1px 5px;border:1px solid var(--border);border-radius:3px;background:transparent;color:var(--text-light);cursor:pointer;font-family:var(--font)">change</button>';
+    // H2 named this one: font-size:9px, padding:1px 5px, about 13px tall, and
+    // it is the control that overrides who gets the win. Same 40px as the rest.
+    const change = w => '<button data-act="promptPitcherDecision" data-arg="' + w + '" class="gs-change-btn">change</button>';
     const nameOf = (team, idx) => (idx === null || idx === undefined || idx < 0) ? '—' : escapeHtml(pitcherLabel(team, idx));
     html += '<div class="gs-highlight-card"><div class="gs-hl-label">Pitching Decision</div>';
     html += '<div class="gs-pitching-line"><b>W:</b> ' + nameOf(decisions.winTeam, decisions.wp) + change('wp') + '</div>';

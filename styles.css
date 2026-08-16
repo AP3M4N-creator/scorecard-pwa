@@ -117,6 +117,29 @@
   --play-bb:  rgba(0,50,120,0.32);
   --play-dp:  rgba(106,27,154,0.33);
 
+  /* Safe, and the tint behind a chip that is on it. The only pair here that is
+     neither navy nor red, and it is the same rgb(23,105,58) the card already
+     paints a hit in — so it is a value the skin owns, read at full strength
+     instead of at 0.40.
+
+     It exists because the popups needed a *safe* and had been spelling it in
+     Material's #2e7d32/#e8f5e9, which is a green from no palette in this file
+     (H1). Safe/out is the umpire's own signal and the fastest thing a beginner
+     reads off a runner popup, so it keeps a colour of its own rather than
+     folding into the navy every other selected control uses. Red stays the
+     out: --accent.
+
+     4.5:1 is the bar. A chosen chip fills, so the pairing that matters is
+     white on the fill: 6.73:1 on --safe and 6.29:1 on --accent (12.16:1 on
+     --navy, which the pitcher and position pickers use). At rest the ink is on
+     the white card — --safe reads 6.73:1 there, --accent 6.29:1, --text-light
+     5.41:1 — and --safe-soft is the hover tint beneath it, where --text-light
+     measures 4.52:1 and so sets how far that tint may go. The one thing under
+     the bar is a blocked chip at 0.5 opacity; WCAG exempts inactive controls,
+     and it carries a dashed border and its reason on `title` besides. */
+  --safe: #17693a;
+  --safe-soft: rgba(23,105,58,0.12);
+
   --cell-w: 90px;
   --cell-h: 62px;
 
@@ -848,6 +871,300 @@ details.info-details > summary:hover { color: var(--navy); }
 .spray-popup .spray-skip:hover { background: var(--cream-dark); border-color: var(--navy); }
 
 /* ============================================================
+   The popups app.js builds (I11, closing H1 / H2 / H4)
+
+   Thirteen popups were assembled from inline styles carrying ~160 hardcoded
+   hex values, in a Material palette that exists nowhere in this file: #ccc
+   x38, #fff x34, #f5f5f5 x14, #555 x13, #2e7d32 x13, #e8f5e9 x6, #fce4ec x4,
+   #1565c0 x4. They did not look like the app because they were not painted
+   from it. Everything below is tokens, and app.js now names classes.
+
+   Ahead of the guided builder (I2) rather than after it: that step adds a
+   fourteenth full-screen sheet, and building it against a palette that was
+   about to be deleted means building it twice.
+
+   --- Why the shell scrolls (H2, and a live defect found measuring it) ---
+
+   Popup controls ran 22-30px against the 40x40 the deck holds itself to at
+   phone landscape, and the measured target table above never covered them.
+   Raising them costs height, and there was none: measured at 844x390 with the
+   bases loaded, the DP runner-outcome popup was **426px tall in a 390px
+   viewport** before any of this — 18px clipped off the top and 18px off the
+   bottom, which is the title cut in half and Confirm unreachable. Not a
+   regression from raising targets; the popup was already broken there, and
+   `position: fixed` centring means it clips at *both* ends with no scroll to
+   recover either.
+
+   So the shell caps its own height and scrolls, and the action row is pinned
+   outside the scroller so Confirm can never be the thing that scrolls away.
+   That is what makes 40px affordable.
+
+   Measured after, at 844x390: three popups scroll their bodies — outcome by
+   185px, pitcher by 82px, runner by 31px — and all three keep their title and
+   their actions on screen. Every other popup fits whole. At the four other
+   target sizes nothing scrolls at all: the worst of them stands 559px against
+   768, 834 or 844 of height. The per-control figures are in the target table
+   above, with what each one measured before.
+
+   `dvh`, not `vh`: on iOS Safari `vh` is the *largest* viewport, so a cap in
+   vh is taller than the screen whenever the toolbars are showing, which is
+   the case this exists to catch.
+
+   --- Selected state (H4) ---
+
+   Selection was colour alone and carried no `aria-pressed`. It now carries
+   both, plus two channels that survive greyscale: an inset 2px ring where
+   the unselected chip has a 1px hairline, and 700 against 600. A glyph was
+   the other candidate and was dropped on width — these chips wrap, and in
+   the outcome popup every extra line is 40px of a popup already scrolling.
+   ============================================================ */
+.jsp {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  z-index: var(--z-popup);
+  display: none; flex-direction: column;
+  background: var(--card); border: 3px solid var(--navy); border-radius: 10px;
+  box-shadow: 0 8px 40px rgba(0,50,120,0.4);
+  font-family: var(--font);
+  padding: 14px 16px; gap: 8px;
+  /* One family, bounded both ways. The thirteen shells carried five different
+     minimums (220/240/260/280/300) and four different caps (none/340/360/380)
+     picked one popup at a time; 280 is the median of the first set and 460
+     clears the widest popup measured (the outcome popup at 422px) while still
+     stopping a one-sentence popup from running the full width of an iPad. */
+  min-width: min(280px, calc(100vw - 24px));
+  max-width: min(460px, calc(100vw - 16px - var(--sa-l) - var(--sa-r)));
+  max-height: calc(100dvh - 16px);
+  /* The backstop, for the popups that have no `.jsp-body` to absorb overflow
+     into. Where there is one it takes the scroll first and this never fires;
+     where there is not, a popup that outgrows the screen scrolls whole rather
+     than losing its bottom edge, which is the failure mode being fixed. */
+  overflow-y: auto;
+}
+/* The strikeout picker and the base picker are a title and a row of choices
+   with nothing to read, so they centre and set in the display face. */
+.jsp--centred { text-align: center; font-family: var(--heading); }
+
+/* app.js opens popups with `display: flex` or `display: block` through
+   `openPopup`, which writes the inline value — so the class only has to
+   supply the resting `none` and the column direction. */
+.jsp-title {
+  flex: 0 0 auto;
+  font-family: var(--heading); font-size: 13px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1px; color: var(--navy);
+}
+/* The only part that scrolls. `min-height: 0` because a flex item's default
+   `auto` floor is its content, which would push the shell past its own
+   max-height and put the clipping straight back. */
+.jsp-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.jsp-actions { flex: 0 0 auto; display: flex; gap: 6px; }
+.jsp-note {
+  flex: 0 0 auto;
+  font-size: 11px; color: var(--accent); line-height: 1.4;
+}
+.jsp-hint { font-size: 11px; color: var(--text-light); line-height: 1.4; }
+
+/* One runner and his choices. */
+.jsp-group { padding: 7px 8px; background: var(--cream); border-radius: 4px; }
+.jsp-group-head {
+  font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 5px;
+}
+.jsp-group-head .jsp-from { color: var(--text-light); font-weight: 500; }
+.jsp-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+
+/* The other runner popup lays a runner out along a line — name, the base he
+   is leaving, then his choices — rather than in a boxed group. */
+.jsp-runner { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.jsp-runner--batter { border-top: 1px solid var(--border-light); padding-top: 8px; }
+.jsp-runner-name {
+  font-size: 12px; font-weight: 600; color: var(--text);
+  min-width: 100px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.jsp-runner-from { font-size: 11px; color: var(--text-light); min-width: 24px; }
+/* "on E" answers *why* he took the base, not which one, so it stands off from
+   the destinations it rides beside. */
+.jsp-chip--tick { margin-left: 6px; }
+
+/* 40px is the deck's own phone-landscape figure, and these are controls a
+   scorer uses mid-play — the same standard, at last. */
+.jsp-chip {
+  min-height: 40px; padding: 4px 9px; cursor: pointer;
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  border: 1px solid var(--border-light); border-radius: 4px;
+  background: var(--card); color: var(--text-light);
+}
+.jsp-chip:hover:not(:disabled) { background: var(--safe-soft); }
+.jsp-chip--out:hover:not(:disabled),
+.jsp-chip--pick:hover:not(:disabled) { background: var(--blue-light); }
+
+/* Selection fills. F11b settled that on the runner popup — the chosen state
+   there had been a pale tint a shade off the unchosen one, on a popup whose
+   whole job is showing you what you have answered — and the argument is no
+   weaker on its sibling, so both wear it now. It is also the honest answer to
+   H4: an inverted button differs from an outlined one in greyscale, so the
+   state is not carried by hue alone, and `aria-pressed` carries it to anyone
+   not looking at hue at all.
+
+   Green safe, red out. Two popups asked the same question in two palettes —
+   the outcome popup in Material green, the runner popup in navy — which is
+   the colour half of B9, the wording half having gone in step 0. */
+.jsp-chip[aria-pressed="true"] {
+  font-weight: 700;
+  border-color: var(--safe); background: var(--safe); color: var(--gold);
+}
+.jsp-chip--out { color: var(--accent); }
+.jsp-chip--out[aria-pressed="true"] {
+  border-color: var(--accent); background: var(--accent); color: var(--gold);
+}
+/* Selection that is not safe-or-out — a pitcher, a base, an Earned run. Navy
+   is the app's own "this one", and these have no opposite to distinguish. */
+.jsp-chip--pick[aria-pressed="true"] {
+  border-color: var(--navy); background: var(--navy); color: var(--gold);
+}
+/* Dashed, not just faint: the reason is on the button's own `title` and in
+   the note under the list, and the scorer has to be able to tell a refused
+   option from a merely unchosen one before tapping it. */
+.jsp-chip:disabled {
+  cursor: not-allowed; opacity: 0.5;
+  border-style: dashed; border-color: var(--border-light);
+  background: var(--card); color: var(--text-light);
+}
+.jsp-chip:focus-visible, .jsp-btn:focus-visible, .jsp-list-btn:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+
+.jsp-btn {
+  min-height: 40px; padding: 6px 12px; cursor: pointer;
+  font-family: var(--heading); font-size: 12px; font-weight: 700;
+  letter-spacing: 0.5px; text-transform: uppercase;
+  border: 1px solid var(--rule); border-radius: 4px;
+  background: var(--cream); color: var(--text);
+}
+.jsp-btn--primary {
+  flex: 2; border: none; background: var(--navy); color: var(--gold);
+}
+.jsp-btn--minor { flex: 1; }
+/* A popup whose only action is "I am done looking at this" gives it the whole
+   width rather than pairing it with a primary. */
+.jsp-btn--wide { width: 100%; flex: none; }
+.jsp-btn--danger { color: var(--accent); border-color: var(--accent); }
+.jsp-btn:hover:not(:disabled) { background: var(--cream-dark); border-color: var(--navy); }
+.jsp-btn--primary:hover:not(:disabled) { background: var(--navy); filter: brightness(1.15); }
+
+/* A described row with its controls pushed to the far end — the earned-run
+   review's "who scored, and how he reached" against Earned / Unearned. */
+.jsp-split {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 5px 0; border-top: 1px solid var(--border-light);
+}
+.jsp-split-text { font-size: 12px; line-height: 1.3; }
+.jsp-split-name { font-weight: 600; color: var(--text); }
+.jsp-split-sub { font-size: 11px; color: var(--text-light); }
+.jsp-chips--tight { flex: 0 0 auto; flex-wrap: nowrap; }
+
+/* A label and a field on one line — "Or position play: [______]". */
+.jsp-inline { display: flex; gap: 6px; align-items: center; }
+.jsp-input {
+  flex: 1; min-height: 40px; padding: 4px 8px;
+  font-family: var(--mono); font-size: 12px;
+  border: 1px solid var(--border-light); border-radius: 4px;
+  background: var(--card); color: var(--text);
+}
+.jsp-input:focus { outline: 2px solid var(--navy); outline-offset: -1px; }
+
+/* A vertical list of choices — pitchers, substitutes, positions. */
+.jsp-list { display: flex; flex-direction: column; gap: 4px; }
+.jsp-list-btn {
+  display: block; width: 100%; text-align: left;
+  min-height: 40px; padding: 6px 10px; cursor: pointer;
+  font-family: var(--font); font-size: 12px; font-weight: 500;
+  border: 1px solid var(--border-light); border-radius: 4px;
+  background: var(--card); color: var(--text);
+}
+.jsp-list-btn[aria-pressed="true"] {
+  font-weight: 700;
+  border-color: var(--navy); background: var(--blue-light); color: var(--navy);
+  box-shadow: inset 0 0 0 2px var(--navy);
+}
+.jsp-list-btn:hover { background: var(--cream); border-color: var(--navy); }
+.jsp-list-btn[aria-pressed="true"]:hover { background: var(--blue-light); }
+/* The second line under a choice — what taking it will do. */
+.jsp-list-note {
+  font-size: 11px; font-weight: 400; margin-top: 2px; color: var(--text-light);
+}
+/* A choice that undoes something, or re-enters a player the league may not
+   allow. The reason is in its own note, so the border only has to flag it. */
+.jsp-list-btn--warn { border-color: var(--accent); }
+.jsp-list-btn--warn .jsp-list-note { color: var(--accent); }
+/* "Auto (apply the rules)" — the recommended way out of a decision popup, set
+   apart from the pitchers listed above it. */
+.jsp-list-btn--lead {
+  margin-top: 6px; font-weight: 700;
+  border-color: var(--navy); background: var(--cream);
+}
+.jsp-list-aside { color: var(--text-light); font-size: 11px; font-weight: 400; }
+/* The inning a change is being recorded at, beside the popup's own title. */
+.jsp-when {
+  font-size: 11px; color: var(--accent); font-weight: 600; margin-left: 6px;
+}
+.jsp-check {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--text-light);
+}
+.jsp-title--centred { text-align: center; }
+/* The line the fielder pad is building — `6-3` as it is assembled. A readout
+   first and a field second: it is readonly until "Type it" hands it over. */
+.jsp-readout {
+  width: 100%; box-sizing: border-box; min-height: 40px;
+  font-family: var(--mono); font-size: 22px; font-weight: 700;
+  padding: 6px 8px; text-align: center; text-transform: uppercase;
+  border: 2px solid var(--navy); border-radius: 6px;
+  background: var(--card); color: var(--navy);
+}
+/* The one action big enough to find without looking — DONE on the fielder
+   picker, which a scorer presses mid-play with the game still going. */
+.jsp-btn--lg { min-height: 46px; font-size: 14px; letter-spacing: 1px; }
+/* The scorebook mark over the word for it — `K` above SWINGING. This popup
+   opens by itself at the third strike, so the two glyphs are the thing the
+   scorer is aiming at and they get the room. */
+.jsp-btn--glyph {
+  flex: 1; min-height: 52px; padding: 8px 18px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; font-size: 17px; letter-spacing: 1px;
+}
+.jsp-btn--glyph small { font-size: 10px; font-weight: 600; letter-spacing: 0.5px; }
+.jsp-actions--centred { justify-content: center; gap: 12px; }
+/* A base taken on the defence's mistake rather than the runner's legs. */
+.jsp-btn--onerror { background: var(--accent); }
+.jsp-btn--onerror:hover:not(:disabled) { background: var(--accent); filter: brightness(1.15); }
+
+/* H2 named this one by name: `font-size:10px;padding:2px 7px`, about 13px
+   tall, on the control that re-attributes every recorded at-bat to a
+   different pitcher. Not a popup, but the same defect and the same fix. */
+.fix-stats-btn {
+  min-height: 40px; padding: 4px 10px; cursor: pointer;
+  font-family: var(--heading); font-size: 11px; font-weight: 700;
+  letter-spacing: 0.3px;
+  border: 1px solid var(--navy); border-radius: 4px;
+  background: var(--card); color: var(--navy);
+}
+.fix-stats-btn:hover { background: var(--cream); }
+
+/* The third control H2 measured — the summary's W/L/SV override, 9px type in a
+   1px-by-5px box. It sits inline in a sentence, so it stays visually small and
+   grows its *target* instead: the padding does the work and the line-height
+   keeps it from pushing the sentence apart. */
+.gs-change-btn {
+  margin-left: 6px; min-height: 40px; padding: 4px 10px; cursor: pointer;
+  font-family: var(--font); font-size: 11px; line-height: 1;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: var(--text-light);
+}
+.gs-change-btn:hover { background: var(--cream); color: var(--navy); }
+
+/* ============================================================
    The fielder picker's field map (I3)
 
    `showPositionPopup` asked for the fielders on a 3x3 numeric grid — `1 P`
@@ -895,12 +1212,6 @@ details.info-details > summary:hover { color: var(--navy); }
    in the suite. Shrink a key and the test still passes; move one and it
    may not, which is the point.
    ============================================================ */
-/* The popup's own box is still assembled inline in app.js with the other ten
-   — that whole palette is I11's sweep, not this step's. Only the two figures
-   the landscape block has to reach come out here, because an inline style
-   beats an id selector and the override would have been silently dead. */
-#pos-popup { padding: 14px 16px; gap: 8px; }
-
 .pos-map {
   --pm-s: 1;
   position: relative; margin: 0 auto;
@@ -1128,6 +1439,44 @@ details.info-details > summary:hover { color: var(--navy); }
    Before, for the two families this block moved: the lineup controls were 24px
    tall at every one of those widths (28px for the text inputs), and the
    linescore was 21 / 21 / 26 / 23 / 17.
+
+   --- The popups app.js builds (I11) ---
+
+   This table covered the deck, the lineup and the linescore, and stopped there.
+   The thirteen popups were the family it never reached, and they ran 22-30px —
+   on controls a scorer uses mid-play, with a runner on the move. H2.
+
+   They are on the standard now, and the standard is 40px: the same figure the
+   deck's own play buttons hold at phone landscape. Height is 40 at every one of
+   the five sizes, because nothing about it is width-derived — so only the two
+   ends of the range are worth recording, and the middle three read the same as
+   the first.
+
+                                 1194x834   844x390     before
+     chip (Hold 3rd)                73x40     73x40      67x22
+     primary (CONFIRM)             268x40    243x40     162x30
+     minor (Cancel)                148x40    135x40      63x30
+     list row (a pitcher)          242x40    242x40     180x29
+     field-map key                  44x40     44x40          -
+     fielder readout               300x45    300x40     300x45
+     fielder DONE                  187x46    187x40     187x35
+     strikeout K / ꓘ               115x53    115x53     115x43
+     summary W/L/SV "change"            -         -      33x13
+
+   Two of those are deliberately not 40 flat. The strikeout glyphs are 53px
+   because that popup opens by itself at the third strike and the two marks are
+   the whole target. The fielder popup's readout and DONE are 45 and 46 at rest
+   and give the 5-6px back in phone landscape only, where the field map has to
+   fit whole beside them — the arithmetic is in that block.
+
+   What that costs in popup height, measured: the worst popup (runner outcomes,
+   bases loaded) goes 426 -> 559px. At 1194x834, 1024x768, 834x1194 and 390x844
+   it fits whole with room to spare and scrolls 0. At 844x390 it caps at 374 in
+   a 390px viewport and its *body* scrolls 185px with the action row pinned
+   outside the scroller — which is strictly better than what it did before,
+   which was to stand 426px tall in that viewport and clip 18px off each end,
+   title cut in half and Confirm unreachable. Two others scroll there and
+   nowhere else: the pitcher list by 82px, and the runner popup by 31px.
 
    Still short, on purpose:
 
@@ -2397,8 +2746,18 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
 
      Taken off the chrome and not off the map on purpose. The map is the only
      part of this popup that has to be read spatially; the padding is not
-     doing any teaching. */
+     doing any teaching.
+
+     I11 then spent that 20px again, on its own terms: this popup's own
+     controls were part of the 22-30px family H2 was about, and taking the two
+     minor rows to 40px and DONE to 46px put it back at 375px against a 374px
+     cap. So the two figures that are only *emphasis* give way here — DONE
+     drops to the same 40px as everything else, and the readout sets at 18px
+     rather than 22px — which measures 364px, 13px clear each side. The map and
+     its 44x40 keys are untouched: they are the part that has to be read. */
   #pos-popup { padding: 8px 10px; gap: 6px; }
+  #pos-popup .jsp-btn--lg { min-height: 40px; font-size: 13px; }
+  #pos-popup .jsp-readout { font-size: 18px; }
 }
 
 

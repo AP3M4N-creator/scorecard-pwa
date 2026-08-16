@@ -191,6 +191,26 @@ function stylesheetChecks() {
     const css = code('styles.css');
     const sources = ['styles.css', 'app.js', 'ui.js', 'index.html'];
 
+    /* Custom properties the stylesheet declares.
+
+       Only inside a rule body, which matters more than it looks: `--name:` also
+       matches a BEM modifier carrying a pseudo-class, so `.jsp-chip--out:hover`
+       read as a declaration of `--out`. That made three of I11's class names
+       look like tokens nothing reads, and — worse, because it fails silently —
+       it would have let a genuine `var(--out)` typo resolve against a selector.
+
+       Innermost braces only. A media query's own braces wrap nested rules, so
+       `[^{}]*` skips the wrapper and lands on the rules inside it, which is
+       where declarations actually live. */
+    const declaredTokens = () => {
+      const names = new Set();
+      (css.match(/\{[^{}]*\}/g) || []).forEach(body => {
+        (body.match(/--[A-Za-z0-9-]+\s*:/g) || [])
+          .forEach(m => names.add(m.replace(/\s*:$/, '')));
+      });
+      return names;
+    };
+
     /* F30. Three `:root` blocks, the second unconditionally redeclaring most of
        the first by source order. Media-query copies are fine and expected —
        that is how --cell-w steps down — so this counts only the ones that stand
@@ -215,7 +235,7 @@ function stylesheetChecks() {
        where something actually writes *that* name: misspell either side and
        the read no longer has a writer, and it is reported. */
     check('every var(--x) resolves to something', () => {
-      const declared = new Set((css.match(/--[A-Za-z0-9-]+\s*:/g) || []).map(m => m.replace(/\s*:$/, '')));
+      const declared = declaredTokens();
       const runtime = new Set((code('ui.js').match(/setProperty\(\s*'(--[A-Za-z0-9-]+)'/g) || [])
         .map(m => m.slice(m.indexOf("'") + 1, -1)));
       // Custom properties app.js and index.html set in inline styles.
@@ -237,7 +257,7 @@ function stylesheetChecks() {
     });
 
     check('no token is declared that nothing reads', () => {
-      const declared = new Set((css.match(/--[A-Za-z0-9-]+\s*:/g) || []).map(m => m.replace(/\s*:$/, '')));
+      const declared = declaredTokens();
       const used = new Set();
       sources.forEach(f => {
         const s = code(f);

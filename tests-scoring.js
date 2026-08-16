@@ -6394,12 +6394,99 @@
     open('popup-backdrop', () => showPopupBackdrop());
     ok('the case opened something to look at', built.length >= 3);
     built.forEach(el => {
+      // I11 moved the thirteen popup shells onto the `.jsp` class, so a popup
+      // now takes its rung from the stylesheet — which is a stronger version
+      // of what this case wants, since that is also where --z-popup is
+      // declared. The two that are not popups in that sense (the toast and
+      // the backdrop) still name their own token inline.
       const inline = el.getAttribute('style') || '';
-      ok(`#${el.id} declares a z-index at all`, /z-index/i.test(inline));
+      const shell = el.classList.contains('jsp');
+      ok(`#${el.id} gets a z-index from somewhere`, shell || /z-index/i.test(inline));
+      // The invariant is unchanged and is the whole point: name a rung, never
+      // pick one. A literal is what let two ladders drift apart in F29.
       ok(`#${el.id} names a token, not a number — got ${JSON.stringify(
             (inline.match(/z-index\s*:\s*[^;]+/i) || [''])[0])}`,
         !/z-index\s*:\s*-?\d/i.test(inline));
     });
+  });
+
+  /* ---- I11: the popups are painted from the stylesheet, not by hand ----
+
+     What went wrong was not any one colour. It was that thirteen popups were
+     each assembled from its own inline styles, so the palette existed in ~160
+     copies and no two popups had to agree — H1's Material green, four
+     different border greys, five different minimum widths. A sweep like that
+     is only worth doing once, and this is what stops the next popup being
+     built the old way: the shell is a class, the controls are classes, and a
+     hex literal in generated markup fails here.
+
+     jsdom loads no stylesheet, so none of this can measure a rendered button —
+     the 40px target figures and the scroll behaviour were measured in a browser
+     and are recorded in styles.css. What the DOM *can* answer is whether app.js
+     is naming the vocabulary or painting around it, which is where the defect
+     lived. */
+  test('every popup app.js builds is painted by class, not by inline colour', () => {
+    sel('visiting', 0, 0);
+    const opened = [];
+    const open = (id, fn) => {
+      try { fn(); } catch (e) { fail(`${id} threw while opening: ${e.message}`); }
+      const el = document.getElementById(id);
+      if (el && el.classList.contains('jsp')) opened.push(el);
+      return el;
+    };
+    open('base-picker', () => showBasePickerPopup('t', [{ label: 'a', from: 0 }], () => {}));
+    open('pitcher-popup', () => changePitcher());
+    open('pos-popup', () => promptGroundout());
+    dismissPopupById('pos-popup');
+    open('k-popup', () => showStrikeoutPopup(cellOf('visiting', 0, 0)));
+    dismissPopupById('k-popup');
+    open('outcome-popup', () => { play('1B'); play('FC 6'); });
+    open('recompute-popup', () => recomputePitcherAssignments());
+    open('dh-popup', () => promptDHChoice('visiting', {
+      title: 'DH', body: 'b', options: [{ label: 'one', note: 'n' }, { label: 'two' }]
+    }));
+
+    ok(`the case opened a fair sample — got ${opened.length}`, opened.length >= 6);
+
+    opened.forEach(el => {
+      // The shell's own box — border, shadow, centring, the max-height that
+      // stops it clipping — comes from `.jsp` and from nowhere else.
+      const inline = el.getAttribute('style') || '';
+      ok(`#${el.id} leaves its own box to the stylesheet`,
+        !/(background|border|box-shadow|padding|max-height)\s*:/i.test(inline));
+      ok(`#${el.id} names its heading`, !!el.querySelector('.jsp-title'));
+
+      // No literal colour anywhere in what it generated. This is the check that
+      // would have failed on all thirteen before the sweep.
+      const hex = (el.innerHTML.match(/#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?\b/g) || [])
+        // `&#39;` and friends are entities, not colours.
+        .filter(h => !/^#[0-9]{2,3}$/.test(h));
+      eq(`#${el.id} carries no hex literal`, hex.join(', '), '');
+
+      // Every control is one of the named kinds. A button with its own inline
+      // padding or background is one that skipped the vocabulary — which is
+      // also how H2's 22-30px targets survived a stylesheet that already had a
+      // measured target table.
+      const strays = [...el.querySelectorAll('button')].filter(b => {
+        const s = b.getAttribute('style') || '';
+        const named = /(^|\s)(jsp-btn|jsp-chip|jsp-list-btn|pos-key)(\s|$)/.test(b.className);
+        return !named || /(padding|background|border|font-size)\s*:/i.test(s);
+      }).map(b => (b.id || b.className || b.textContent || '?').slice(0, 30));
+      eq(`#${el.id}: every control is a named kind`, strays.join(' | '), '');
+    });
+
+    // And the state that H4 was about. `aria-pressed` is what carries "this one
+    // is chosen" to anything not reading colour, and the stylesheet paints off
+    // the same attribute — so the look and the announcement cannot disagree.
+    const oc = document.getElementById('outcome-popup');
+    const chips = [...oc.querySelectorAll('.oc-btn')];
+    ok('the outcome chips exist to check', chips.length > 0);
+    ok('every chip says whether it is chosen',
+      chips.every(b => b.getAttribute('aria-pressed') === 'true' ||
+                       b.getAttribute('aria-pressed') === 'false'));
+    ok('and exactly the chosen ones say true',
+      chips.some(b => b.getAttribute('aria-pressed') === 'true'));
+    dismissPopupById('outcome-popup');
   });
 
   /* ---- F22: the summary's change links open a popup you can see ------- */
