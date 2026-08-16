@@ -1063,6 +1063,107 @@
     clickId('pos-cancel');
   });
 
+  /* ---- I3: the nine keys are laid out on a field, not on a dialpad ----
+
+     jsdom has no layout, so none of this can be measured off the page. What it
+     can do is read `FIELD_MAP` — which is the single source the markup, the
+     drawing and these checks all come from — and hold it to the two things that
+     make the map worth building.
+
+     One is topology: a beginner is learning that 6 stands between second and
+     third and 8 in dead centre, and a table that quietly put 4 to the left of 6
+     would teach the wrong thing while every existing test above still passed,
+     because `posPadTap` does not care where a key sits.
+
+     The other is that the 44x40 targets do not overlap. That constraint is what
+     the whole geometry was solved against and it is the one a later tweak by eye
+     would break — nudging a fielder 6px for looks can close a separation that
+     was exact, and on a real device the result is a key that eats its
+     neighbour's taps. Cheap to check here, invisible otherwise. */
+  test('the field map puts all nine fielders where they stand', () => {
+    const M = FIELD_MAP, at = M.at, cx = M.w / 2;
+    // Deeper on the field is a smaller y: home plate is at the bottom.
+    const deeper = (a, b) => at[a][1] < at[b][1];
+
+    eq('nine fielders, no more', Object.keys(at).length, 9);
+    ok('every fielder has a place', [1,2,3,4,5,6,7,8,9].every(i => Array.isArray(at[i])));
+
+    ok('the catcher is behind the plate', at[2][1] > M.home[1]);
+    ok('and he is the only one there',
+      [1,3,4,5,6,7,8,9].every(i => at[i][1] < M.home[1]));
+
+    ok('8 is in dead centre', at[8][0] === cx);
+    ok('1 and 2 share that centre line', at[1][0] === cx && at[2][0] === cx);
+    ok('the pitcher is on the mound the diamond draws',
+      Math.abs(at[1][1] - (M.home[1] - 0.48 * (M.home[1] - M.bags[2][1]))) <= 1);
+
+    ok('6 is between second and third', at[6][0] < cx && at[6][0] > at[5][0]);
+    ok('4 is between first and second', at[4][0] > cx && at[4][0] < at[3][0]);
+    ok('5 is inside the third-base bag', at[5][0] > M.bags[3][0]);
+    ok('3 is inside the first-base bag', at[3][0] < M.bags[1][0]);
+    ok('7 is outside the third baseman', at[7][0] < at[5][0]);
+    ok('9 is outside the first baseman', at[9][0] > at[3][0]);
+
+    ok('the outfield plays behind the middle infield',
+      [7,8,9].every(o => [4,6].every(i => deeper(o, i))));
+    ok('the middle infield plays behind the corners',
+      [4,6].every(m => [3,5].every(c => deeper(m, c))));
+
+    // Left and right are mirrored about the centre line, so the map cannot
+    // drift lopsided one fielder at a time.
+    [[7,9],[5,3],[6,4]].forEach(([l, r]) => {
+      eq(`${l} and ${r} mirror each other`, at[l][0] + at[r][0], M.w);
+      eq(`and at the same depth`, at[l][1], at[r][1]);
+    });
+  });
+
+  test('no two fielder keys overlap, and none hangs off the map', () => {
+    const M = FIELD_MAP, at = M.at;
+    const clashes = [];
+    for (let a = 1; a <= 9; a++) {
+      for (let b = a + 1; b <= 9; b++) {
+        const dx = Math.abs(at[a][0] - at[b][0]), dy = Math.abs(at[a][1] - at[b][1]);
+        if (dx < M.kw && dy < M.kh) clashes.push(`${a}/${b} (dx ${dx}, dy ${dy})`);
+      }
+    }
+    eq(`all 36 pairs clear at ${M.kw}x${M.kh}`, clashes.join(', '), '');
+
+    const off = [1,2,3,4,5,6,7,8,9].filter(i =>
+      at[i][0] - M.kw / 2 < 0 || at[i][0] + M.kw / 2 > M.w ||
+      at[i][1] - M.kh / 2 < 0 || at[i][1] + M.kh / 2 > M.h);
+    eq('and every key is inside the box', off.join(', '), '');
+  });
+
+  test('the popup builds the map it describes', () => {
+    sel('visiting', 0, 0);
+    promptGroundout();
+    const map = document.getElementById('pos-keypad');
+    ok('the keypad is the field map now', map.classList.contains('pos-map'));
+    ok('carrying the park drawing', !!map.querySelector('svg.pos-map-field'));
+    eq('which is decoration, not a control',
+      map.querySelector('svg.pos-map-field').getAttribute('aria-hidden'), 'true');
+    eq('nine keys', map.querySelectorAll('.pos-key').length, 9);
+    // The box and key figures reach the stylesheet from FIELD_MAP, so a change
+    // to the table moves the drawing and the controls together.
+    eq('the box is sized from the table', map.style.getPropertyValue('--pm-w').trim(), FIELD_MAP.w + 'px');
+    eq('and the keys are', map.style.getPropertyValue('--pk-w').trim(), FIELD_MAP.kw + 'px');
+
+    [1,2,3,4,5,6,7,8,9].forEach(i => {
+      const btn = map.querySelector(`.pos-key[data-d="${i}"]`);
+      ok(`${i} is placed, not stacked`, !!btn.style.left && !!btn.style.top);
+      // "SS" is not a word, so the key says the position out loud.
+      ok(`${i} reads out as a position`, /^\d, [a-z ]+$/.test(btn.getAttribute('aria-label')));
+    });
+    eq('6 reads as the shortstop',
+      map.querySelector('.pos-key[data-d="6"]').getAttribute('aria-label'), '6, shortstop');
+    eq('and still shows the notation',
+      map.querySelector('.pos-key[data-d="6"] .pk-n').textContent, '6');
+
+    // The whole point of keeping the buttons: they still drive `posPadTap`.
+    eq('the map builds codes the same way', posPad('63'), '6-3');
+    clickId('pos-cancel');
+  });
+
   // #4
   test('a legal advance is not refused by the occupancy check', () => {
     sel('visiting', 0, 0);

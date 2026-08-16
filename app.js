@@ -6186,6 +6186,91 @@ function newGame() {
 // subject to it. Seven characters is four dashed fielders — 1-6-4-3.
 const POS_MAX = 7;
 
+/* ------------------------------------------------ where the nine stand ----
+   The fielder picker used to be a 3x3 numeric grid in reading order — 1 P,
+   2 C, 3 1B across the top — which is a phone dialpad, and not where a
+   single one of those players is standing. Fielder numbering is the one
+   thing a new scorer has to internalise and it is inherently spatial, so
+   the layout is now the field. Same nine numbers, same `posPadTap`, same
+   "Type it" hatch for a scorer who is faster than any picker.
+
+   This table is the only place the geometry is written down. It drives the
+   key positions, the park drawn underneath them, and the overlap test in
+   the suite, so the drawing cannot come to disagree with the controls.
+
+   Coordinates are px in the map's own 300x180 box, measuring the *centre*
+   of each key, with home plate at the bottom and the field opening upward.
+   The stylesheet turns them into percentages and scales the box as one
+   piece, so nothing here has to know about the screen.
+
+   The layout is schematic, not to scale, and it has to be. At a true 0.64
+   px/ft the whole infield spans ±38px, which puts 1, 5 and 6 inside each
+   other's 44px targets — the crowding is structural, not a matter of
+   tuning. So the infield is spread and the outfield compressed, and what is
+   preserved is the topology a beginner is actually learning: 6 between
+   second and third, 4 between first and second, 5 and 3 just inside their
+   bags, 8 in dead centre, 2 behind the plate. 1 sits on the mound at 48% of
+   the way from home to second, which is where the drawn diamond puts it.
+
+   The one hard constraint: no two of the nine 44x40 boxes may overlap. All
+   36 pairs are clear, most by lateral distance rather than depth, because
+   depth is the scarce axis — see the height arithmetic in styles.css. The
+   suite pins this, so moving a fielder by eye cannot quietly close a gap. */
+const FIELD_MAP = {
+  w: 300, h: 180,     // the map's coordinate box, px at --pm-s: 1
+  kw: 44, kh: 40,     // one fielder key, and what the separations are solved against
+  at: {
+    1: [150,  92],   2: [150, 158],   3: [238,  90],
+    4: [194,  68],   5: [ 62,  90],   6: [106,  68],
+    7: [ 44,  26],   8: [150,  22],   9: [256,  26]
+  },
+  // The park, in the same coordinates. Home is the apex the foul lines meet
+  // at, and the bags are the other three corners of the diamond drawn from
+  // it. First and third are centred 2px outside 3's and 5's keys, so half of
+  // each shows past the fielder standing at it — which is the arrangement on
+  // the field, and it is what makes the shape legible under six keys.
+  home: [150, 134], bags: { 1: [262, 90], 2: [150, 46], 3: [38, 90] },
+  poles: [[8, 78], [292, 78]]
+};
+
+// Percentages so the map scales as one piece. Three decimals: at 300px the
+// third is a thousandth of a pixel, and rounding to whole percent would move
+// a key by up to 1.5px — enough to eat into separations solved to the pixel.
+function fieldPct(v, of) { return Math.round(v / of * 1e5) / 1e3; }
+
+// Read out for the key's accessible name: "6, shortstop". The abbreviation
+// on the face of the key is the notation being taught; the word is what a
+// screen reader needs, since "SS" is not a word.
+const FIELDING_NAME = ['pitcher', 'catcher', 'first base', 'second base',
+                       'third base', 'shortstop', 'left field', 'center field', 'right field'];
+
+/* The park under the keys. A drawing and nothing else — `pointer-events` is
+   off in the stylesheet and every tap belongs to a button sitting on top.
+
+   Fair territory is the two foul lines out to the poles, then straight up
+   the sides with the shoulders rounded off. No fence line is drawn: at this
+   aspect any arc that reaches the poles has dropped to y≈20 by the time it
+   is over left field, so the outfielders' keys would all cross it. The fill
+   simply runs to the top of the box instead, which is also how a scorebook
+   position chart draws it. */
+function fieldMapSVG() {
+  const M = FIELD_MAP;
+  const [hx, hy] = M.home;
+  const [[lx, ly], [rx, ry]] = M.poles;
+  const b1 = M.bags[1], b2 = M.bags[2], b3 = M.bags[3];
+  // 8px, not 6. The bags are the landmark that says which shape this is, and
+  // the two corner ones sit half under 5's and 3's keys — a 6px bag showed a
+  // 2px sliver there, which at this size is a speck rather than a base.
+  const bag = (p) => `<rect class="pm-bag" x="${p[0] - 4}" y="${p[1] - 4}" width="8" height="8"/>`;
+  return `<svg class="pos-map-field" viewBox="0 0 ${M.w} ${M.h}" aria-hidden="true" focusable="false">
+    <path class="pm-fair" d="M${hx},${hy} L${lx},${ly} L${lx},10 Q${lx},2 ${lx + 8},2 L${rx - 8},2 Q${rx},2 ${rx},10 L${rx},${ry} Z"/>
+    <polygon class="pm-dirt" points="${hx},${hy} ${b1[0]},${b1[1]} ${b2[0]},${b2[1]} ${b3[0]},${b3[1]}"/>
+    <path class="pm-foul" d="M${lx},${ly} L${hx},${hy} L${rx},${ry}"/>
+    ${bag(b1)}${bag(b2)}${bag(b3)}
+    <polygon class="pm-bag" points="${hx - 6},${hy - 5} ${hx + 6},${hy - 5} ${hx + 6},${hy} ${hx},${hy + 5} ${hx - 6},${hy}"/>
+  </svg>`;
+}
+
 // Fielders are written joined by dashes, so the pad supplies them: 6 then 3 is
 // `6-3`. A dash typed on a hardware keyboard is therefore a no-op rather than a
 // second separator (see the keydown handler).
@@ -6244,13 +6329,27 @@ function showPositionPopup(prefix, placeholder, target) {
     popup.id = 'pos-popup';
     // Was `#333` — the one dark popup in an otherwise white/navy set. This is the
     // card/navy the base picker and the strikeout popup use.
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;padding:14px 16px;z-index:var(--z-popup);display:flex;flex-direction:column;gap:8px;align-items:stretch;box-shadow:0 8px 40px rgba(0,50,120,0.4);font-family:var(--heading);';
-    const keyStyle = 'padding:6px 0;min-width:58px;min-height:46px;font-family:var(--heading);font-weight:700;background:var(--navy);color:var(--gold);border:none;border-radius:6px;cursor:pointer;line-height:1.1';
-    let keys = '<div id="pos-keypad" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">';
+    // `padding` and `gap` are the two figures the phone-landscape block has to
+    // reach to give the field map its extra 20px back, so they live in
+    // styles.css under #pos-popup — an inline style beats an id selector, and
+    // leaving them here made that override silently dead. The rest of this
+    // stays inline with the other ten popups until I11 sweeps them all.
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:3px solid var(--navy);border-radius:10px;z-index:var(--z-popup);display:flex;flex-direction:column;align-items:stretch;box-shadow:0 8px 40px rgba(0,50,120,0.4);font-family:var(--heading);';
+    // `display:block` is written inline rather than left to the stylesheet
+    // because the suite asks whether the keypad is on screen the only way it
+    // can under jsdom — by reading `style.display` — and a class alone leaves
+    // that empty. Everything else about the map is in styles.css.
+    let keys = '<div id="pos-keypad" class="pos-map" style="display:block'
+      + ';--pm-w:' + FIELD_MAP.w + 'px;--pm-h:' + FIELD_MAP.h + 'px'
+      + ';--pk-w:' + FIELD_MAP.kw + 'px;--pk-h:' + FIELD_MAP.kh + 'px">'
+      + fieldMapSVG();
     for (let i = 1; i <= POSITIONS; i++) {
-      keys += '<button class="pos-key" data-d="' + i + '" style="' + keyStyle + '">'
-        + '<span style="font-size:20px;font-family:var(--mono)">' + i + '</span>'
-        + '<br><span style="font-size:9px;letter-spacing:0.5px;opacity:0.85">' + FIELDING_POS[i - 1] + '</span>'
+      const [x, y] = FIELD_MAP.at[i];
+      keys += '<button class="pos-key" data-d="' + i + '" type="button"'
+        + ' aria-label="' + i + ', ' + FIELDING_NAME[i - 1] + '"'
+        + ' style="left:' + fieldPct(x, FIELD_MAP.w) + '%;top:' + fieldPct(y, FIELD_MAP.h) + '%">'
+        + '<span class="pk-n">' + i + '</span>'
+        + '<span class="pk-p">' + FIELDING_POS[i - 1] + '</span>'
         + '</button>';
     }
     keys += '</div>';

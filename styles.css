@@ -847,6 +847,110 @@ details.info-details > summary:hover { color: var(--navy); }
 }
 .spray-popup .spray-skip:hover { background: var(--cream-dark); border-color: var(--navy); }
 
+/* ============================================================
+   The fielder picker's field map (I3)
+
+   `showPositionPopup` asked for the fielders on a 3x3 numeric grid — `1 P`
+   through `9 RF` in reading order, which is a phone dialpad and not where
+   any of those players stand. Fielder numbering is the one thing a new
+   scorer has to internalise, it is inherently spatial, and the grid taught
+   none of it. Same nine numbers, same `posPadTap`, same "Type it" escape
+   hatch; only the layout moved onto a field.
+
+   The keys are still real <button>s, absolutely positioned over an SVG of
+   the park, rather than <g> elements inside it. That keeps focus order, the
+   focus ring, :active and `data-d` for free, and it keeps the nine controls
+   measurable for the target table above — which is where H2 wants them.
+
+   Geometry lives in `FIELD_MAP` (app.js), not here. JS writes the box and
+   key sizes onto `.pos-map` as --pm-w / --pm-h / --pk-w / --pk-h and each
+   key's centre as a left/top percentage, so one table drives the drawing,
+   the controls and the overlap test. What is left here is palette and type.
+
+   Sizes, and why these:
+
+   The map is 300x180 with 44x40 keys. Height is the only scarce axis — the
+   popup is fixed and centred, so it has to fit the shortest screen whole or
+   DONE goes off the bottom edge. Measured before the change, at 844x390:
+   popup 352px tall in a 390px viewport, 19px clear above and below. The
+   3x3 grid was 160px of that.
+
+   180px of map is 20px more than the grid, and measured at 372px the popup
+   had 9px left each side. So the phone-landscape block below takes that 20px
+   back out of the popup's own padding and row gaps (14px -> 8px, 8px -> 6px
+   over four rows), which measures 352px with 19px clear above and below —
+   the same fit the 3x3 grid had, to the pixel.
+
+   Nothing else on the page moves: the popup is fixed, so it is not in the
+   `fit()` budget and cannot lengthen the card. Checked at all five target
+   sizes; the page still scrolls by 0 at 1194x834 with the popup open.
+
+   Width is free at every target size. 300 + 32 padding + 6 border = 338px,
+   against 390px on the narrowest phone in portrait. --pm-s is the safety
+   for anything narrower still; it scales the box, the keys and the type
+   together, so no separation closes up.
+
+   The 44x40 key is what the geometry is solved against: no two of the nine
+   boxes overlap, at any of the 36 pairs, and `FIELD_MAP` is pinned to that
+   in the suite. Shrink a key and the test still passes; move one and it
+   may not, which is the point.
+   ============================================================ */
+/* The popup's own box is still assembled inline in app.js with the other ten
+   — that whole palette is I11's sweep, not this step's. Only the two figures
+   the landscape block has to reach come out here, because an inline style
+   beats an id selector and the override would have been silently dead. */
+#pos-popup { padding: 14px 16px; gap: 8px; }
+
+.pos-map {
+  --pm-s: 1;
+  position: relative; margin: 0 auto;
+  width: calc(var(--pm-w) * var(--pm-s));
+  height: calc(var(--pm-h) * var(--pm-s));
+}
+
+/* The park itself: fair territory, the infield, the bags, the plate. Purely
+   a drawing — every tap belongs to a button sitting on top of it.
+
+   Nine 44x40 keys cover a third of a 300x180 box and six of them stand in
+   the infield, so most of the diamond is behind a key and only reads in the
+   gaps. Drawn first in the two soft fills alone it did not: the dirt is a
+   0.2 tint over a 0.13 one, which is a 0.07 step, and at that contrast the
+   infield vanished under the keys and the map read as chips on a grey blob.
+
+   So the *lines* carry it instead of the fills. Base paths and foul lines
+   are solid navy at hairline weights, which survives being interrupted —
+   two visible segments of a straight navy line still read as the line — and
+   the bags and plate are white against the tint, which is what they are.
+   The fills are left soft on purpose; they say where the grass is, and a
+   heavier tint behind white-on-navy keys only muddies them. */
+.pos-map-field { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.pos-map-field .pm-fair { fill: var(--line-soft); }
+.pos-map-field .pm-dirt { fill: var(--border-light); stroke: var(--navy); stroke-width: 1.2; }
+.pos-map-field .pm-foul { fill: none; stroke: var(--navy); stroke-width: 1; }
+.pos-map-field .pm-bag  { fill: var(--card); stroke: var(--navy); stroke-width: 1; }
+
+.pos-key {
+  position: absolute; transform: translate(-50%, -50%);
+  width: calc(var(--pk-w) * var(--pm-s));
+  height: calc(var(--pk-h) * var(--pm-s));
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 1px; padding: 0; border: none; border-radius: 7px; cursor: pointer;
+  background: var(--navy); color: var(--gold);
+  font-family: var(--heading); font-weight: 700; line-height: 1;
+  box-shadow: 0 1px 3px rgba(0,50,120,0.35);
+}
+.pos-key .pk-n { font-family: var(--mono); font-size: calc(18px * var(--pm-s)); }
+.pos-key .pk-p { font-size: calc(8px * var(--pm-s)); letter-spacing: 0.5px; opacity: 0.85; }
+/* The press has to be visible on a key that is 40px tall and sitting on a
+   busy drawing, and the translate has to be restated or the key jumps to
+   the corner it is positioned from. */
+.pos-key:active { transform: translate(-50%, -50%) scale(0.94); }
+.pos-key:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Narrower than any of the five target sizes. Scales the whole map rather
+   than reflowing it, so the solved separations hold. */
+@media (max-width: 359px) { .pos-map { --pm-s: 0.84; } }
+
 /* ---------- Modals ---------- */
 .modal-overlay, .hotkey-modal, .game-summary-modal {
   position: fixed; inset: 0; background: rgba(32,30,29,0.55); z-index: var(--z-modal);
@@ -2278,6 +2382,23 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
   }
   .deck-handle { min-height: 26px; padding: 3px 0; }
   .deck-handle::before { margin-bottom: 4px; }
+
+  /* --- The fielder picker, on the shortest screen it has to fit whole ---
+     390px of height and the popup is fixed and centred, so anything it does
+     not fit is clipped off both ends at once — DONE off the bottom, the
+     label off the top, and no scroll to reach either.
+
+     Measured at 844x390 before the field map: 352px tall, 19px clear above
+     and below. The map is 180px against the 3x3 grid's 160, so this gives
+     the 20px back rather than shrinking the map — the keys stay 44x40 here,
+     where the deck's own buttons are 40x40. Padding 14px -> 8px is 12px and
+     four row gaps at 8px -> 6px is 8px, measured back at 352px: 19px clear
+     above and below, which is the fit the grid it replaces had exactly.
+
+     Taken off the chrome and not off the map on purpose. The map is the only
+     part of this popup that has to be read spatially; the padding is not
+     doing any teaching. */
+  #pos-popup { padding: 8px 10px; gap: 6px; }
 }
 
 

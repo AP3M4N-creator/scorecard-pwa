@@ -201,13 +201,28 @@ function stylesheetChecks() {
     });
 
     /* Both halves of "every var() resolves". A name may be declared in the
-       stylesheet, or written at runtime by ui.js (--cell-h, --deck-h,
-       --grid-max-h are measured, not declared), or used with a fallback. Any
-       other var() paints nothing at all and does it silently. */
+       stylesheet, or written at runtime, or used with a fallback. Any other
+       var() paints nothing at all and does it silently.
+
+       "Written at runtime" is two things, not one. ui.js measures --cell-h,
+       --deck-h and --grid-max-h and calls setProperty; app.js writes the
+       fielder map's --pm-w / --pm-h / --pk-w / --pk-h into an inline style
+       when it builds the popup, so that FIELD_MAP stays the only copy of
+       those figures (I3). Both are declarations this file cannot see in the
+       stylesheet and both resolve perfectly at paint time, so both count.
+
+       This still catches the typo it exists for. A name is only forgiven
+       where something actually writes *that* name: misspell either side and
+       the read no longer has a writer, and it is reported. */
     check('every var(--x) resolves to something', () => {
       const declared = new Set((css.match(/--[A-Za-z0-9-]+\s*:/g) || []).map(m => m.replace(/\s*:$/, '')));
       const runtime = new Set((code('ui.js').match(/setProperty\(\s*'(--[A-Za-z0-9-]+)'/g) || [])
         .map(m => m.slice(m.indexOf("'") + 1, -1)));
+      // Custom properties app.js and index.html set in inline styles.
+      ['app.js', 'index.html'].forEach(f => {
+        (code(f).match(/--[A-Za-z0-9-]+\s*:/g) || [])
+          .forEach(m => runtime.add(m.replace(/\s*:$/, '')));
+      });
       const bad = [];
       sources.forEach(f => {
         const s = code(f);
