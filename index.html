@@ -159,19 +159,19 @@
       <div class="quick-bar" id="qb-visiting">
         <div class="qb-core">
           <span class="qb-label qb-label-pitch">Pitch</span>
-          <button class="quick-btn" data-act="addPitch" data-arg="S" style="color:var(--accent)">S<small>s</small></button>
-          <button class="quick-btn" data-act="addPitch" data-arg="F">F<small>f</small></button>
-          <button class="quick-btn" data-act="addPitch" data-arg="B" style="color:var(--navy)">B<small>b</small></button>
+          <button class="quick-btn" data-word="strike" data-act="addPitch" data-arg="S" style="color:var(--accent)">S<small>s</small></button>
+          <button class="quick-btn" data-word="foul" data-act="addPitch" data-arg="F">F<small>f</small></button>
+          <button class="quick-btn" data-word="ball" data-act="addPitch" data-arg="B" style="color:var(--navy)">B<small>b</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="1B">1B<small>1</small></button>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="2B">2B<small>2</small></button>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="3B">3B<small>3</small></button>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="HR">HR<small>4</small></button>
+          <button class="quick-btn hit" data-word="single" data-act="applyPlay" data-arg="1B">1B<small>1</small></button>
+          <button class="quick-btn hit" data-word="double" data-act="applyPlay" data-arg="2B">2B<small>2</small></button>
+          <button class="quick-btn hit" data-word="triple" data-act="applyPlay" data-arg="3B">3B<small>3</small></button>
+          <button class="quick-btn hit" data-word="homer" data-act="applyPlay" data-arg="HR">HR<small>4</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn out" data-act="promptGroundout">GO<small>g</small></button>
-          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="F">FO<small>x</small></button>
-          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="P">PO<small>p</small></button>
-          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="L">LO<small>l</small></button>
+          <button class="quick-btn out" data-word="grounder" data-act="promptGroundout">GO<small>g</small></button>
+          <button class="quick-btn out" data-word="fly ball" data-act="promptPositionPlay" data-arg="F">FO<small>x</small></button>
+          <button class="quick-btn out" data-word="pop-up" data-act="promptPositionPlay" data-arg="P">PO<small>p</small></button>
+          <button class="quick-btn out" data-word="liner" data-act="promptPositionPlay" data-arg="L">LO<small>l</small></button>
           <span class="qb-sep"></span>
           <button class="quick-btn undo-play" data-act="undoLastPlay">Undo<small>u</small></button>
           <button class="qb-more-btn" data-act="toggleQBDrawer">More plays</button>
@@ -185,36 +185,36 @@
             <button class="qbg-tab" data-ui-act="qbg" data-group="fix">Fix</button>
           </div>
           <div class="qbg-panel active" data-group="out">
-            <button class="quick-btn out" data-act="applyPlay" data-arg="K">K<small>k</small></button>
-            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="DP ">DP<small>d</small></button>
-            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="TP ">TP</button>
-            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="FC ">FC</button>
-            <button class="quick-btn out" data-act="applyPlay" data-arg="IF">IF</button>
+            <button class="quick-btn out" data-word="strikeout" data-act="applyPlay" data-arg="K">K<small>k</small></button>
+            <button class="quick-btn out" data-word="double play" data-act="promptPositionPlay" data-arg="DP ">DP<small>d</small></button>
+            <button class="quick-btn out" data-word="triple play" data-act="promptPositionPlay" data-arg="TP ">TP</button>
+            <button class="quick-btn out" data-word="fielder’s choice" data-act="promptPositionPlay" data-arg="FC ">FC</button>
+            <button class="quick-btn out" data-word="infield fly" data-act="applyPlay" data-arg="IF">IF</button>
           </div>
           <div class="qbg-panel" data-group="reach">
-            <button class="quick-btn walk" data-act="applyPlay" data-arg="BB">BB<small>w</small></button>
-            <button class="quick-btn walk" data-act="applyPlay" data-arg="HBP">HBP<small>h</small></button>
-            <button class="quick-btn walk" data-act="applyPlay" data-arg="IBB">IBB<small>i</small></button>
-            <button class="quick-btn walk" data-act="applyPlay" data-arg="CI">CI</button>
-            <button class="quick-btn" data-act="promptErrorPlay">E<small>e</small></button>
-            <button class="quick-btn" data-act="applyPlay" data-arg="SF">SF<small>q</small></button>
-            <button class="quick-btn" data-act="applyPlay" data-arg="SH">SH</button>
-            <button class="quick-btn" data-act="applyPlay" data-arg="K+WP">K+WP</button>
+            <button class="quick-btn walk" data-word="walk" data-act="applyPlay" data-arg="BB">BB<small>w</small></button>
+            <button class="quick-btn walk" data-word="hit by pitch" data-act="applyPlay" data-arg="HBP">HBP<small>h</small></button>
+            <button class="quick-btn walk" data-word="on purpose" data-act="applyPlay" data-arg="IBB">IBB<small>i</small></button>
+            <button class="quick-btn walk" data-word="interference" data-act="applyPlay" data-arg="CI">CI</button>
+            <button class="quick-btn" data-word="error" data-act="promptErrorPlay">E<small>e</small></button>
+            <button class="quick-btn" data-word="sac fly" data-act="applyPlay" data-arg="SF">SF<small>q</small></button>
+            <button class="quick-btn" data-word="sac bunt" data-act="applyPlay" data-arg="SH">SH</button>
+            <button class="quick-btn" data-word="dropped 3rd" data-act="applyPlay" data-arg="K+WP">K+WP</button>
           </div>
           <div class="qbg-panel" data-group="run">
-            <button class="quick-btn runner" data-act="promptSBBase">SB<small>r</small></button>
-            <button class="quick-btn runner" data-act="promptCSBase">CS<small>j</small></button>
-            <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="WP">WP<small>n</small></button>
-            <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="PB">PB</button>
-            <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="BK">BK</button>
-            <button class="quick-btn runner" data-act="promptPickoff">PK<small>o</small></button>
-            <button class="quick-btn runner" data-act="moveRunner">Move</button>
+            <button class="quick-btn runner" data-word="stolen base" data-act="promptSBBase">SB<small>r</small></button>
+            <button class="quick-btn runner" data-word="caught stealing" data-act="promptCSBase">CS<small>j</small></button>
+            <button class="quick-btn runner" data-word="wild pitch" data-act="applyRunnerEvent" data-arg="WP">WP<small>n</small></button>
+            <button class="quick-btn runner" data-word="passed ball" data-act="applyRunnerEvent" data-arg="PB">PB</button>
+            <button class="quick-btn runner" data-word="balk" data-act="applyRunnerEvent" data-arg="BK">BK</button>
+            <button class="quick-btn runner" data-word="pickoff" data-act="promptPickoff">PK<small>o</small></button>
+            <button class="quick-btn runner" data-word="move a runner" data-act="moveRunner">Move</button>
           </div>
           <div class="qbg-panel" data-group="subs">
-            <button class="quick-btn pitcher-change" data-act="changePitcher">P.Chg</button>
-            <button class="quick-btn" data-act="markSub" style="color:var(--navy)">SUB</button>
-            <button class="quick-btn" data-act="markPinchRunner" style="color:var(--navy)">PR</button>
-            <button class="quick-btn" data-act="changeFieldPos">Pos</button>
+            <button class="quick-btn pitcher-change" data-word="new pitcher" data-act="changePitcher">P.Chg</button>
+            <button class="quick-btn" data-word="substitute" data-act="markSub" style="color:var(--navy)">SUB</button>
+            <button class="quick-btn" data-word="pinch runner" data-act="markPinchRunner" style="color:var(--navy)">PR</button>
+            <button class="quick-btn" data-word="new position" data-act="changeFieldPos">Pos</button>
           </div>
           <div class="qbg-panel" data-group="fix">
             <!-- I14, closing B10. Correction was spelled as nine separate
@@ -294,19 +294,19 @@
       <div class="quick-bar" id="qb-home">
         <div class="qb-core">
           <span class="qb-label qb-label-pitch">Pitch</span>
-          <button class="quick-btn" data-act="addPitch" data-arg="S" style="color:var(--accent)">S<small>s</small></button>
-          <button class="quick-btn" data-act="addPitch" data-arg="F">F<small>f</small></button>
-          <button class="quick-btn" data-act="addPitch" data-arg="B" style="color:var(--navy)">B<small>b</small></button>
+          <button class="quick-btn" data-word="strike" data-act="addPitch" data-arg="S" style="color:var(--accent)">S<small>s</small></button>
+          <button class="quick-btn" data-word="foul" data-act="addPitch" data-arg="F">F<small>f</small></button>
+          <button class="quick-btn" data-word="ball" data-act="addPitch" data-arg="B" style="color:var(--navy)">B<small>b</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="1B">1B<small>1</small></button>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="2B">2B<small>2</small></button>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="3B">3B<small>3</small></button>
-          <button class="quick-btn hit" data-act="applyPlay" data-arg="HR">HR<small>4</small></button>
+          <button class="quick-btn hit" data-word="single" data-act="applyPlay" data-arg="1B">1B<small>1</small></button>
+          <button class="quick-btn hit" data-word="double" data-act="applyPlay" data-arg="2B">2B<small>2</small></button>
+          <button class="quick-btn hit" data-word="triple" data-act="applyPlay" data-arg="3B">3B<small>3</small></button>
+          <button class="quick-btn hit" data-word="homer" data-act="applyPlay" data-arg="HR">HR<small>4</small></button>
           <span class="qb-sep"></span>
-          <button class="quick-btn out" data-act="promptGroundout">GO<small>g</small></button>
-          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="F">FO<small>x</small></button>
-          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="P">PO<small>p</small></button>
-          <button class="quick-btn out" data-act="promptPositionPlay" data-arg="L">LO<small>l</small></button>
+          <button class="quick-btn out" data-word="grounder" data-act="promptGroundout">GO<small>g</small></button>
+          <button class="quick-btn out" data-word="fly ball" data-act="promptPositionPlay" data-arg="F">FO<small>x</small></button>
+          <button class="quick-btn out" data-word="pop-up" data-act="promptPositionPlay" data-arg="P">PO<small>p</small></button>
+          <button class="quick-btn out" data-word="liner" data-act="promptPositionPlay" data-arg="L">LO<small>l</small></button>
           <span class="qb-sep"></span>
           <button class="quick-btn undo-play" data-act="undoLastPlay">Undo<small>u</small></button>
           <button class="qb-more-btn" data-act="toggleQBDrawer">More plays</button>
@@ -320,36 +320,36 @@
             <button class="qbg-tab" data-ui-act="qbg" data-group="fix">Fix</button>
           </div>
           <div class="qbg-panel active" data-group="out">
-            <button class="quick-btn out" data-act="applyPlay" data-arg="K">K<small>k</small></button>
-            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="DP ">DP<small>d</small></button>
-            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="TP ">TP</button>
-            <button class="quick-btn out" data-act="promptPositionPlay" data-arg="FC ">FC</button>
-            <button class="quick-btn out" data-act="applyPlay" data-arg="IF">IF</button>
+            <button class="quick-btn out" data-word="strikeout" data-act="applyPlay" data-arg="K">K<small>k</small></button>
+            <button class="quick-btn out" data-word="double play" data-act="promptPositionPlay" data-arg="DP ">DP<small>d</small></button>
+            <button class="quick-btn out" data-word="triple play" data-act="promptPositionPlay" data-arg="TP ">TP</button>
+            <button class="quick-btn out" data-word="fielder’s choice" data-act="promptPositionPlay" data-arg="FC ">FC</button>
+            <button class="quick-btn out" data-word="infield fly" data-act="applyPlay" data-arg="IF">IF</button>
           </div>
           <div class="qbg-panel" data-group="reach">
-            <button class="quick-btn walk" data-act="applyPlay" data-arg="BB">BB<small>w</small></button>
-            <button class="quick-btn walk" data-act="applyPlay" data-arg="HBP">HBP<small>h</small></button>
-            <button class="quick-btn walk" data-act="applyPlay" data-arg="IBB">IBB<small>i</small></button>
-            <button class="quick-btn walk" data-act="applyPlay" data-arg="CI">CI</button>
-            <button class="quick-btn" data-act="promptErrorPlay">E<small>e</small></button>
-            <button class="quick-btn" data-act="applyPlay" data-arg="SF">SF<small>q</small></button>
-            <button class="quick-btn" data-act="applyPlay" data-arg="SH">SH</button>
-            <button class="quick-btn" data-act="applyPlay" data-arg="K+WP">K+WP</button>
+            <button class="quick-btn walk" data-word="walk" data-act="applyPlay" data-arg="BB">BB<small>w</small></button>
+            <button class="quick-btn walk" data-word="hit by pitch" data-act="applyPlay" data-arg="HBP">HBP<small>h</small></button>
+            <button class="quick-btn walk" data-word="on purpose" data-act="applyPlay" data-arg="IBB">IBB<small>i</small></button>
+            <button class="quick-btn walk" data-word="interference" data-act="applyPlay" data-arg="CI">CI</button>
+            <button class="quick-btn" data-word="error" data-act="promptErrorPlay">E<small>e</small></button>
+            <button class="quick-btn" data-word="sac fly" data-act="applyPlay" data-arg="SF">SF<small>q</small></button>
+            <button class="quick-btn" data-word="sac bunt" data-act="applyPlay" data-arg="SH">SH</button>
+            <button class="quick-btn" data-word="dropped 3rd" data-act="applyPlay" data-arg="K+WP">K+WP</button>
           </div>
           <div class="qbg-panel" data-group="run">
-            <button class="quick-btn runner" data-act="promptSBBase">SB<small>r</small></button>
-            <button class="quick-btn runner" data-act="promptCSBase">CS<small>j</small></button>
-            <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="WP">WP<small>n</small></button>
-            <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="PB">PB</button>
-            <button class="quick-btn runner" data-act="applyRunnerEvent" data-arg="BK">BK</button>
-            <button class="quick-btn runner" data-act="promptPickoff">PK<small>o</small></button>
-            <button class="quick-btn runner" data-act="moveRunner">Move</button>
+            <button class="quick-btn runner" data-word="stolen base" data-act="promptSBBase">SB<small>r</small></button>
+            <button class="quick-btn runner" data-word="caught stealing" data-act="promptCSBase">CS<small>j</small></button>
+            <button class="quick-btn runner" data-word="wild pitch" data-act="applyRunnerEvent" data-arg="WP">WP<small>n</small></button>
+            <button class="quick-btn runner" data-word="passed ball" data-act="applyRunnerEvent" data-arg="PB">PB</button>
+            <button class="quick-btn runner" data-word="balk" data-act="applyRunnerEvent" data-arg="BK">BK</button>
+            <button class="quick-btn runner" data-word="pickoff" data-act="promptPickoff">PK<small>o</small></button>
+            <button class="quick-btn runner" data-word="move a runner" data-act="moveRunner">Move</button>
           </div>
           <div class="qbg-panel" data-group="subs">
-            <button class="quick-btn pitcher-change" data-act="changePitcher">P.Chg</button>
-            <button class="quick-btn" data-act="markSub" style="color:var(--navy)">SUB</button>
-            <button class="quick-btn" data-act="markPinchRunner" style="color:var(--navy)">PR</button>
-            <button class="quick-btn" data-act="changeFieldPos">Pos</button>
+            <button class="quick-btn pitcher-change" data-word="new pitcher" data-act="changePitcher">P.Chg</button>
+            <button class="quick-btn" data-word="substitute" data-act="markSub" style="color:var(--navy)">SUB</button>
+            <button class="quick-btn" data-word="pinch runner" data-act="markPinchRunner" style="color:var(--navy)">PR</button>
+            <button class="quick-btn" data-word="new position" data-act="changeFieldPos">Pos</button>
           </div>
           <div class="qbg-panel" data-group="fix">
             <!-- I14, closing B10. Correction was spelled as nine separate

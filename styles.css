@@ -455,6 +455,41 @@ details.info-details > summary:hover { color: var(--navy); }
   border-style: dashed;
 }
 
+/* I8 — the key says what it means, in Beginner mode.
+
+   `GO` and `FC` are the notation a scorer is learning, and the deck taught
+   neither. The `<small>` slot beside each code holds the hotkey letter, which
+   on an iPad with no keyboard is the one thing on the button that cannot be
+   used — so in Beginner mode the word takes the slot instead.
+
+   Part C's rule for this one: dual labels must stack into the `<small>` slot
+   and must never widen a key. Stacking is what makes that possible. The letter
+   sits *beside* the code (`margin-left: 3px`), so a key is as wide as
+   code + letter; stacked, it is as wide as the wider of code and word, and at
+   9px against 15px the word usually loses. `1B` + ` 1` is wider than `single`
+   set under it.
+
+   Every measured figure for this is in the block at the end of the file, taken
+   at all five sizes before it was committed — which is what the audit asked
+   for, this being the only Beginner surface that spends the height budget. */
+[data-mode="beginner"] .quick-btn[data-word] {
+  display: inline-flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 1px; line-height: 1.05;
+}
+/* The hotkey letter goes; the word takes its place. Not `display: none` on the
+   whole `<small>` rule — the buttons with no word keep their letter, because
+   Beginner mode is not a reason to stop a Magic Keyboard working. */
+[data-mode="beginner"] .quick-btn[data-word] small { display: none; }
+/* 8px, and that one point is the whole fit. At 9px the core row wraps to two
+   at 1024x768 — 63px to 109px, and the deck 72px to 118px, which takes a
+   batting slot — and overflows at 844x390. At 8px the row does not move at any
+   of the five sizes. The figures are in the block below. */
+[data-mode="beginner"] .quick-btn[data-word]::after {
+  content: attr(data-word);
+  font-family: var(--font); font-size: 8px; font-weight: 400;
+  letter-spacing: 0; opacity: .75; white-space: nowrap;
+}
+
 /* I14 — the nine corrections become one question in Beginner mode. A straight
    swap, so it costs no width in a deck that has none to give: Expert keeps all
    nine keys, Beginner gets the one that asks which of them you wanted. */
@@ -2919,6 +2954,12 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
   }
   .deck-handle { min-height: 26px; padding: 3px 0; }
   .deck-handle::before { margin-bottom: 4px; }
+
+  /* I8's word is 8px everywhere, set where the rule is declared — it does not
+     need a second figure here. What this block's numbers bought is recorded
+     with the rule: line one at 844x390 is the tightest thing in the app, and
+     the word had to fit inside 58px of slack in an 804px box without widening
+     a key. It does: 746px -> 779px, and the row stays 53px. */
 
   /* --- The fielder picker, on the shortest screen it has to fit whole ---
      390px of height and the popup is fixed and centred, so anything it does

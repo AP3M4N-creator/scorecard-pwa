@@ -7638,6 +7638,61 @@
       document.getElementById('play-reject').dataset.tone, 'notice');
   });
 
+  /* ---- I8: the key says what it means ------------------------------------
+
+     `GO` and `FC` are the notation a scorer is learning and the deck taught
+     neither. In Beginner mode the word takes the `<small>` slot that holds the
+     hotkey letter — the one thing on the button an iPad cannot use.
+
+     Part C's rule is that dual labels never widen a key, and jsdom can measure
+     nothing: the stacking and the 8px face are CSS, and the five-size sweep was
+     done in a browser (figures with the rule in styles.css). What is checkable
+     here is the half that would break it — every play control carries a word,
+     and no word is longer than the longest one that was measured as fitting. */
+
+  // 16 characters is "fielder's choice", the longest word that survived the
+  // sweep at 1194x834 with the deck unchanged. Two words started over it —
+  // "catcher blocked him" and "walked on purpose" — and both took the deck to a
+  // second row, which cost a batting slot.
+  const WORD_MAX = 16;
+
+  test('every play the deck offers carries its word', () => {
+    const deck = document.querySelector('#qb-visiting');
+    const worded = [...deck.querySelectorAll('.quick-btn[data-word]')];
+    ok(`there are words to check — got ${worded.length}`, worded.length >= 30);
+
+    // The codes B1 named as the least explained: the always-visible core row,
+    // plus the four runner events it lists alongside them.
+    ['promptGroundout', 'promptPositionPlay', 'promptErrorPlay',
+     'promptSBBase', 'promptCSBase', 'promptPickoff'].forEach(act => {
+      const b = deck.querySelector(`.quick-btn[data-act="${act}"]`);
+      ok(`${act} has a word`, !!b && !!b.dataset.word);
+    });
+    ['1B', '2B', '3B', 'HR', 'K', 'BB', 'HBP', 'IBB', 'CI', 'IF', 'SF', 'SH'].forEach(code => {
+      const b = deck.querySelector(`.quick-btn[data-act="applyPlay"][data-arg="${code}"]`);
+      ok(`${code} has a word`, !!b && !!b.dataset.word);
+    });
+
+    // No word may exceed what was measured as fitting.
+    const tooLong = worded.map(b => b.dataset.word).filter(w => w.length > WORD_MAX);
+    eq(`none is longer than ${WORD_MAX} characters`, tooLong.join(', '), '');
+
+    // A word that repeats the button's own face teaches nothing — Undo said
+    // "undo" until it was measured and read back.
+    const redundant = worded.filter(b => {
+      const face = (b.textContent || '').replace(/\s+/g, '').toLowerCase();
+      return face.indexOf(b.dataset.word.toLowerCase()) === 0;
+    }).map(b => b.dataset.word);
+    eq('and none just repeats the code it annotates', redundant.join(', '), '');
+  });
+
+  // Both team decks, or the Home card teaches nothing.
+  test('both decks carry the same words', () => {
+    const words = t => [...document.querySelectorAll(`#qb-${t} .quick-btn[data-word]`)]
+      .map(b => b.dataset.act + '=' + b.dataset.word).sort().join('|');
+    eq('home matches visiting', words('home'), words('visiting'));
+  });
+
   /* ---- I5 / I14: controls that know the rule, and one way to fix a play ----
 
      B7: nothing was ever context-disabled. SB with the bases empty, a runner
