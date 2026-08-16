@@ -438,6 +438,76 @@ details.info-details > summary:hover { color: var(--navy); }
 
 /* ---------- Section (sub) tabs: Batting / Pitching / Spray & Notes ---------- */
 .sec-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 2px 0 6px; }
+
+/* ---------- The play, in a sentence, kept on screen (I4, Beginner half) ----
+
+   Expert mode gets nothing here — since I1 a completed play is recorded in
+   silence, and the toast is spent on refusals and caveats only. Beginner mode
+   gets this instead of a toast, so the sentence can be read at the scorer's
+   own pace rather than chased for 2.2 seconds, and nothing covers the card.
+
+   Part C is the whole reason for the shape. At 1194x834 the card is nine rows
+   at the 44px floor with about 5px to spare, so a new row under the deck is
+   not on offer: the echo has to *replace* space, not ask for it. Measured, the
+   section bar at that size has **361px of empty middle** between "Spray &
+   Notes" and "Show sub rows" — a row that already exists, already has height,
+   and is already directly under the deck where I4 wants the line.
+
+   So `.sec-row` is a wrapper whose `display` decides, and there is exactly one
+   echo element in one place in the DOM:
+
+     display: flex   the echo shares the bar's row, costing no height at all
+     display: block  the echo falls to its own line under it
+
+   Adam's ruling: take the bar's room where it exists and a line where it does
+   not. Measured after building it, Expert against Beginner at each size:
+
+                     bar spare   placement   row grows   batting slots
+     1194x834           361px    in the bar        0px    9.1 -> 9.1
+     1024x768           191px    in the bar        0px    9.5 -> 9.5
+      834x1194         -24px*    own line         18px    9.6 -> 9.6
+      390x844              6px   own line         18px    6.7 -> 6.3
+      844x390             77px   own line         18px    1.9 -> 1.9
+
+   * the bar has already wrapped to three rows at that size.
+
+   The page scrolls by 0 at all five, in both modes. Only one size pays a slot
+   for the line, and it is the one that was already scrolling the card by 142px
+   — the other two that grow a row absorb the 18px out of slack the layout
+   already had. The size that must not lose a row is the 11" iPad in landscape,
+   which is what Part C's 5px is about, and it is also the one with the most
+   bar to spare: it keeps all nine.
+
+   That is better than the estimate this was chosen on, which had the three
+   own-line sizes each losing about 0.4 of a row. Two of them lose nothing. */
+.sec-row { margin: 2px 0 6px; }
+.sec-row > .sec-bar { margin: 0; }
+
+.play-echo { display: none; }
+[data-mode="beginner"] .play-echo {
+  display: block; margin: 0; min-width: 0;
+  font-family: var(--font); font-size: 13px; line-height: 1.35;
+  color: var(--text);
+  /* One line, and the end clipped rather than the row grown: this sits in a
+     control row whose height other things are measured against. The full
+     sentence is on the cell's own aria-label either way. */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Nothing recorded yet — says what the line is for rather than sitting blank,
+   which reads as something failing to load. */
+[data-mode="beginner"] .play-echo:empty::before {
+  content: 'Score a play and the card will say what it recorded.';
+  color: var(--text-light);
+}
+
+/* Sharing the bar's row. The bar shrinks to its controls, which parks "Show
+   sub rows" against them rather than at the far edge — its `margin-left: auto`
+   has no slack left to push into — and the echo takes what is left. */
+@media (min-width: 835px) and (min-height: 501px) {
+  [data-mode="beginner"] .sec-row { display: flex; align-items: center; gap: 12px; }
+  [data-mode="beginner"] .sec-row > .sec-bar { flex: 0 1 auto; }
+  [data-mode="beginner"] .sec-row > .play-echo { flex: 1 1 0; text-align: right; }
+}
 .sec-btn {
   padding: 5px 14px; min-height: 34px; cursor: pointer;
   font-family: var(--heading); font-size: 13px; font-weight: 600; letter-spacing: .03em;
@@ -477,11 +547,14 @@ details.info-details > summary:hover { color: var(--navy); }
    same numbers as without it. Height is free too: the row is 53px because the
    buttons beside it are 40px, and a 21px label still clears it.
 
-   An expert is not told; he already scores without pitches when he wants to. */
-[data-mode="beginner"] .qb-label {
+   An expert is not told; he already scores without pitches when he wants to.
+
+   `.qb-label-pitch`, not `.qb-label`: there are four of these and two of them
+   say "Clear", on the button that wipes a play. Told they were optional. */
+[data-mode="beginner"] .qb-label-pitch {
   display: inline-flex; flex-direction: column; align-items: center; line-height: 1.1;
 }
-[data-mode="beginner"] .qb-label::after {
+[data-mode="beginner"] .qb-label-pitch::after {
   content: 'optional';
   font-size: 8px; letter-spacing: .04em; font-weight: 600; opacity: .8;
 }

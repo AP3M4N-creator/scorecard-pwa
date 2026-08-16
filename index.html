@@ -158,7 +158,7 @@
     <div class="main-area">
       <div class="quick-bar" id="qb-visiting">
         <div class="qb-core">
-          <span class="qb-label">Pitch</span>
+          <span class="qb-label qb-label-pitch">Pitch</span>
           <button class="quick-btn" data-act="addPitch" data-arg="S" style="color:var(--accent)">S<small>s</small></button>
           <button class="quick-btn" data-act="addPitch" data-arg="F">F<small>f</small></button>
           <button class="quick-btn" data-act="addPitch" data-arg="B" style="color:var(--navy)">B<small>b</small></button>
@@ -235,7 +235,8 @@
         <button class="deck-handle" data-ui-act="deck" aria-expanded="true">Hide entry</button>
       </div>
 
-      <div class="sec-bar">
+      <div class="sec-row">
+        <div class="sec-bar">
         <div class="tab-bar">
           <button class="tab-btn active" data-tab="visiting" data-act="switchTab" data-arg="visiting">Visiting</button>
           <button class="tab-btn" data-tab="home" data-act="switchTab" data-arg="home">Home</button>
@@ -244,6 +245,14 @@
         <button class="sec-btn" data-ui-act="sec" data-panel="pitch">Pitching Record</button>
         <button class="sec-btn" data-ui-act="sec" data-panel="spray">Spray &amp; Notes</button>
         <button class="ghost-btn" data-ui-act="subs" style="margin-left:auto">Show sub rows</button>
+      </div>
+        <!-- I4, Beginner half. One element in one place: it shares the
+             section bar's row where there is room and drops to its own line
+             where there is not, which is `.sec-row` switching between flex
+             and block rather than two copies. Part C forbids adding a deck row
+             at 1194x834, and that is the size with 361px of empty bar to put
+             it in. Hidden outright in Expert mode. -->
+        <p class="play-echo" role="status" aria-live="polite"></p>
       </div>
 
       <div class="sec-panel active" data-panel="bat">
@@ -277,7 +286,7 @@
     <div class="main-area">
       <div class="quick-bar" id="qb-home">
         <div class="qb-core">
-          <span class="qb-label">Pitch</span>
+          <span class="qb-label qb-label-pitch">Pitch</span>
           <button class="quick-btn" data-act="addPitch" data-arg="S" style="color:var(--accent)">S<small>s</small></button>
           <button class="quick-btn" data-act="addPitch" data-arg="F">F<small>f</small></button>
           <button class="quick-btn" data-act="addPitch" data-arg="B" style="color:var(--navy)">B<small>b</small></button>
@@ -354,7 +363,8 @@
         <button class="deck-handle" data-ui-act="deck" aria-expanded="true">Hide entry</button>
       </div>
 
-      <div class="sec-bar">
+      <div class="sec-row">
+        <div class="sec-bar">
         <div class="tab-bar">
           <button class="tab-btn active" data-tab="visiting" data-act="switchTab" data-arg="visiting">Visiting</button>
           <button class="tab-btn" data-tab="home" data-act="switchTab" data-arg="home">Home</button>
@@ -363,6 +373,14 @@
         <button class="sec-btn" data-ui-act="sec" data-panel="pitch">Pitching Record</button>
         <button class="sec-btn" data-ui-act="sec" data-panel="spray">Spray &amp; Notes</button>
         <button class="ghost-btn" data-ui-act="subs" style="margin-left:auto">Show sub rows</button>
+      </div>
+        <!-- I4, Beginner half. One element in one place: it shares the
+             section bar's row where there is room and drops to its own line
+             where there is not, which is `.sec-row` switching between flex
+             and block rather than two copies. Part C forbids adding a deck row
+             at 1194x834, and that is the size with 361px of empty bar to put
+             it in. Hidden outright in Expert mode. -->
+        <p class="play-echo" role="status" aria-live="polite"></p>
       </div>
 
       <div class="sec-panel active" data-panel="bat">

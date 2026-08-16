@@ -3349,19 +3349,45 @@ function finishPlay(team, pIdx, innIdx, snapshot) {
   // in there, and the out count the sentence ends on has to be the one the card
   // now holds. `snapshot.prev` is the inning as it stood before the play, which is
   // the only way to know which runners moved and which merely stayed put.
-  // And only if nothing else spoke for this entry — see `playToastSeq`.
   //
-  // Beginner mode only, from I1 on. Step 1 shipped this to both modes because
-  // there was no switch to put it behind yet, and it fires on every completed
-  // plate appearance — 2.2s at `bottom: 80px`, which covers the deck on an iPad
-  // and card rows 3-4 on a phone. An expert already knows the app understood
-  // him; he can read the cell. Refusals and caveats are unaffected and still
-  // reach both modes: those say something he could not have known.
-  if (beginnerMode()) {
-    const said = describePlayInWords(team, pIdx, innIdx, snapshot && snapshot.prev && snapshot.prev.inns);
-    if (said && snapshot && playToastSeq === snapshot.toastSeq) showPlayNotice(said);
-  }
+  // It goes to the echo line and nowhere else now (I4's Beginner half). Through
+  // step 4 it was a toast, which was always the placeholder: a description is
+  // not a warning, it fires on every completed plate appearance, and 2.2s at
+  // `bottom: 80px` covers the deck on an iPad and card rows 3-4 on a phone. The
+  // line is persistent, so it can be read at the scorer's pace, and it covers
+  // nothing. Expert mode has no line and gets no description, which is the same
+  // silence step 4 gave it.
+  //
+  // Refusals and caveats still toast, in both modes: those say something the
+  // scorer could not have known. `playToastSeq` is why the check survives — a
+  // caveat raised by *this* entry still outranks describing it, and the echo
+  // must not contradict a toast that is on screen about the same play.
+  const said = describePlayInWords(team, pIdx, innIdx, snapshot && snapshot.prev && snapshot.prev.inns);
+  if (said && snapshot && playToastSeq === snapshot.toastSeq) setPlayEcho(said);
 }
+
+/* ------------------------------------------ the echo line (I4, Beginner) ---
+
+   One sentence, held on screen until the next play replaces it. Written to
+   every `.play-echo` rather than one: there is a section row per team card and
+   the inactive one is only `display: none`, so writing to the visible one
+   alone leaves the other holding a play from the other side of the inning the
+   next time the tab is switched.
+
+   Expert mode is not special-cased here. The line is `display: none` in the
+   stylesheet, so writing to it is free and there is no mode test to keep in
+   step with the CSS — and the moment a scorer turns Beginner on, the sentence
+   for the play they just entered is already sitting there. */
+function setPlayEcho(text) {
+  if (typeof document === 'undefined') return;
+  document.querySelectorAll('.play-echo').forEach(el => { el.textContent = text || ''; });
+}
+
+// The play it described is gone, so the sentence goes with it. Anything that
+// takes a play back off the card, or replaces the card outright, lands here —
+// leaving a stale sentence under the deck is worse than leaving none, because
+// the resting line says what the slot is for and a stale one asserts a play.
+function clearPlayEcho() { setPlayEcho(''); }
 
 /* Runner advancement popup */
 // opts.batterTakesBase — whether the batter ends this play standing on a base
@@ -4907,6 +4933,13 @@ function restorePlayerRow(team, pIdx, prevAbs) {
 
 function restoreSnapshot(snap) {
   const { team, pIdx, innIdx } = snap;
+  // Undo and redo both bottom out here, so it is the one place the echo has to
+  // be taken down: the sentence describes a play the card is about to stop
+  // holding, and a stale one under the deck asserts something untrue. Cleared
+  // rather than re-derived — "the last play still on the card" is not what I4
+  // echoes, and after an undo the honest answer is that nothing was just
+  // entered (I4).
+  clearPlayEcho();
   // First, before anything reads a column: take back the column the play
   // inserted. The snapshot's own `cols` were worked out before it existed (M4).
   if (snap.insertedCol !== undefined) {
@@ -6082,6 +6115,9 @@ function applyState() {
   if (selectedCell) selectedCell.classList.remove('selected');
   selectedCell = null;
   document.querySelectorAll('.linescore td.ls-active').forEach(el => el.classList.remove('ls-active'));
+  // The outgoing card's last sentence belongs to a game that is no longer on
+  // screen, for the same reason the selection does (I4, and F20's argument).
+  clearPlayEcho();
 
   document.getElementById('info-date').value = gameState.info.date || '';
   document.getElementById('info-start-time').value = gameState.info.startTime || '';

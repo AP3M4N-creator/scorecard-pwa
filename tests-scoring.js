@@ -330,10 +330,23 @@
   /* The toast, split by what it is saying. Since I4 gave every completed plate
      appearance a plain-English description in `notice` tone, "the toast is showing"
      and "the press was refused" are no longer the same question — and the cases that
-     conflated them all meant the second one. */
+     conflated them all meant the second one.
+
+     Since 5.2 the description is not on the toast at all: it goes to the echo
+     line, and the toast is back to refusals and caveats only. `echoText` is
+     where a case reads a sentence now. */
   function toastText() {
     const el = document.getElementById('play-reject');
     return visible('play-reject') ? el.textContent : '';
+  }
+  /* The echo line. There is one per team card and only the active card's is on
+     screen, but both are written, so reading the first is reading all of them —
+     which the I4 block asserts directly. jsdom loads no stylesheet, so the
+     Beginner-only *visibility* of the line cannot be read here; it is a
+     `[data-mode="beginner"]` rule and was checked in a browser. */
+  function echoText() {
+    const el = document.querySelector('.play-echo');
+    return el ? el.textContent : '';
   }
   function rejected() {
     const el = document.getElementById('play-reject');
@@ -2330,7 +2343,10 @@
     sel('home', 6, 8);
     play('1B');
     ok('no second notice', toastText().indexOf('final') < 0);
-    ok('the play describes itself instead', toastText().indexOf('Single.') === 0);
+    // The description is on the line now, not the toast (I4's Beginner half),
+    // so "the caveat is spent" reads as the toast going quiet and the line
+    // picking the entry up.
+    ok('the play describes itself on the line', echoText().indexOf('Single.') === 0);
   });
 
   test('the live panel reads FINAL after a walk-off, and keeps reading it', () => {
@@ -7536,22 +7552,68 @@
     ok('on a card that really was replaced', !gameState.teams.visiting.players[0].atBats[0].play);
   });
 
-  /* The one behaviour I1 ships with, and Adam's ruling: the play description
-     goes Beginner-only. Step 1 sent it to both modes because there was no
-     switch to put it behind, and it fires on every completed plate appearance
-     — 2.2s over the deck, every time. What must NOT follow it behind the
-     switch is a refusal or a caveat: those say something the scorer could not
-     have known, and an expert needs them as much as a beginner does. */
-  test('the play description is Beginner-only; refusals and caveats are not', () => {
+  /* Adam's ruling at I1 was that the play description is Beginner-only, and at
+     5.2 that the echo line replaces the toast for it outright. Both together
+     mean the description never reaches the toast in either mode: it is written
+     to the echo line, and the line is `display: none` unless the document is in
+     Beginner mode.
+
+     That split is deliberate. Writing the sentence unconditionally and letting
+     the stylesheet decide who sees it means there is no mode test in app.js to
+     fall out of step with the CSS, and a scorer who turns Beginner on finds the
+     play they just entered already described. jsdom loads no stylesheet, so
+     what it can pin is the app.js half — the toast stays clean and the line
+     gets the sentence. The visibility half is one `[data-mode="beginner"]` rule
+     and was checked in a browser.
+
+     What must NOT follow the description off the toast is a refusal or a
+     caveat: those say something the scorer could not have known, and an expert
+     needs them as much as a beginner. Each has its own case below. */
+  test('the play description goes to the line, never to the toast', () => {
     sel('visiting', 0, 0);
     play('1B');
-    eq('an Expert card records the play in silence', toastText(), '');
+    eq('the toast stays clean in Expert', toastText(), '');
+    eq('and the sentence is on the line', echoText(), 'Single. Nobody out.');
 
     beginner();
     sel('visiting', 3, 0);
+    play('2B');
+    runnerPopup({ 0: 2, batter: 1 });
+    eq('the toast stays clean in Beginner too', toastText(), '');
+    ok('and the line has the new play', /^Double/.test(echoText()));
+  });
+
+  // One line per team card, and the inactive card is only `display: none` — so
+  // writing to the visible one alone leaves the other holding a play from the
+  // other side of the inning the next time the tab is switched.
+  test('every echo line carries the same sentence', () => {
+    const lines = [...document.querySelectorAll('.play-echo')];
+    eq('there is one per team card', lines.length, 2);
+    sel('visiting', 0, 0);
+    play('K');
+    eq('both were written', lines.map(e => e.textContent).join(' | '),
+      'Strikeout. 1 out. | Strikeout. 1 out.');
+  });
+
+  /* The sentence describes a play the card is about to stop holding, so it goes
+     when the play does. Cleared rather than re-derived: I4 echoes what was just
+     entered, and after an undo the honest answer is that nothing was. */
+  test('taking a play back takes its sentence with it', () => {
+    sel('visiting', 0, 0);
     play('1B');
-    runnerPopup({ 0: 1, batter: 0 });
-    ok('a Beginner card says what it took down', /Single/.test(toastText()));
+    ok('the line has it', /Single/.test(echoText()));
+    undoLastPlay();
+    eq('undo clears the line', echoText(), '');
+
+    play('K');
+    ok('and a new play fills it again', /Strikeout/.test(echoText()));
+    // Redo goes through the same restore, and a card replaced wholesale takes
+    // the outgoing card's sentence with it — the same argument F20 made for the
+    // selection.
+    const realConfirm = window.confirm;
+    window.confirm = () => true;
+    try { newGame(); } finally { window.confirm = realConfirm; }
+    eq('and New Game leaves no sentence behind', echoText(), '');
   });
 
   test('a refusal still reaches an Expert card', () => {
@@ -7698,7 +7760,7 @@
     beginner();
     sel('visiting', 0, 0);
     play(code);
-    return toastText();
+    return echoText();
   }
 
   test('a play says what it was, in words', () => {
@@ -7713,11 +7775,11 @@
     beginner();
     sel('visiting', 0, 0);
     play('K');
-    eq('one', toastText(), 'Strikeout. 1 out.');
+    eq('one', echoText(), 'Strikeout. 1 out.');
     play('K');
-    eq('two', toastText(), 'Strikeout. 2 out.');
+    eq('two', echoText(), 'Strikeout. 2 out.');
     play('K');
-    eq('and the third says what it ended', toastText(), 'Strikeout. 3 out — inning over.');
+    eq('and the third says what it ended', echoText(), 'Strikeout. 3 out — inning over.');
   });
 
   test('an error says who made it, and that the batter reached', () => {
@@ -7726,7 +7788,7 @@
     play('E6');
     // The two things a beginner cannot tell from `E6` on a cell: whose mistake it
     // was, and whether the man is on. A single needs neither said.
-    eq('charged to the fielder, and the batter placed', toastText(),
+    eq('charged to the fielder, and the batter placed', echoText(),
       'Error by 6. Batter safe at 1st. Nobody out.');
   });
 
@@ -7734,7 +7796,7 @@
     beginner();
     sel('visiting', 0, 0);
     play('3U');
-    eq('rather than guessing at it', toastText(), '3U. 1 out.');
+    eq('rather than guessing at it', echoText(), '3U. 1 out.');
   });
 
   test('the runners are named when the lineup names them', () => {
@@ -7744,7 +7806,7 @@
     sel('visiting', 0, 0);
     play('2B');                                       // Ramirez to 2nd
     play('1B'); runnerPopup({ 1: 3, batter: 0 });      // and home on the single
-    eq('by name, and by the base he ran from', toastText(),
+    eq('by name, and by the base he ran from', echoText(),
       'Single. Ramirez scored from 2nd. Nobody out.');
   });
 
@@ -7755,7 +7817,7 @@
     play('1B'); runnerPopup({ 1: 3, batter: 0 });
     // "Batter 1 scored from 2nd" is worse English than either half of this, and a
     // card being learned on very likely has no lineup typed into it.
-    eq('the base carries the whole reference', toastText(),
+    eq('the base carries the whole reference', echoText(),
       'Single. The runner on 2nd scored. Nobody out.');
   });
 
@@ -7764,7 +7826,7 @@
     sel('visiting', 0, 0);
     play('1B');
     play('1B'); runnerPopup({ 0: 1, batter: 0 });
-    eq('and the man who held is not mentioned', toastText(),
+    eq('and the man who held is not mentioned', echoText(),
       'Single. The runner on 1st to 2nd. Nobody out.');
   });
 
@@ -7773,7 +7835,7 @@
     sel('visiting', 0, 0);
     play('1B');
     play('1B'); runnerPopup({ 0: -2, batter: 0 });     // out trying for 3rd
-    eq('the out is attached to the man who made it', toastText(),
+    eq('the out is attached to the man who made it', echoText(),
       'Single. The runner on 1st was out at 3rd. 1 out.');
   });
 
@@ -7783,7 +7845,7 @@
     play('1B');
     play('1B'); runnerPopup({ 0: 1, batter: 0 });
     play('2B'); runnerPopup({ 1: 3, 0: 2, batter: 1 });
-    eq('lead runner first', toastText(),
+    eq('lead runner first', echoText(),
       'Double. The runner on 2nd scored, the runner on 1st to 3rd. Nobody out.');
   });
 
@@ -7794,7 +7856,7 @@
     promptPositionPlay('FC ');
     positionPopup('6');
     outcomePopup({ 0: ['out', 1], batter: ['safe', 0] });
-    eq('who is out and who is on', toastText(),
+    eq('who is out and who is on', echoText(),
       "Fielder's choice, 6. Batter safe at 1st. The runner on 1st was out at 2nd. 1 out.");
   });
 
@@ -7803,18 +7865,18 @@
     sel('visiting', 0, 0);
     play('1B');
     play('1B'); runnerPopup({ 0: 2, batter: 1 });      // batter to 2nd on the throw
-    eq('the base the play does not imply is said', toastText(),
+    eq('the base the play does not imply is said', echoText(),
       'Single. Batter safe at 2nd. The runner on 1st to 3rd. Nobody out.');
     sel('visiting', 6, 0);
     play('1B'); runnerPopup({ 2: 2, 1: 1, batter: 0 });
-    ok('and the one it does is left alone', toastText().indexOf('Batter safe') < 0);
+    ok('and the one it does is left alone', echoText().indexOf('Batter safe') < 0);
   });
 
   test('a walk is not narrated as a placement either', () => {
     beginner();
     sel('visiting', 0, 0);
     play('BB');
-    eq('the play name already says 1st', toastText(), 'Walk. Nobody out.');
+    eq('the play name already says 1st', echoText(), 'Walk. Nobody out.');
   });
 
   /* One toast per entry, and the more specific message has it. `finishPlay` runs
@@ -7825,6 +7887,8 @@
     play('1B');
     play('1B'); runnerPopup({ 0: 1, batter: 0 });       // men on 1st and 2nd
     sel('visiting', 6, 0);
+    const lineBefore = echoText();
+    ok('the line is holding the previous play', /Single/.test(lineBefore));
     promptPositionPlay('FC ');
     positionPopup('6');
     // Two outs marked on a play whose label allows one: the cap sets one back and
@@ -7834,17 +7898,27 @@
     ok('the cap keeps the toast', rejected());
     eq('and it is still the cap talking', toastText(),
       "A fielder's choice records one out — runner on 1st set back to safe.");
+    // `playToastSeq` guards the echo as well as the toast did: the sentence for
+    // *this* entry is suppressed, so the line cannot end up contradicting a
+    // refusal that is on screen about the same play. The line still holds the
+    // play before it — that is what a persistent line does, and it is not a
+    // claim about the entry the toast is refusing (I4).
+    eq('and the line did not answer over it', echoText(), lineBefore);
+    ok('so it says nothing about the fielder\'s choice', !/choice/i.test(echoText()));
   });
 
-  test('a runner event stays silent for now', () => {
+  /* Steals, wild pitches and pickoffs describe nothing — Adam's ruling in step
+     1, and unchanged. What "silent" means moved with 5.2, though: the echo is
+     persistent, so the test is not that the line is empty but that the runner
+     event did not *touch* it. The last completed plate appearance is still what
+     it is holding, which is the point of a line rather than a toast. */
+  test('a runner event does not disturb the line', () => {
     sel('visiting', 0, 0);
     play('1B');
-    document.getElementById('play-reject').style.display = 'none';
+    eq('the single is on the line', echoText(), 'Single. Nobody out.');
     key('r');
     basePicker(0, '');
-    // Steals, wild pitches and pickoffs wait for the Beginner/Expert toggle. Until
-    // there is one, whatever speaks speaks in Expert mode too.
-    eq('nothing was said about the steal', toastText(), '');
+    eq('and the steal left it alone', echoText(), 'Single. Nobody out.');
     eq('but the base was taken', onB('visiting', 0, 1), 0);
   });
 
@@ -7856,7 +7930,7 @@
     // across 81 cells and stays terse, the toast is read once and is prose.
     eq('the label keeps its own shape', aria('visiting', 0, 0),
       'Visiting, batting order 1, inning 1: 1B, on 1st');
-    eq('while the toast is a sentence', toastText(), 'Single. Nobody out.');
+    eq('while the toast is a sentence', echoText(), 'Single. Nobody out.');
   });
 
   /* ---- I9 / B8 / B9: the advancement popup, and what it calls things ------
