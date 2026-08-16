@@ -287,6 +287,103 @@ function stylesheetChecks() {
         : `a sub row is ${m[1].trim()}, which does not move with the fit — it has to come off --cell-h`;
     });
 
+    /* --------------------------------------------------- reading a colour ---
+       Enough of the cascade to answer "what does this actually paint?" from the
+       text of the file. Two checks below need it and neither can get it from a
+       DOM: styles.css is loaded by nothing in this suite.
+
+       `paints` takes the *last* matching declaration on purpose. The re-skin
+       block near the end of the file restates .pitch-mark.strike/.foul/.ball over
+       the originals up at ~705, and it is the restatement that wins. */
+    const declIn = (name, from) => {
+      const m = from.match(new RegExp('(?:^|[\\s;{])' + name + '\\s*:\\s*([^;]+);'));
+      return m && m[1].trim();
+    };
+    const rootBlock = (/:root\s*\{([\s\S]*?)\n\}/.exec(css) || [])[1] || '';
+    // var(--a) → var(--b) → a literal. --navy is var(--rb-blue), and the chain is
+    // walked rather than hopped once so a deeper alias does not read as unparseable.
+    const resolve = v => {
+      let out = String(v || '').trim();
+      for (let i = 0; i < 4; i++) {
+        const ref = /^var\(\s*(--[A-Za-z0-9-]+)\s*(?:,[^)]*)?\)$/.exec(out);
+        if (!ref) break;
+        const next = declIn(ref[1], rootBlock);
+        if (!next) break;
+        out = next;
+      }
+      return out;
+    };
+    const paints = (selector, prop) => {
+      const re = new RegExp(selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+        '\\s*\\{([^}]*)\\}', 'g');
+      let m, last = null;
+      while ((m = re.exec(css))) { const v = declIn(prop, m[1]); if (v) last = v; }
+      return last === null ? null : resolve(last);
+    };
+    // rgba(r,g,b,a) or #rrggbb → [r, g, b, a].
+    const rgb = v => {
+      const a = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)/.exec(v || '');
+      if (a) return [+a[1], +a[2], +a[3], a[4] === undefined ? 1 : +a[4]];
+      const h = /^#([0-9a-f]{6})$/i.exec(String(v || '').trim());
+      if (!h) return null;
+      const n = parseInt(h[1], 16);
+      return [(n >> 16) & 255, (n >> 8) & 255, n & 255, 1];
+    };
+    const lum = c => {
+      const ch = c.slice(0, 3).map(v => {
+        const s = v / 255;
+        return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+      });
+      return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+    };
+
+    /* B2. The guide called a foul mark "Black ✕". It has never been black in this
+       palette — it is rgba(0,50,120,0.88), the navy the pitch-mark comment argues
+       for at length. Only this section can catch that: the guide is in index.html
+       and the colour is in styles.css, and no DOM in the suite loads both.
+
+       Matched on hue rather than on an exact string, so it survives a tuning of the
+       alpha but a genuine palette change fails the guide row describing it instead
+       of quietly outdating it. */
+    check('the pitch-mark guide names the colours the card paints', () => {
+      const html = code('index.html');
+      const marks = { strike: 'S', foul: 'F', ball: 'B' };
+      const bad = [];
+      Object.keys(marks).forEach(kind => {
+        const v = paints('.pitch-mark.' + kind, 'color');
+        if (!v) { bad.push(`no .pitch-mark.${kind} colour to check the guide against`); return; }
+        const c = rgb(v);
+        if (!c) { bad.push(`.pitch-mark.${kind} is ${v}, which this check cannot read as sRGB`); return; }
+        const word = c[0] > c[2] ? 'Red' : c[2] > c[0] ? 'Navy' : null;
+        if (!word) { bad.push(`.pitch-mark.${kind} is ${v} — neither red nor navy, so its guide row needs writing by hand`); return; }
+        // The guide row for this hotkey, and the colour word opening its third cell.
+        const row = new RegExp('<tr><td>' + marks[kind] + '</td><td>[^<]*</td><td>([^<]*)</td>').exec(html);
+        if (!row) { bad.push(`no guide row for the "${marks[kind]}" hotkey`); return; }
+        if (row[1].trim().indexOf(word) !== 0) {
+          bad.push(`.pitch-mark.${kind} paints ${word.toLowerCase()} (${v}) and the guide says "${row[1].trim()}"`);
+        }
+      });
+      return bad.length ? bad.join('; ') : null;
+    });
+
+    /* H3. The "PH / Sub" placeholder is the only thing naming which slot an empty
+       sub row belongs to, and the show-subs toggle puts a whole column of them on
+       screen at once. It was painted in --border-light — a hairline token — over
+       the --row-alt those rows sit on, which measures 1.46:1. The rest of this
+       file holds itself to 4.5:1 with its arithmetic written down, so this
+       computes the ratio rather than pinning a token name: swapping one light
+       navy for another should pass or fail on the number, not on the spelling. */
+    check('the sub-row placeholder is readable, not a hairline', () => {
+      const fg = rgb(paints('.pos-sub td.player-cell input::placeholder', 'color'));
+      const bg = rgb(resolve(declIn('--row-alt', rootBlock)));
+      if (!fg || !bg) return 'could not read the placeholder colour or --row-alt as sRGB';
+      const over = [0, 1, 2].map(i => fg[3] * fg[i] + (1 - fg[3]) * bg[i]);
+      const [hi, lo] = [lum(bg), lum(over)].sort((a, b) => b - a);
+      const ratio = (hi + 0.05) / (lo + 0.05);
+      return ratio >= 4.5 ? null
+        : `the placeholder measures ${ratio.toFixed(2)}:1 on --row-alt — it is the only slot identifier an empty sub row has, and this file holds text to 4.5:1`;
+    });
+
     /* F28. At 844x390 both the iPad block and the phone-landscape block matched,
        so every iPad rule the phone block did not restate was in force on a
        390px-tall window. The height floor is what keeps them disjoint, and a

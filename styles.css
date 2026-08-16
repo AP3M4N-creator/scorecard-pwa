@@ -591,7 +591,14 @@ details.info-details > summary:hover { color: var(--navy); }
 .pos-sub td { background: var(--row-alt); }
 .pos-sub td.stat-cell { background: var(--row-alt); }
 .pos-sub td.player-cell input { font-style: italic; padding-left: 16px; font-weight: 400; font-size: 13px; }
-.pos-sub td.player-cell input::placeholder { font-style: italic; color: var(--border-light); }
+/* H3 — this placeholder is the only thing naming which slot a sub row belongs to,
+   and it is the whole content of every empty sub row the "show subs" toggle
+   reveals at once. It was painted in --border-light, rgba(0,50,120,0.2), which
+   over the --row-alt these rows sit on (#f7f9fc) measures 1.46:1 — a hairline
+   token doing a label's job. --text-light, the same 0.72 navy every other
+   secondary label in this file wears, measures 5.25:1 on the same ground.
+   The italic stays: it is what separates a placeholder from a typed-in name. */
+.pos-sub td.player-cell input::placeholder { font-style: italic; color: var(--text-light); }
 /* Sub rows stay out of the way until they are used (or the scorer asks for them).
    `visibility: collapse` rather than `display: none`: the at-bat cells span the
    whole slot with rowspan, and a display:none row still holds its slot open. */

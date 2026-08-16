@@ -7197,4 +7197,139 @@
     ok('and it says what to do about it', /Score innings/.test(box.textContent));
     box.remove();
   });
+
+  /* ---- I9 / B8 / B9: the advancement popup, and what it calls things ------
+
+     The popup walks each runner by name and asks where he ended up, and it is the
+     one a scorer meets more often than any other. Two things were wrong with the
+     words on it. It titled itself "Advance Runners" for every hit, every error and
+     every sacrifice — only a wild pitch and a passed ball named the play being
+     answered for (B8) — and it spoke a different dialect from its sibling
+     `showRunnerOutcomePopup`, which asks the identical question about a DP or an FC
+     in "Hold 1st / Safe 2nd / Out at 2nd" (B9).
+
+     Both are pinned here rather than left to the eye, because both are strings with
+     no behaviour behind them: nothing else in the suite would notice them reverting. */
+
+  function rpTitle() {
+    const popup = document.getElementById('runner-popup');
+    if (!visible('runner-popup')) fail('runner popup is not open');
+    return popup.firstElementChild.textContent.trim();
+  }
+  // A man on 1st, then whatever play the case is about — the shortest way to a
+  // popup with something to ask. Each call starts from a clean card, so one case
+  // can walk a list of plays without the second one landing on a filled cell.
+  function popupAfter(code) {
+    reset();
+    sel('visiting', 0, 0);
+    play('1B');
+    play(code);
+    return rpTitle();
+  }
+
+  test('the advancement popup says which play it is asking about (I9)', () => {
+    eq('a double names itself', popupAfter('2B'), 'Double — Who Moved');
+    // The out codes reach the popup normalized — `normalizePlayCode` has already
+    // turned "GO 6-3" into "6-3" — so the title has to be read out of the shape of
+    // the code rather than off a prefix that is no longer there.
+    eq('so does a ground out, from its canonical code', popupAfter('6-3'), 'Ground Out — Who Moved');
+    eq('a fly out', popupAfter('F8'), 'Fly Out — Who Moved');
+    eq('a line out', popupAfter('L7'), 'Line Out — Who Moved');
+    eq('an error, whichever fielder made it', popupAfter('E6'), 'Error — Who Moved');
+    eq('a sacrifice fly', popupAfter('SF'), 'Sacrifice Fly — Who Moved');
+    eq('and a dropped third strike', popupAfter('K+WP'), 'Dropped Third Strike — Who Moved');
+  });
+
+  test('a play saved under its old prefixed code still names itself (I9)', () => {
+    // A card saved before normalizePlayCode existed holds "GO 6-3", and the edit
+    // paths hand exactly that back to the popup.
+    eq('the prefix names the play', playTitle('GO 6-3'), 'Ground Out');
+    eq('and so does its canonical form', playTitle('6-3'), 'Ground Out');
+  });
+
+  test('a play with no name of its own falls back to its own code (I9)', () => {
+    // "3U" is a real entry and not in the table. A title that guessed at it would
+    // teach worse than one that repeats what is about to go on the cell.
+    eq('the code stands in for the words', popupAfter('3U'), '3U — Who Moved');
+  });
+
+  test('the two named events keep the titles they already had (I9)', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });    // two men on, so WP has to ask
+    applyRunnerEvent('WP');
+    eq('a wild pitch', rpTitle(), RUNNER_EVENT_TITLE.WP);
+    runnerPopup({ 1: 2, 0: 1 });
+    applyRunnerEvent('PB');
+    eq('and a passed ball', rpTitle(), RUNNER_EVENT_TITLE.PB);
+    runnerPopup({ 2: 3, 1: 2 });
+  });
+
+  test('a correction names its play too, and says it is a correction (I9)', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('2B'); runnerPopup({ 0: 3, batter: 1 });
+    sel('visiting', 3, 0);          // slots are ROWS_PER_POS apart — see the note above
+    editRunners();
+    eq('the play, then what is being asked of it', rpTitle(), 'Double — Edit Runners');
+    runnerPopup({ 1: 1 });
+  });
+
+  test('both runner popups ask the question in the same words (B9)', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B');
+    // The advancement popup, for a man on 1st with a single behind him.
+    eq('holding names the base he is holding', rpBtn(0, 0).textContent, 'Hold 1st');
+    eq('an advance is a safe arrival', rpBtn(0, 1).textContent, 'Safe 2nd');
+    eq('and so is the plate', rpBtn(0, 3).textContent, 'Safe Home');
+    eq('an out says where it happened', rpBtn(0, -1).textContent, 'Out at 2nd');
+    eq('the batter row speaks it too', rpBtn('batter', 0).textContent, 'Safe 1st');
+    runnerPopup({ 0: 1, batter: 0 });
+
+    // And its sibling, for the same runner and the same question.
+    sel('visiting', 6, 0);
+    promptPositionPlay('DP ');
+    positionPopup('6-4-3');
+    ok('the outcome popup is open', visible('outcome-popup'));
+    eq('the same word for holding', ocBtn(1, 'safe', 1).textContent, 'Hold 2nd');
+    eq('the same word for arriving', ocBtn(1, 'safe', 2).textContent, 'Safe 3rd');
+    eq('and the same one for an out', ocBtn(1, 'out', 2).textContent, 'Out at 3rd');
+    clickId('oc-cancel');
+  });
+
+  /* ---- 0.1 / B2: the guide claimed a rule the app does not follow ---------
+     "All runners advance 1" is what a wild pitch used to do before m1 gave it the
+     advancement popup. It is now true only when exactly one man is on. A beginner
+     reading that row learned a rule, tried it with two men on, and got a popup. */
+
+  function guideRow(label) {
+    const rows = Array.prototype.slice.call(document.querySelectorAll('#hotkey-modal .hk-table tr'));
+    const row = rows.find(r => r.cells[1] && r.cells[1].textContent.trim() === label);
+    if (!row) fail(`the guide has no row for "${label}"`);
+    return row.cells[2].textContent.trim();
+  }
+
+  test('the guide describes a wild pitch the way the app handles one', () => {
+    eq('the hotkey row', guideRow('Wild pitch / Passed ball'), 'Pick who moved');
+    eq('and the button row', guideRow('PB — passed ball'), 'Pick who moved (unearned)');
+    // The claim it replaced, checked against the behaviour rather than trusted:
+    // two men on and the app asks instead of advancing them.
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });
+    applyRunnerEvent('WP');
+    ok('two men on, and it asks', visible('runner-popup'));
+    clickId('rp-cancel');
+    // A balk really does advance everybody — rule 6.02(a) is not a judgement call,
+    // so `applyRunnerEvent` bypasses the popup for it. That is why its row still
+    // makes the claim the wild-pitch rows just gave up.
+    eq('a balk keeps its claim', guideRow('BK — balk'), 'All runners advance 1');
+    const first = onB('visiting', 0, 0), second = onB('visiting', 0, 1);
+    applyRunnerEvent('BK');
+    ok('and takes nobody\'s answer for it', !visible('runner-popup'));
+    eq('the man on 1st is on 2nd', onB('visiting', 0, 1), first);
+    eq('the man on 2nd is on 3rd', onB('visiting', 0, 2), second);
+    eq('and 1st is empty behind them', onB('visiting', 0, 0), null);
+  });
 })();

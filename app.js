@@ -1405,6 +1405,52 @@ function isErrorPlay(play) {
   return play === 'E' || /^E\d/.test(play);
 }
 
+/* I9 — a play code in words, for the advancement popup that is about to ask where
+   the runners went.
+
+   That popup titled itself "Advance Runners" for every hit, every error and every
+   sacrifice; only a wild pitch and a passed ball named themselves, through
+   RUNNER_EVENT_TITLE. So a scorer was answering a question without being told
+   which play he was answering it for — and on a card where the same popup opens
+   for a single, a sacrifice fly and a ground out, that is three different
+   questions wearing one title.
+
+   Register follows RUNNER_EVENT_TITLE's, because it is the one already on screen:
+   the play in words, an em dash, what is being asked. */
+const PLAY_TITLE = {
+  '1B': 'Single', '2B': 'Double', '3B': 'Triple', 'HR': 'Home Run',
+  'BB': 'Walk', 'IBB': 'Intentional Walk', 'HBP': 'Hit By Pitch',
+  'CI': "Catcher's Interference", 'E': 'Error',
+  'K': 'Strikeout', 'ꓘ': 'Strikeout Looking', 'K+WP': 'Dropped Third Strike',
+  'GO': 'Ground Out', 'FO': 'Fly Out', 'LO': 'Line Out', 'PO': 'Pop Out',
+  'SF': 'Sacrifice Fly', 'SH': 'Sacrifice Bunt', 'SAC': 'Sacrifice',
+  'IF': 'Infield Fly', 'DP': 'Double Play', 'TP': 'Triple Play',
+  'FC': "Fielder's Choice"
+};
+
+function playTitle(play) {
+  const p = String(play == null ? '' : play).trim();
+  if (PLAY_TITLE[p]) return PLAY_TITLE[p];
+  // A game saved before normalizePlayCode existed still holds the prefixed
+  // spelling — "GO 6-3" — and its prefix names it outright.
+  const pre = PREFIXED_OUT_RE.exec(p);
+  if (pre) return PLAY_TITLE[pre[1].toUpperCase()];
+  if (/^DP /.test(p)) return PLAY_TITLE.DP;
+  if (/^TP /.test(p)) return PLAY_TITLE.TP;
+  if (/^FC /.test(p)) return PLAY_TITLE.FC;
+  if (isErrorPlay(p)) return PLAY_TITLE.E;
+  // The canonical out codes carry their play type in their shape rather than in a
+  // prefix: "6-3" is a ground ball, "F8" a fly ball, "L7" a liner, "P3" a pop-up.
+  if (/^\d+-\d/.test(p)) return PLAY_TITLE.GO;
+  if (/^F\d/.test(p)) return PLAY_TITLE.FO;
+  if (/^L\d/.test(p)) return PLAY_TITLE.LO;
+  if (/^P\d/.test(p)) return PLAY_TITLE.PO;
+  // Anything left — "3U", a bare "8", a code typed by hand — falls back to itself.
+  // "8 — Who Moved" is still the play the scorer just entered, and a title that
+  // guesses wrong teaches worse than one that repeats the cell.
+  return p;
+}
+
 function hasRunnersOnBase(team, innIdx) {
   const inn = getInnState(team, innIdx);
   return inn.bases[0] !== null || inn.bases[1] !== null || inn.bases[2] !== null;
@@ -2283,7 +2329,7 @@ function applyPlayEffects(team, pIdx, innIdx, play, prev, done, onCancel) {
         // pitch, not off the bat (#12).
         ab.rbi = 0;
         done();
-      }, { batterTakesBase: true, batterPIdx: pIdx, onCancel });
+      }, { batterTakesBase: true, batterPIdx: pIdx, onCancel, title: playTitle(play) + ' — Who Moved' });
       return;
     }
 
@@ -2319,7 +2365,8 @@ function applyPlayEffects(team, pIdx, innIdx, play, prev, done, onCancel) {
         ab.rbi = Math.max(0, countRunnersScored(team, prev) - errorAidedRuns(choices));
       }
       done();
-    }, { batterTakesBase: isHitOrError, batterPIdx: pIdx, batterRetired, onCancel });
+    }, { batterTakesBase: isHitOrError, batterPIdx: pIdx, batterRetired, onCancel,
+         title: playTitle(play) + ' — Who Moved' });
     return;
   }
 
@@ -3167,12 +3214,22 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     html += `<span style="font-size:11px;font-weight:600;min-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(r.name)}</span>`;
     html += `<span style="font-size:10px;color:var(--text-light);min-width:24px">${r.fromLabel}→</span>`;
     html += `<div style="display:flex;gap:3px;flex-wrap:wrap">`;
+    /* B9 — one vocabulary across both runner popups. This one said "Hold / 2nd /
+       3rd / Home / Out 2nd"; its sibling `showRunnerOutcomePopup` said "Hold 1st /
+       Safe 2nd / Out at 2nd" for the identical question. The comment above records
+       the team already closing the *visual* half of that split (F11b) — the wording
+       was left behind.
+
+       Adam's ruling: the explicit dialect wins. "Safe" is the word that makes the
+       out buttons beside it mean something, and without it the difference between
+       a destination and an out was carried by colour alone (H4). Naming the origin
+       base on Hold costs nothing and says which row you are looking at. */
     for (let d = r.minDest; d <= 3; d++) {
-      const label = d === r.base ? 'Hold' : baseNames[d];
+      const label = (d === r.base ? 'Hold ' : 'Safe ') + baseNames[d];
       html += `<button class="rp-btn" data-base="${r.base}" data-dest="${d}" style="${rpBtnStyle(d === choices[r.base], false)}">${label}</button>`;
     }
     for (let d = r.base + 1; d <= 3; d++) {
-      html += `<button class="rp-btn rp-out" data-base="${r.base}" data-dest="-${d}" style="${rpBtnStyle(false, true)}">Out ${baseNames[d]}</button>`;
+      html += `<button class="rp-btn rp-out" data-base="${r.base}" data-dest="-${d}" style="${rpBtnStyle(false, true)}">Out at ${baseNames[d]}</button>`;
     }
     // Which base he took is one question; *why* he took it is another, so this is a
     // tick beside the row rather than a fourth destination — a runner can take one
@@ -3210,7 +3267,9 @@ function showRunnerPopup(team, innIdx, defaultAdv, callback, opts) {
     html += `<span style="font-size:10px;color:var(--text-light);min-width:24px">Batter→</span>`;
     html += `<div style="display:flex;gap:3px;flex-wrap:wrap">`;
     for (let d = batterDefaultBase; d <= 2; d++) {
-      html += `<button class="rp-btn" data-base="batter" data-dest="${d}" style="${rpBtnStyle(d === choices.batterDest, false)}">${baseNames[d]}</button>`;
+      // Same dialect as the runner rows above, and as the outcome popup's own
+      // batter row, which has always said "Safe 1st" (B9).
+      html += `<button class="rp-btn" data-base="batter" data-dest="${d}" style="${rpBtnStyle(d === choices.batterDest, false)}">Safe ${baseNames[d]}</button>`;
     }
     html += `</div></div>`;
   }
@@ -4871,7 +4930,10 @@ function editRunners() {
     if (scored && !suppressed) ab.rbi = (ab.rbi || 0) + scored;
     renderRBI(team, pIdx, innIdx);
     afterStateChange(team, innIdx);
-  });
+  // I9: the play this correction belongs to, in the same shape the entry paths
+  // use — the play in words, then what is being asked. A scorer who pressed Rnrs
+  // on the wrong cell is told so by the title rather than by the runner names.
+  }, { title: playTitle(ab.play) + ' — Edit Runners' });
 }
 
 /* Feature 4: Manual runner move — pick a runner, move to any base */
