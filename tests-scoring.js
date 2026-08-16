@@ -90,10 +90,24 @@
   };
   window.clearTimeout = function (id) { queued.delete(id); };
 
+  /* Soonest first, and re-checked as it goes: a timer one of these cancels must not
+     still fire. It could, because the snapshot was taken and `queued` emptied before
+     any of them ran — so `clearTimeout` during a flush deleted from an already-empty
+     map and changed nothing.
+
+     Found by I4. `showPlayToast` clears the pending hide before raising a new
+     message, which is what stops a toast from two seconds ago taking the current one
+     off the screen. A real browser honours that; here the stale 2200ms hide ran
+     anyway, straight after the 600ms transition raised "the card is full" — so the
+     card-full refusal was hidden the instant it appeared and the case that asserts
+     it failed. The app was right and the harness was not. */
   function flushTimers() {
     const due = Array.from(queued.entries()).sort((a, b) => a[1].ms - b[1].ms);
-    queued.clear();
-    due.forEach(([, t]) => t.fn());
+    for (const [id, t] of due) {
+      if (!queued.has(id)) continue;
+      queued.delete(id);
+      t.fn();
+    }
   }
   function timerQueued(id) { return queued.has(id); }
 
@@ -302,6 +316,18 @@
   function visible(id) {
     const el = document.getElementById(id);
     return !!el && !!el.style.display && el.style.display !== 'none';
+  }
+  /* The toast, split by what it is saying. Since I4 gave every completed plate
+     appearance a plain-English description in `notice` tone, "the toast is showing"
+     and "the press was refused" are no longer the same question — and the cases that
+     conflated them all meant the second one. */
+  function toastText() {
+    const el = document.getElementById('play-reject');
+    return visible('play-reject') ? el.textContent : '';
+  }
+  function rejected() {
+    const el = document.getElementById('play-reject');
+    return visible('play-reject') && el.dataset.tone === 'reject';
   }
   function clickId(id) {
     const el = document.getElementById(id);
@@ -1780,7 +1806,7 @@
     promptPositionPlay('FC ');
     positionPopup('6');
     outcomePopup({ 0: ['out', 1], batter: ['safe', 0] });
-    ok('no refusal', !visible('play-reject'));
+    ok('no refusal', !rejected());
     eq('outs', inn('visiting', 0).outs, 1);
     eq('outs recorded on the play', ab('visiting', 3, 0).outsRecorded, 1);
     eq('batter on 1st', onB('visiting', 0, 0), 3);
@@ -2170,17 +2196,25 @@
     sel('home', 0, 8);
     play('HR');                                     // walk-off, 1-0
     ok('game recognised as over', gameOverShown);
-    ok('no notice for the play that ended it', !visible('play-reject'));
+    // The card was not final when this one was entered, so it is not a correction
+    // to a final card and must not be announced as one. Read by what the toast says
+    // rather than by whether it is up: since I4 the play describes itself here.
+    ok('no notice for the play that ended it', toastText().indexOf('final') < 0);
     sel('home', 3, 8);
     play('HR');                                     // the extra one
-    eq('it was recorded', rTotal('home'), '2');
     ok('and the card said so', visible('play-reject'));
+    eq('it was recorded', rTotal('home'), '2');
     eq('as a notice, not a refusal', document.getElementById('play-reject').dataset.tone, 'notice');
-    // Once. A second correction on the same final card doesn't nag.
+    // And it is the caveat that is on screen, not the play description — the more
+    // specific message about an entry has the toast (`playToastSeq`).
+    ok('in the words that name the wall', toastText().indexOf('Game is final') === 0);
+    // Once. A second correction on the same final card doesn't nag — and with the
+    // caveat spent, the next entry gets what every other entry gets.
     document.getElementById('play-reject').style.display = 'none';
     sel('home', 6, 8);
     play('1B');
-    ok('no second notice', !visible('play-reject'));
+    ok('no second notice', toastText().indexOf('final') < 0);
+    ok('the play describes itself instead', toastText().indexOf('Single.') === 0);
   });
 
   test('the live panel reads FINAL after a walk-off, and keeps reading it', () => {
@@ -4401,11 +4435,15 @@
   test('a DH lineup with no pitcher in the order raises nothing', () => {
     sel('visiting', 6, 0);
     play('1B');
+    // What the setup play left on screen (since I4, its own description), so the
+    // three position changes below are measured against it rather than against an
+    // empty toast that no longer means what it used to.
+    const afterSetup = toastText();
     setPos('visiting', 0, 'DH');
     setPos('visiting', 2, 'C');
     setPos('visiting', 4, '1B');
     ok('no question', !visible('dh-popup'));
-    ok('and no notice', !visible('play-reject'));
+    ok('and no notice', toastText() === afterSetup);
     eq('nothing terminated', gameState.dhTerminated.visiting, null);
   });
 
@@ -5054,7 +5092,7 @@
     sel('visiting', 0, 0);
     adjustRBI(-1);
     eq('and the scorer can take it off', ab('visiting', 0, 0).rbi, 0);
-    ok('with no refusal', !visible('play-reject'));
+    ok('with no refusal', !rejected());
   });
 
   /* =====================================================================
@@ -7196,6 +7234,173 @@
     eq('no curve is drawn', box.querySelectorAll('polyline').length, 0);
     ok('and it says what to do about it', /Score innings/.test(box.textContent));
     box.remove();
+  });
+
+  /* ---- I4: the play, in a sentence ---------------------------------------
+
+     After entry the cell showed `6-3` and nothing else, and the toast fired only for
+     refusals — so a scorer had no way to tell whether the app had understood him.
+     Every case here reads the toast, because the toast is the whole feature: the
+     renderer's output has no other observable effect.
+
+     Adam's rulings are what most of these pin. The sentence carries no direction (it
+     is raised before the spray popup can be answered), a runner is named only if he
+     has a name, the screen-reader label stays terse, and only completed plate
+     appearances speak. */
+
+  // One play on an empty diamond, so the sentence under test is the play's own and
+  // not an answer to an advancement popup.
+  function saidAfter(code) {
+    reset();
+    sel('visiting', 0, 0);
+    play(code);
+    return toastText();
+  }
+
+  test('a play says what it was, in words', () => {
+    eq('a hit names itself and leaves the count', saidAfter('1B'), 'Single. Nobody out.');
+    eq('an out carries the fielders that made it', saidAfter('6-3'), 'Ground out, 6-3. 1 out.');
+    eq('a fly ball, the one who caught it', saidAfter('F8'), 'Fly out, 8. 1 out.');
+    eq('a line out likewise', saidAfter('L7'), 'Line out, 7. 1 out.');
+    eq('and a strikeout has nobody to name', saidAfter('K'), 'Strikeout. 1 out.');
+  });
+
+  test('the sentence ends on the count as it now stands', () => {
+    sel('visiting', 0, 0);
+    play('K');
+    eq('one', toastText(), 'Strikeout. 1 out.');
+    play('K');
+    eq('two', toastText(), 'Strikeout. 2 out.');
+    play('K');
+    eq('and the third says what it ended', toastText(), 'Strikeout. 3 out — inning over.');
+  });
+
+  test('an error says who made it, and that the batter reached', () => {
+    sel('visiting', 0, 0);
+    play('E6');
+    // The two things a beginner cannot tell from `E6` on a cell: whose mistake it
+    // was, and whether the man is on. A single needs neither said.
+    eq('charged to the fielder, and the batter placed', toastText(),
+      'Error by 6. Batter safe at 1st. Nobody out.');
+  });
+
+  test('a code the renderer cannot name falls back to the code', () => {
+    sel('visiting', 0, 0);
+    play('3U');
+    eq('rather than guessing at it', toastText(), '3U. 1 out.');
+  });
+
+  test('the runners are named when the lineup names them', () => {
+    lineupDirty = true;
+    typeInto(document.querySelector('input[data-field="name"][data-team="visiting"][data-p="0"]'), 'Ramirez');
+    sel('visiting', 0, 0);
+    play('2B');                                       // Ramirez to 2nd
+    play('1B'); runnerPopup({ 1: 3, batter: 0 });      // and home on the single
+    eq('by name, and by the base he ran from', toastText(),
+      'Single. Ramirez scored from 2nd. Nobody out.');
+  });
+
+  test('and by the base they stood on when it does not', () => {
+    sel('visiting', 0, 0);
+    play('2B');
+    play('1B'); runnerPopup({ 1: 3, batter: 0 });
+    // "Batter 1 scored from 2nd" is worse English than either half of this, and a
+    // card being learned on very likely has no lineup typed into it.
+    eq('the base carries the whole reference', toastText(),
+      'Single. The runner on 2nd scored. Nobody out.');
+  });
+
+  test('a runner who only advances says where he stopped', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });
+    eq('and the man who held is not mentioned', toastText(),
+      'Single. The runner on 1st to 2nd. Nobody out.');
+  });
+
+  test('a runner thrown out on the bases says so, not just the out count', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: -2, batter: 0 });     // out trying for 3rd
+    eq('the out is attached to the man who made it', toastText(),
+      'Single. The runner on 1st was out at 3rd. 1 out.');
+  });
+
+  test('two runners are listed in the order they came round', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });
+    play('2B'); runnerPopup({ 1: 3, 0: 2, batter: 1 });
+    eq('lead runner first', toastText(),
+      'Double. The runner on 2nd scored, the runner on 1st to 3rd. Nobody out.');
+  });
+
+  test('a fielder\'s choice answers the question its code does not', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    promptPositionPlay('FC ');
+    positionPopup('6');
+    outcomePopup({ 0: ['out', 1], batter: ['safe', 0] });
+    eq('who is out and who is on', toastText(),
+      "Fielder's choice, 6. Batter safe at 1st. The runner on 1st was out at 2nd. 1 out.");
+  });
+
+  test('a batter who took the extra base is placed; one who did not is not', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 2, batter: 1 });      // batter to 2nd on the throw
+    eq('the base the play does not imply is said', toastText(),
+      'Single. Batter safe at 2nd. The runner on 1st to 3rd. Nobody out.');
+    sel('visiting', 6, 0);
+    play('1B'); runnerPopup({ 2: 2, 1: 1, batter: 0 });
+    ok('and the one it does is left alone', toastText().indexOf('Batter safe') < 0);
+  });
+
+  test('a walk is not narrated as a placement either', () => {
+    sel('visiting', 0, 0);
+    play('BB');
+    eq('the play name already says 1st', toastText(), 'Walk. Nobody out.');
+  });
+
+  /* One toast per entry, and the more specific message has it. `finishPlay` runs
+     last, so without the `playToastSeq` guard the description would paint over the
+     reason the card did not do what the scorer asked. */
+  test('a refusal is not talked over by the description', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    play('1B'); runnerPopup({ 0: 1, batter: 0 });       // men on 1st and 2nd
+    sel('visiting', 6, 0);
+    promptPositionPlay('FC ');
+    positionPopup('6');
+    // Two outs marked on a play whose label allows one: the cap sets one back and
+    // says so, and Confirm then completes the entry. Without the guard the
+    // description raised at the end of `finishPlay` would take that off the screen.
+    outcomePopup({ 0: ['out', 1], batter: ['out'] });
+    ok('the cap keeps the toast', rejected());
+    eq('and it is still the cap talking', toastText(),
+      "A fielder's choice records one out — runner on 1st set back to safe.");
+  });
+
+  test('a runner event stays silent for now', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    document.getElementById('play-reject').style.display = 'none';
+    key('r');
+    basePicker(0, '');
+    // Steals, wild pitches and pickoffs wait for the Beginner/Expert toggle. Until
+    // there is one, whatever speaks speaks in Expert mode too.
+    eq('nothing was said about the steal', toastText(), '');
+    eq('but the base was taken', onB('visiting', 0, 1), 0);
+  });
+
+  test('the screen-reader label is not the sentence', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    // Two registers off one set of facts (`cellOutcome`): the label is skimmed
+    // across 81 cells and stays terse, the toast is read once and is prose.
+    eq('the label keeps its own shape', aria('visiting', 0, 0),
+      'Visiting, batting order 1, inning 1: 1B, on 1st');
+    eq('while the toast is a sentence', toastText(), 'Single. Nobody out.');
   });
 
   /* ---- I9 / B8 / B9: the advancement popup, and what it calls things ------

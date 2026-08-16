@@ -745,26 +745,51 @@ function renderOut(team, pIdx, innIdx) {
    notice. */
 const A11Y_BASES = ['1st', '2nd', '3rd'];
 
+/* How one plate appearance ended, as facts rather than as a sentence: he is
+   standing on a base, he scored, he was thrown out on the bases, or he was out at
+   the plate. Every surface that describes a cell reads it from here.
+
+   Pulled out of `describeCellForScreenReader` for I4. The screen-reader label and
+   the plain-English toast say the same things in different registers — the label
+   is skimmed across 81 cells and stays terse, the toast is a sentence — and the
+   one thing they must never disagree on is which of those four happened. Splitting
+   the facts from the wording is what makes that structural rather than a promise. */
+function cellOutcome(team, pIdx, col) {
+  const t = gameState.teams[team];
+  const ab = t && t.players[pIdx] && t.players[pIdx].atBats[col];
+  if (!ab || !ab.play) return null;
+  let lastBase = -1;
+  for (let i = 0; i < 3; i++) if (ab.bases[i]) lastBase = i;
+  return {
+    play: ab.play,
+    rbi: ab.rbi || 0,
+    scored: !!(ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null),
+    unearned: !!ab.reachedOnError,
+    // The base he was thrown out at, or null. Distinct from `outNumber`: one is an
+    // out made on the bases, the other an out made at the plate.
+    outOnBase: ab.outOnBase == null ? null : ab.outOnBase,
+    outNumber: ab.out || 0,
+    lastBase
+  };
+}
+
 function describeCellForScreenReader(team, pIdx, col) {
   const side = team === 'visiting' ? 'Visiting' : 'Home';
   const spot = Math.floor(pIdx / ROWS_PER_POS) + 1;
   const innNum = getRealInning(team, col) + 1;
   const where = `${side}, batting order ${spot}, inning ${innNum}`;
-  const ab = gameState.teams[team] && gameState.teams[team].players[pIdx] &&
-    gameState.teams[team].players[pIdx].atBats[col];
-  if (!ab || !ab.play) return where + ', empty';
-  const bits = [ab.play];
-  if (ab.rbi) bits.push(ab.rbi + ' RBI');
-  if (ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null) {
-    bits.push(ab.reachedOnError ? 'scored, unearned' : 'scored');
-  } else if (ab.outOnBase != null) {
-    bits.push('out at ' + (ab.outOnBase === 3 ? 'home' : A11Y_BASES[ab.outOnBase]));
-  } else if (ab.out) {
-    bits.push('out ' + ab.out);
-  } else {
-    let last = -1;
-    for (let i = 0; i < 3; i++) if (ab.bases[i]) last = i;
-    if (last >= 0) bits.push('on ' + A11Y_BASES[last]);
+  const o = cellOutcome(team, pIdx, col);
+  if (!o) return where + ', empty';
+  const bits = [o.play];
+  if (o.rbi) bits.push(o.rbi + ' RBI');
+  if (o.scored) {
+    bits.push(o.unearned ? 'scored, unearned' : 'scored');
+  } else if (o.outOnBase != null) {
+    bits.push('out at ' + (o.outOnBase === 3 ? 'home' : A11Y_BASES[o.outOnBase]));
+  } else if (o.outNumber) {
+    bits.push('out ' + o.outNumber);
+  } else if (o.lastBase >= 0) {
+    bits.push('on ' + A11Y_BASES[o.lastBase]);
   }
   return where + ': ' + bits.join(', ');
 }
@@ -772,6 +797,129 @@ function describeCellForScreenReader(team, pIdx, col) {
 function updateCellAria(team, pIdx, col) {
   const cell = document.getElementById(`cell-${team}-${pIdx}-${col}`);
   if (cell) cell.setAttribute('aria-label', describeCellForScreenReader(team, pIdx, col));
+}
+
+/* ------------------------------------------- the play, in a sentence (I4) ---
+
+   After entry the cell shows `6-3` and nothing else. `showPlayToast` has only ever
+   fired for refusals and caveats, so a scorer who has just learned the app had no
+   way to tell whether it understood him — the one question a beginner most needs
+   answered, and the loop the audit found open.
+
+   This is the engine half: one renderer, wired to the toast that already exists, in
+   the `notice` tone it already has. No new surface and no height cost, which is what
+   makes it safe to ship before the Beginner/Expert toggle exists.
+
+   Adam's four rulings on the shape of it:
+
+   - **It fires the instant the play lands**, and does not carry the direction the
+     ball went. `finishPlay` runs before `showSprayChart` opens, so `hitLoc` is still
+     null here; waiting for it would delay the confirmation on hits and errors, which
+     are exactly the plays a beginner most wants confirmed.
+   - **A runner is named if he has a name**, and called by the base he ran from if he
+     has not. A card being learned on very likely has no lineup typed into it.
+   - **The screen-reader label stays terse** — it is skimmed across 81 cells. The two
+     share `cellOutcome` rather than a string.
+   - **Completed plate appearances only.** Steals, wild pitches and pickoffs stay
+     silent until there is a toggle to put them behind.  */
+
+const SENTENCE_BASES = ['1st', '2nd', '3rd', 'home'];
+
+// Which base the play's own name already puts the batter on. Anything not listed
+// leaves it an open question — an error, a fielder's choice, a dropped third
+// strike — and those are the ones the sentence has to answer out loud.
+const IMPLIED_BATTER_BASE = { '1B': 0, '2B': 1, '3B': 2, 'BB': 0, 'IBB': 0, 'HBP': 0, 'CI': 0 };
+
+// The fielders a code carries: "6-3" → "6-3", "F8" → "8", "E6" → "6",
+// "DP 6-4-3" → "6-4-3". The codes that are *only* fielders and nothing else —
+// "3U", a bare "8" — come back whole, and never reach here: `playSentence` returns
+// early on them, because `playTitle` has already fallen back to printing the code
+// and there is nothing to append it to.
+function playFielders(play) {
+  const p = String(play == null ? '' : play).trim();
+  let m;
+  if ((m = /^(?:DP|TP|FC|GO|FO|LO|PO)\s+(.+)$/i.exec(p))) return m[1].trim();
+  if ((m = /^[FLP](\d[\d-]*)$/.exec(p))) return m[1];
+  if ((m = /^E(\d[\d-]*)$/.exec(p))) return m[1];
+  if (/^\d+(?:-\d+)*U?$/i.test(p)) return p;
+  return '';
+}
+
+// "1B" → "Single." · "6-3" → "Ground out, 6-3." · "E6" → "Error by 6."
+function playSentence(play) {
+  const name = playTitle(play);
+  // `playTitle` returns the code itself for anything it cannot name, and there is
+  // nothing to say about a code except the code.
+  if (name === play) return name + '.';
+  const said = name.charAt(0) + name.slice(1).toLowerCase();
+  const f = playFielders(play);
+  if (!f) return said + '.';
+  // An error is charged *to* a fielder; every other code just lists who touched it.
+  return said + (isErrorPlay(play) ? ' by ' : ', ') + f + '.';
+}
+
+// One runner, as the sentence refers to him. A man with a name in the lineup is
+// called by it and told where he came from; a man without one is only the base he
+// was standing on, because "Batter 3 scored from 2nd" is worse English than either.
+function runnerSubject(team, pIdx, col, fromBase) {
+  const name = String(livePlayerField(team, getActivePlayerIndex(team, pIdx, col), 'name') || '').trim();
+  return name
+    ? { subject: name, from: ' from ' + SENTENCE_BASES[fromBase] }
+    : { subject: 'the runner on ' + SENTENCE_BASES[fromBase], from: '' };
+}
+
+/* The whole sentence, for the plate appearance that just finished. `before` is the
+   inning as it stood when the play began — `captureInning`'s `inns` map, which
+   `finishPlay` is already holding for the undo stack — because where a runner ended
+   up is only meaningful against where he started. */
+function describePlayInWords(team, pIdx, innIdx, before) {
+  const o = cellOutcome(team, pIdx, innIdx);
+  if (!o) return '';
+  const inn = getInnState(team, innIdx);
+  const was = (before && before[innIdx] && before[innIdx].bases) || [null, null, null];
+  const parts = [playSentence(o.play)];
+
+  // Where the batter ended, but only when the play's own name does not say. On a
+  // single it does; on an error, a fielder's choice or a dropped third strike the
+  // whole question a beginner has is whether the man reached.
+  const implied = IMPLIED_BATTER_BASE[o.play];
+  const isFC = o.play === 'FC' || /^FC /.test(o.play);
+  if (!o.scored && o.lastBase >= 0 && (implied === undefined || implied !== o.lastBase)) {
+    parts.push('Batter safe at ' + SENTENCE_BASES[o.lastBase] + '.');
+  } else if (!o.scored && o.lastBase < 0 && o.outNumber && isFC) {
+    // The one play whose name leaves it open in the other direction.
+    parts.push('Batter out.');
+  }
+
+  // Everybody who was already on base, lead runner first — the order a scorer
+  // watches them come home in.
+  const moves = [];
+  for (let b = 2; b >= 0; b--) {
+    const rn = was[b];
+    if (!rn) continue;
+    let now = -1;
+    for (let d = 0; d < 3; d++) if (inn.bases[d] && inn.bases[d].p === rn.p) now = d;
+    if (now === b) continue;                       // he held; nothing happened to say
+    const who = runnerSubject(team, rn.p, rn.col, b);
+    if (now > b) { moves.push(who.subject + ' to ' + SENTENCE_BASES[now]); continue; }
+    // Off the bases altogether: his own cell is the only thing that knows whether
+    // that was a run or an out.
+    const ro = cellOutcome(team, rn.p, rn.col);
+    if (ro && ro.scored) moves.push(who.subject + ' scored' + who.from);
+    else if (ro && ro.outOnBase != null) {
+      moves.push(who.subject + ' was out at ' + SENTENCE_BASES[ro.outOnBase]);
+    }
+  }
+  if (moves.length) {
+    parts.push(moves[0].charAt(0).toUpperCase() + moves[0].slice(1) +
+      (moves.length > 1 ? ', ' + moves.slice(1).join(', ') : '') + '.');
+  }
+
+  // The count as it now stands, not what this play did to it — it is the number the
+  // scorer's next decision depends on.
+  parts.push(inn.outs >= 3 ? '3 out — inning over.'
+    : inn.outs === 0 ? 'Nobody out.' : inn.outs + ' out.');
+  return parts.join(' ');
 }
 
 // Say out loud whatever just changed, for a reader that has no other way to
@@ -1715,8 +1863,18 @@ let playRejectTimer = null;
 // was refused — a rejected play has to say so, since silently dropping it is how a
 // scorer ends up trusting a wrong card — or 'notice' for one that was *accepted*
 // with a caveat, which must not be dressed in the refusal's red (M1).
+/* How many times anything has spoken through the one toast element. I4's play
+   description is the only reader: it is raised at the very end of an entry, after
+   the callbacks that raise 5.08(a), the runner-order refusals and the "recording
+   anyway" notice on a final card — all of which say something more specific about
+   the entry the scorer just made than "here is what went on the cell". Comparing
+   the count against the one captured when the entry began is how the description
+   knows to keep quiet: one toast per entry, and the more specific one has it. */
+let playToastSeq = 0;
+
 function showPlayToast(msg, tone) {
   if (typeof document === 'undefined') return;
+  playToastSeq++;
   let el = document.getElementById('play-reject');
   if (!el) {
     el = document.createElement('div');
@@ -2223,12 +2381,15 @@ function applyPlay(play, target) {
   const reject = playEntryReject(team, innIdx, play);
   if (reject) { showPlayReject(reject); return; }
 
+  // Captured before `noteEntryAfterFinal`, which is itself one of the things the
+  // play description must not talk over (I4).
+  const toastSeq = playToastSeq;
   noteEntryAfterFinal();
 
   // Save undo snapshot
   const prevTab = document.querySelector('.tab-btn.active')?.dataset.tab;
   const prev = captureInning(team, innIdx);
-  const snapshot = { team, pIdx, innIdx, prev, prevTab };
+  const snapshot = { team, pIdx, innIdx, prev, prevTab, toastSeq };
 
   ab.play = play;
   // Every at-bat ends on a pitch — add the final pitch that produced the result
@@ -3127,6 +3288,14 @@ function finishPlay(team, pIdx, innIdx, snapshot) {
   }
 
   afterStateChange(team, innIdx, { advanceBatter: true });
+
+  // I4, and after `afterStateChange` rather than before it: `recomputeInning` runs
+  // in there, and the out count the sentence ends on has to be the one the card
+  // now holds. `snapshot.prev` is the inning as it stood before the play, which is
+  // the only way to know which runners moved and which merely stayed put.
+  // And only if nothing else spoke for this entry — see `playToastSeq`.
+  const said = describePlayInWords(team, pIdx, innIdx, snapshot && snapshot.prev && snapshot.prev.inns);
+  if (said && snapshot && playToastSeq === snapshot.toastSeq) showPlayNotice(said);
 }
 
 /* Runner advancement popup */
