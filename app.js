@@ -83,6 +83,11 @@ function toggleBeginnerMode() {
   const on = !beginnerMode();
   safeStorage.setItem(MODE_KEY, on ? MODE_BEGINNER : MODE_EXPERT);
   applyScoringMode();
+  // The dimming is a stylesheet rule on `aria-disabled`, and the pass that
+  // writes it runs on state changes — of which flipping a mode is not one. A
+  // scorer who turns Beginner on between plays would otherwise see an
+  // undimmed deck until the next entry (I5).
+  if (typeof refreshControlAvailability === 'function') refreshControlAvailability();
   // Said in words, because the tick is inside a menu that is about to close
   // over it — and on the phone the menu covers the corner it sits in.
   showPlayNotice(on
@@ -3366,6 +3371,191 @@ function finishPlay(team, pIdx, innIdx, snapshot) {
   if (said && snapshot && playToastSeq === snapshot.toastSeq) setPlayEcho(said);
 }
 
+/* ------------------------------------------- one way to fix a play (I14) ---
+
+   B10: correction was spelled as nine separate concepts — Undo, Redo, Edit,
+   Rnrs, Spray, RBI+, RBI-, E/UE, Clear Play, Clear Cell — and a beginner who
+   had mis-entered a play had to already know which of the nine applied before
+   they could start. The audit named the problem and attached no idea to it;
+   this is I14, the gap filled at 5.3.
+
+   One question, asked the way the scorer would ask it, routing to the tool
+   that already does the work. Nothing new is implemented here: every option is
+   an existing function, and Expert mode still has all nine as separate keys.
+
+   Undo is deliberately not on this list. It is on the core row, it is the most
+   used correction there is, and it is the one a beginner already understands
+   without being asked what is wrong. */
+const FIX_OPTIONS = [
+  { label: 'The play itself is wrong',
+    note: 'Change what was recorded — 1B to 2B, a groundout to a fly. Keeps the pitches.',
+    act: 'editPlayType' },
+  { label: 'The runners ended up somewhere else',
+    note: 'Re-open the runner questions for this play and answer them again.',
+    act: 'editRunners' },
+  { label: 'The ball went somewhere else',
+    note: 'Re-open the spray chart and move where the ball was hit.',
+    act: 'editSprayChart' },
+  { label: 'The RBI count is wrong',
+    note: 'Add one run batted in to this at-bat.',
+    act: 'adjustRBI', arg: 1 },
+  { label: 'It has one RBI too many',
+    note: 'Take one run batted in off this at-bat.',
+    act: 'adjustRBI', arg: -1 },
+  { label: 'A run should not be earned',
+    note: 'Review which of this inning’s runs are earned and which are not.',
+    act: 'reviewEarnedRuns' },
+  { label: 'Take the play off, keep the pitches',
+    note: 'Clears the result and leaves the count that led to it.',
+    act: 'clearPlayKeepPitches', warn: true },
+  { label: 'Clear the whole cell',
+    note: 'Play, pitches and runners — everything in this at-bat.',
+    act: 'clearSelectedCell', warn: true }
+];
+
+function promptFixThat() {
+  if (!requireSelection()) return;
+  /* Like all nine it routes to, this works on the *selected* cell — which
+     after an entry is the next batter, because `finishPlay` advances it. So
+     "that" is whatever cell is lit, and on a cell with no play on it every
+     option would open a tool that returns without a word (`editPlayType` and
+     its siblings all begin `if (!ab.play) return`).
+
+     Consistency with the other nine is the right call — the scorer taps the
+     cell they mean, everywhere in this app — but a list of eight choices that
+     all silently do nothing is not. The app's own policy is that a press which
+     changes nothing says why (L2), so this says it before offering the list. */
+  const team = selectedCell.dataset.team;
+  const ab = gameState.teams[team].players[parseInt(selectedCell.dataset.p)]
+    .atBats[parseInt(selectedCell.dataset.inn)];
+  if (!ab.play) {
+    showPlayReject('Nothing recorded in this cell — tap the play you want to fix.');
+    return;
+  }
+  let popup = document.getElementById('fix-popup');
+  if (!popup) {
+    popup = document.createElement('div');
+    popup.id = 'fix-popup';
+    popup.className = 'jsp';
+    document.body.appendChild(popup);
+  }
+  let html = '<div class="jsp-title">What’s wrong with this play?</div>';
+  html += '<div class="jsp-body jsp-list">';
+  FIX_OPTIONS.forEach((o, i) => {
+    html += '<button class="fix-opt jsp-list-btn' + (o.warn ? ' jsp-list-btn--warn' : '') + '"'
+      + ' data-idx="' + i + '">' + escapeHtml(o.label)
+      + '<div class="jsp-list-note">' + escapeHtml(o.note) + '</div></button>';
+  });
+  html += '</div>';
+  html += '<button class="jsp-btn jsp-btn--wide" data-dismiss="cancel" id="fix-cancel">Nothing — close this</button>';
+  popup.innerHTML = html;
+  openPopup(popup);
+
+  popup.querySelectorAll('.fix-opt').forEach(btn => {
+    btn.onclick = function () {
+      const o = FIX_OPTIONS[parseInt(this.dataset.idx)];
+      // Closed before the tool runs: most of these open a popup of their own,
+      // and two of them would be opening it underneath this one.
+      closePopup(popup);
+      const fn = window[o.act];
+      if (typeof fn !== 'function') return;
+      if (o.arg !== undefined) fn(o.arg); else fn();
+    };
+  });
+  document.getElementById('fix-cancel').onclick = function () { closePopup(popup); };
+}
+
+/* -------------------------------------- controls that know the rule (I5) ---
+
+   Nothing on the deck was ever context-disabled (B7). SB, CS and PK with the
+   bases empty, a runner event on a finished half-inning, DP with two already
+   out — all pressable, all the time, and the refusal arrives afterwards as a
+   red toast. The messages were good; they were being spent as punishment after
+   the tap instead of as instruction before it.
+
+   Every reason below is a constant that already existed and was already being
+   shown, so this promotes them rather than writing new ones — which is what
+   the audit meant by "the sentences are already written and named".
+
+   Two decisions in the shape of it:
+
+   **Dimmed, not disabled.** A `disabled` button swallows its own click, and on
+   an iPad a `title` never appears — so the scorer would get a grey control and
+   no way to find out why. `aria-disabled` plus a dimmed look teaches before the
+   tap; the tap still lands, still runs the same guard, and still says why. It
+   is additive: no path changes, and the refusals keep their own cases.
+
+   **Beginner only.** Expert mode is today's app, and an expert reads a refusal
+   as fast as a dimmed key. The look is gated in the stylesheet; the pass runs
+   in both modes because it is cheap and because a mode flip must not need a
+   play to take effect. */
+const CONTROL_RULES = [
+  // Every runner event, keyed by the argument it carries. Same order the deck
+  // has them in, and the same message the press itself would raise.
+  { match: b => b.dataset.act === 'promptSBBase', why: () => NOTHING_TO_MOVE.SB, needs: 'runner' },
+  { match: b => b.dataset.act === 'promptCSBase', why: () => NOTHING_TO_MOVE.CS, needs: 'runner' },
+  { match: b => b.dataset.act === 'promptPickoff', why: () => NOTHING_TO_MOVE.PO, needs: 'runner' },
+  { match: b => b.dataset.act === 'moveRunner', why: () => NOTHING_TO_MOVE.MV, needs: 'runner' },
+  { match: b => b.dataset.act === 'applyRunnerEvent',
+    why: b => NOTHING_TO_MOVE[b.dataset.arg] || 'Nobody is on base.', needs: 'runner' }
+];
+
+// The half-inning is over: every entry path ends at the same wall, so every
+// entry control wears the same reason (INNING_OVER).
+const ENTRY_ACTS = ['applyPlay', 'promptGroundout', 'promptPositionPlay', 'promptErrorPlay',
+                    'applyRunnerEvent', 'promptSBBase', 'promptCSBase', 'promptPickoff',
+                    'moveRunner', 'addPitch'];
+
+/* Why this control cannot do anything right now, or '' if it can. Asked of the
+   same state the press itself would ask — `inn.bases`, `inn.outs` — so a dimmed
+   key and the refusal behind it cannot disagree. */
+function controlUnavailableReason(btn) {
+  if (!selectedCell) return '';   // NO_CELL is about the card, not the control
+  const act = btn.dataset.act;
+  if (!act) return '';
+  const team = selectedCell.dataset.team;
+  const innIdx = parseInt(selectedCell.dataset.inn);
+  const inn = getInnState(team, innIdx);
+  if (!inn) return '';
+
+  if (inn.outs >= 3 && ENTRY_ACTS.indexOf(act) >= 0) return INNING_OVER;
+
+  const empty = inn.bases.every(b => b === null);
+  if (empty) {
+    for (const rule of CONTROL_RULES) {
+      if (rule.needs === 'runner' && rule.match(btn)) {
+        return typeof rule.why === 'function' ? rule.why(btn) : rule.why;
+      }
+    }
+  }
+  return '';
+}
+
+/* Walk the deck and mark what the rules already refuse. Runs on every state
+   change and on selection, which is what keeps it honest: the pass reads live
+   state rather than caching a verdict. */
+function refreshControlAvailability() {
+  if (typeof document === 'undefined') return;
+  document.querySelectorAll('.quick-btn[data-act]').forEach(btn => {
+    // The title the markup gave it, stashed once. `E/UE` has one and it is not
+    // this pass's to throw away; every other button has none, and `ownTitle`
+    // records that as an empty string so the check below stays a simple
+    // "has it been stashed yet".
+    if (btn.dataset.ownTitle === undefined) btn.dataset.ownTitle = btn.getAttribute('title') || '';
+    const why = controlUnavailableReason(btn);
+    if (why) {
+      btn.setAttribute('aria-disabled', 'true');
+      btn.dataset.why = why;
+      btn.setAttribute('title', why);
+    } else {
+      btn.removeAttribute('aria-disabled');
+      delete btn.dataset.why;
+      if (btn.dataset.ownTitle) btn.setAttribute('title', btn.dataset.ownTitle);
+      else btn.removeAttribute('title');
+    }
+  });
+}
+
 /* ------------------------------------------ the echo line (I4, Beginner) ---
 
    One sentence, held on screen until the next play replaces it. Written to
@@ -4320,6 +4510,11 @@ function livePitchCount(battingTeam, pitcherIdx) {
 
 /* Game Situation Panel */
 function updateSituation() {
+  // Before the guard, not after it (I5). This is the one function every state
+  // change and every selection already runs through, which is exactly what the
+  // availability pass wants — but it must also run when there is *no*
+  // selection, or a card cleared while SB was dimmed leaves it dimmed.
+  refreshControlAvailability();
   if (!selectedCell) return;
   const team = selectedCell.dataset.team;
   const pIdx = parseInt(selectedCell.dataset.p);

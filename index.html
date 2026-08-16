@@ -217,16 +217,23 @@
             <button class="quick-btn" data-act="changeFieldPos">Pos</button>
           </div>
           <div class="qbg-panel" data-group="fix">
-            <button class="quick-btn undo-play" data-act="redoLastPlay">Redo<small>y</small></button>
-            <button class="quick-btn" data-act="editPlayType">Edit<small>t</small></button>
-            <button class="quick-btn" data-act="editRunners">Rnrs<small>m</small></button>
-            <button class="quick-btn" data-act="editSprayChart">Spray</button>
-            <button class="quick-btn" data-act="adjustRBI" data-argnum="1">RBI+</button>
-            <button class="quick-btn" data-act="adjustRBI" data-argnum="-1">RBI−</button>
-            <button class="quick-btn" data-act="reviewEarnedRuns" title="Review earned/unearned runs for this inning">E/UE</button>
-            <span class="qb-label">Clear</span>
-            <button class="quick-btn" style="color:var(--accent)" data-act="clearPlayKeepPitches" aria-label="Clear play">Play</button>
-            <button class="quick-btn" style="color:var(--accent)" data-act="clearSelectedCell" aria-label="Clear cell">Cell<small>c</small></button>
+            <!-- I14, closing B10. Correction was spelled as nine separate
+                 concepts — Redo, Edit, Rnrs, Spray, RBI+, RBI-, E/UE, Clear
+                 Play, Clear Cell — and a beginner who mis-entered had to
+                 already know which of the nine applied. In Beginner mode the
+                 nine are hidden and this asks the question instead. It costs
+                 no width: it replaces them. -->
+            <button class="quick-btn qb-fix-that" data-act="promptFixThat">Fix that</button>
+            <button class="quick-btn undo-play qb-fix-nine" data-act="redoLastPlay">Redo<small>y</small></button>
+            <button class="quick-btn qb-fix-nine" data-act="editPlayType">Edit<small>t</small></button>
+            <button class="quick-btn qb-fix-nine" data-act="editRunners">Rnrs<small>m</small></button>
+            <button class="quick-btn qb-fix-nine" data-act="editSprayChart">Spray</button>
+            <button class="quick-btn qb-fix-nine" data-act="adjustRBI" data-argnum="1">RBI+</button>
+            <button class="quick-btn qb-fix-nine" data-act="adjustRBI" data-argnum="-1">RBI−</button>
+            <button class="quick-btn qb-fix-nine" data-act="reviewEarnedRuns" title="Review earned/unearned runs for this inning">E/UE</button>
+            <span class="qb-label qb-fix-nine">Clear</span>
+            <button class="quick-btn qb-fix-nine" style="color:var(--accent)" data-act="clearPlayKeepPitches" aria-label="Clear play">Play</button>
+            <button class="quick-btn qb-fix-nine" style="color:var(--accent)" data-act="clearSelectedCell" aria-label="Clear cell">Cell<small>c</small></button>
           </div>
         </div>
         <!-- Phone only — folds the docked deck away so the whole card can be
@@ -345,16 +352,23 @@
             <button class="quick-btn" data-act="changeFieldPos">Pos</button>
           </div>
           <div class="qbg-panel" data-group="fix">
-            <button class="quick-btn undo-play" data-act="redoLastPlay">Redo<small>y</small></button>
-            <button class="quick-btn" data-act="editPlayType">Edit<small>t</small></button>
-            <button class="quick-btn" data-act="editRunners">Rnrs<small>m</small></button>
-            <button class="quick-btn" data-act="editSprayChart">Spray</button>
-            <button class="quick-btn" data-act="adjustRBI" data-argnum="1">RBI+</button>
-            <button class="quick-btn" data-act="adjustRBI" data-argnum="-1">RBI−</button>
-            <button class="quick-btn" data-act="reviewEarnedRuns" title="Review earned/unearned runs for this inning">E/UE</button>
-            <span class="qb-label">Clear</span>
-            <button class="quick-btn" style="color:var(--accent)" data-act="clearPlayKeepPitches" aria-label="Clear play">Play</button>
-            <button class="quick-btn" style="color:var(--accent)" data-act="clearSelectedCell" aria-label="Clear cell">Cell<small>c</small></button>
+            <!-- I14, closing B10. Correction was spelled as nine separate
+                 concepts — Redo, Edit, Rnrs, Spray, RBI+, RBI-, E/UE, Clear
+                 Play, Clear Cell — and a beginner who mis-entered had to
+                 already know which of the nine applied. In Beginner mode the
+                 nine are hidden and this asks the question instead. It costs
+                 no width: it replaces them. -->
+            <button class="quick-btn qb-fix-that" data-act="promptFixThat">Fix that</button>
+            <button class="quick-btn undo-play qb-fix-nine" data-act="redoLastPlay">Redo<small>y</small></button>
+            <button class="quick-btn qb-fix-nine" data-act="editPlayType">Edit<small>t</small></button>
+            <button class="quick-btn qb-fix-nine" data-act="editRunners">Rnrs<small>m</small></button>
+            <button class="quick-btn qb-fix-nine" data-act="editSprayChart">Spray</button>
+            <button class="quick-btn qb-fix-nine" data-act="adjustRBI" data-argnum="1">RBI+</button>
+            <button class="quick-btn qb-fix-nine" data-act="adjustRBI" data-argnum="-1">RBI−</button>
+            <button class="quick-btn qb-fix-nine" data-act="reviewEarnedRuns" title="Review earned/unearned runs for this inning">E/UE</button>
+            <span class="qb-label qb-fix-nine">Clear</span>
+            <button class="quick-btn qb-fix-nine" style="color:var(--accent)" data-act="clearPlayKeepPitches" aria-label="Clear play">Play</button>
+            <button class="quick-btn qb-fix-nine" style="color:var(--accent)" data-act="clearSelectedCell" aria-label="Clear cell">Cell<small>c</small></button>
           </div>
         </div>
         <!-- Phone only — folds the docked deck away so the whole card can be

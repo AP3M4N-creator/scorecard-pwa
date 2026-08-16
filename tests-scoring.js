@@ -7638,6 +7638,126 @@
       document.getElementById('play-reject').dataset.tone, 'notice');
   });
 
+  /* ---- I5 / I14: controls that know the rule, and one way to fix a play ----
+
+     B7: nothing was ever context-disabled. SB with the bases empty, a runner
+     event on a finished half-inning — all pressable, and the refusal arrived
+     afterwards as a red toast. The messages were good; they were being spent
+     as punishment after the tap instead of as instruction before it.
+
+     The dimming is `aria-disabled`, not `disabled`, so the tap still lands and
+     still raises the same refusal. That is the property worth pinning: this is
+     additive, and no entry path changed. The *look* is a Beginner-only
+     stylesheet rule that jsdom cannot see; the attribute is written in both
+     modes so a mode flip needs no play to take effect. */
+
+  const deckBtn = act => document.querySelector(`.quick-btn[data-act="${act}"]`);
+  const dimmed = act => deckBtn(act).getAttribute('aria-disabled') === 'true';
+
+  test('a runner control says it is unavailable before it is pressed', () => {
+    sel('visiting', 0, 0);
+    ['promptSBBase', 'promptCSBase', 'promptPickoff', 'moveRunner'].forEach(a => {
+      ok(`${a} is dimmed with nobody on`, dimmed(a));
+      ok(`and says why`, /Nobody on/.test(deckBtn(a).getAttribute('title')));
+    });
+    // The reason on the control is the reason the press would have given.
+    eq('SB wears its own named message', deckBtn('promptSBBase').dataset.why, NOTHING_TO_MOVE.SB);
+    eq('and CS wears its own', deckBtn('promptCSBase').dataset.why, NOTHING_TO_MOVE.CS);
+
+    play('1B');
+    ok('a runner on base clears it', !dimmed('promptSBBase'));
+    eq('and the reason goes with it', deckBtn('promptSBBase').dataset.why, undefined);
+    eq('leaving no stale tooltip', deckBtn('promptSBBase').getAttribute('title'), null);
+  });
+
+  // A title the markup gave a button is not this pass's to throw away.
+  test('a control with its own tooltip keeps it', () => {
+    const eue = deckBtn('reviewEarnedRuns');
+    ok('E/UE came with one', /earned/i.test(eue.getAttribute('title')));
+    sel('visiting', 0, 0);
+    play('1B');
+    ok('and still has it after a pass', /earned/i.test(eue.getAttribute('title')));
+  });
+
+  test('dimming does not disable — the press still lands and still says why', () => {
+    sel('visiting', 0, 0);
+    ok('SB is dimmed', dimmed('promptSBBase'));
+    ok('but not disabled', !deckBtn('promptSBBase').disabled);
+    promptSBBase();
+    ok('and pressing it still refuses out loud', rejected());
+    eq('in the same words the control was wearing', toastText(), NOTHING_TO_MOVE.SB);
+  });
+
+  test('a finished half-inning dims every way into it', () => {
+    sel('visiting', 0, 0);
+    play('K'); play('K'); play('K');
+    sel('visiting', 0, 0);
+    ['applyPlay', 'promptGroundout', 'addPitch', 'promptSBBase'].forEach(a => {
+      const b = deckBtn(a);
+      ok(`${a} is dimmed`, b.getAttribute('aria-disabled') === 'true');
+      eq(`and says the inning is over`, b.dataset.why, INNING_OVER);
+    });
+  });
+
+  /* I14 — B10's nine concepts become one question. Nothing new is implemented:
+     every option routes to a function that already exists, and Expert mode
+     still has all nine keys. */
+  test('one entry point covers the corrections, and routes to the real ones', () => {
+    ok('there is a Fix that control', !!deckBtn('promptFixThat'));
+    ok('and it is a real action', typeof promptFixThat === 'function');
+    ok('every option routes somewhere real',
+      FIX_OPTIONS.every(o => typeof window[o.act] === 'function'));
+    // The nine it replaces are still there for Expert mode; the stylesheet is
+    // what hides them, so this is a check that nothing was deleted.
+    ['redoLastPlay', 'editPlayType', 'editRunners', 'editSprayChart', 'adjustRBI',
+     'reviewEarnedRuns', 'clearPlayKeepPitches', 'clearSelectedCell']
+      .forEach(a => ok(`${a} is still on the deck`, !!deckBtn(a)));
+
+    sel('visiting', 0, 0);
+    play('1B');
+    // `finishPlay` advances the selection to the next batter, so the cell that
+    // has the play has to be tapped again — which is how every one of the nine
+    // it routes to already works.
+    sel('visiting', 0, 0);
+    promptFixThat();
+    const popup = document.getElementById('fix-popup');
+    ok('the popup opens', visible('fix-popup'));
+    ok('on the shared shell', popup.classList.contains('jsp'));
+    eq('with one row per option', popup.querySelectorAll('.fix-opt').length, FIX_OPTIONS.length);
+    ok('each row says what it will do',
+      [...popup.querySelectorAll('.fix-opt')].every(b => b.querySelector('.jsp-list-note')));
+    // The two destructive ones are marked as such.
+    eq('and the destructive ones are flagged',
+      popup.querySelectorAll('.fix-opt.jsp-list-btn--warn').length,
+      FIX_OPTIONS.filter(o => o.warn).length);
+
+    // Routing: the "play itself is wrong" row must reach the edit-play popup,
+    // and must close this one on the way rather than stack under it.
+    popup.querySelector('.fix-opt[data-idx="0"]').click();
+    ok('the fix popup closed behind it', !visible('fix-popup'));
+    ok('and the tool it named is open', visible('edit-play-popup'));
+    dismissPopupById('edit-play-popup');
+  });
+
+  test('Fix that needs a cell, like every other correction', () => {
+    if (selectedCell) selectedCell.classList.remove('selected');
+    selectedCell = null;
+    promptFixThat();
+    ok('it refuses without one', rejected());
+    ok('and opens nothing', !visible('fix-popup'));
+  });
+
+  /* The eight tools it offers all begin `if (!ab.play) return` — silently. On
+     an empty cell the list would be eight choices that each do nothing, which
+     is the dead press the app's own policy forbids (L2). */
+  test('Fix that on an empty cell says so instead of offering eight no-ops', () => {
+    sel('visiting', 0, 0);
+    promptFixThat();
+    ok('refused', rejected());
+    ok('and it names what to do about it', /tap the play/i.test(toastText()));
+    ok('with no list offered', !visible('fix-popup'));
+  });
+
   /* ---- I6 / I15: the guide, and what it now explains ----------------------
 
      B3: the card carries nine visual signals and explained none of them. The

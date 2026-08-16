@@ -439,6 +439,29 @@ details.info-details > summary:hover { color: var(--navy); }
 /* ---------- Section (sub) tabs: Batting / Pitching / Spray & Notes ---------- */
 .sec-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 2px 0 6px; }
 
+/* I5 — a control the rules already refuse says so before the tap, not after.
+
+   `aria-disabled`, not `disabled`: a disabled button swallows its own click,
+   and on an iPad the `title` never appears, so the scorer would get a grey key
+   and no way to learn why. Dimmed, the key still takes the tap, still runs the
+   same guard, and still raises the same named refusal — so this is purely
+   additive and no entry path changed.
+
+   Beginner only. Expert mode is today's app and an expert reads a refusal as
+   fast as a dimmed key. Gated here rather than in app.js, so the pass can run
+   unconditionally and there is no mode test to fall out of step with. */
+[data-mode="beginner"] .quick-btn[aria-disabled="true"] {
+  opacity: .38;
+  border-style: dashed;
+}
+
+/* I14 — the nine corrections become one question in Beginner mode. A straight
+   swap, so it costs no width in a deck that has none to give: Expert keeps all
+   nine keys, Beginner gets the one that asks which of them you wanted. */
+.qb-fix-that { display: none; }
+[data-mode="beginner"] .qb-fix-that { display: inline-flex; }
+[data-mode="beginner"] .qb-fix-nine { display: none; }
+
 /* ---------- The play, in a sentence, kept on screen (I4, Beginner half) ----
 
    Expert mode gets nothing here — since I1 a completed play is recorded in
@@ -494,9 +517,11 @@ details.info-details > summary:hover { color: var(--navy); }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 /* Nothing recorded yet — says what the line is for rather than sitting blank,
-   which reads as something failing to load. */
+   which reads as something failing to load. Short enough to survive the
+   narrowest slot it gets: 341px at 1194x834, where the longer version this
+   started as was ellipsised mid-sentence. */
 [data-mode="beginner"] .play-echo:empty::before {
-  content: 'Score a play and the card will say what it recorded.';
+  content: 'Each play will be explained here.';
   color: var(--text-light);
 }
 
