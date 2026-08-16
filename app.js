@@ -24,6 +24,72 @@ function reportStorageFailure() {
   if (banner) banner.style.display = 'flex';
 }
 
+/* ------------------------------------------------- Beginner mode (I1) ---
+
+   The container the rest of the beginner work hangs off. Built at step 4 of
+   the audit's order rather than first, on its own argument: there is nothing
+   to put behind a switch until the sentence renderer, the field map and the
+   corrected guide rows exist, and a toggle built before them is an empty one.
+
+   Two properties decide everything else about it.
+
+   **It is a device preference, not a card rule.** `gameState.rules` holds
+   regulation length and re-entry, and those travel with the game — exported,
+   imported, restored from the library, argued about by two teams. Which mode a
+   scorer wants the app in is a fact about the scorer, so it lives under its own
+   storage key and is never read from or written to `gameState`. A card learned
+   on and then handed to an expert does not carry the training wheels with it.
+
+   **Expert is the default, and Expert is today's app unchanged.** Adam's
+   ruling. A device nobody has touched behaves exactly as it did before this
+   commit, which is what makes every Beginner surface after this safe to build:
+   the failure mode of a bug in one is that a scorer who opted in sees it, not
+   that the app changes under everyone.
+
+   The state is mirrored onto `<html data-mode>` so the stylesheet can gate a
+   purely visual surface without asking JS, and set during `loadState` — before
+   the card is painted — so nothing flashes through the wrong mode on the way
+   up. `beginnerMode()` is the only reader; nothing else should test the
+   attribute or the key directly. */
+const MODE_KEY = 'baseball-scorecard-mode';
+const MODE_BEGINNER = 'beginner';
+const MODE_EXPERT = 'expert';
+
+// Anything that is not exactly 'beginner' is Expert, which is the safe way
+// round: a corrupt or half-written value lands on today's app rather than on
+// a mode the scorer never asked for.
+function scoringMode() {
+  return safeStorage.getItem(MODE_KEY) === MODE_BEGINNER ? MODE_BEGINNER : MODE_EXPERT;
+}
+
+function beginnerMode() { return scoringMode() === MODE_BEGINNER; }
+
+/* Write the mode onto the document, and onto the menu item that reports it.
+   Called on boot and on every flip, so the attribute, the tick and the stored
+   value cannot come apart. */
+function applyScoringMode() {
+  if (typeof document === 'undefined') return;
+  const on = beginnerMode();
+  const root = document.documentElement;
+  if (root) root.setAttribute('data-mode', on ? MODE_BEGINNER : MODE_EXPERT);
+  const item = document.getElementById('mode-toggle');
+  if (item) {
+    // A pressed toggle button — see the markup for why not a checkbox role.
+    item.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+}
+
+function toggleBeginnerMode() {
+  const on = !beginnerMode();
+  safeStorage.setItem(MODE_KEY, on ? MODE_BEGINNER : MODE_EXPERT);
+  applyScoringMode();
+  // Said in words, because the tick is inside a menu that is about to close
+  // over it — and on the phone the menu covers the corner it sits in.
+  showPlayNotice(on
+    ? 'Beginner mode on — the card will explain what it records.'
+    : 'Expert mode — plays are recorded without commentary.');
+}
+
 /* ------------------------------------------------ unreadable saves (#25) ---
    A stored game that won't parse used to be discarded with a console line, and
    the next autoSave — 400ms later — wrote over it. A corrupt library key read
@@ -3284,8 +3350,17 @@ function finishPlay(team, pIdx, innIdx, snapshot) {
   // now holds. `snapshot.prev` is the inning as it stood before the play, which is
   // the only way to know which runners moved and which merely stayed put.
   // And only if nothing else spoke for this entry — see `playToastSeq`.
-  const said = describePlayInWords(team, pIdx, innIdx, snapshot && snapshot.prev && snapshot.prev.inns);
-  if (said && snapshot && playToastSeq === snapshot.toastSeq) showPlayNotice(said);
+  //
+  // Beginner mode only, from I1 on. Step 1 shipped this to both modes because
+  // there was no switch to put it behind yet, and it fires on every completed
+  // plate appearance — 2.2s at `bottom: 80px`, which covers the deck on an iPad
+  // and card rows 3-4 on a phone. An expert already knows the app understood
+  // him; he can read the cell. Refusals and caveats are unaffected and still
+  // reach both modes: those say something he could not have known.
+  if (beginnerMode()) {
+    const said = describePlayInWords(team, pIdx, innIdx, snapshot && snapshot.prev && snapshot.prev.inns);
+    if (said && snapshot && playToastSeq === snapshot.toastSeq) showPlayNotice(said);
+  }
 }
 
 /* Runner advancement popup */
@@ -8927,7 +9002,9 @@ function init() {
   buildPitcherTable('visiting', 'pitchers-visiting');
   buildPitcherTable('home', 'pitchers-home');
   buildLinescore();
-  // Sidebar removed
+  // Before `loadState`, so the card is painted into the mode it is going to be
+  // in rather than repainted into it (I1).
+  applyScoringMode();
   loadState();
 }
 

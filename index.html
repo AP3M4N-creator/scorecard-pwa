@@ -84,6 +84,17 @@
           <button data-act="showGameSummary">Summary</button>
           <button data-act="openGameLibrary">Games</button>
           <button data-act="showHotkeyModal">Shortcuts</button>
+          <!-- A device preference, not a card rule, which is why it is here
+               and not in Details beside regulation innings and re-entry (I1).
+
+               A toggle button with `aria-pressed`, not `role="menuitemcheckbox"`:
+               that role is only meaningful inside a `role="menu"`, and giving
+               this panel one would promise arrow-key navigation and a roving
+               tabindex that it does not implement. A pressed button is valid
+               standing on its own, and it is what the popup chips already use.
+               `applyScoringMode` is the only thing that writes it. -->
+          <button id="mode-toggle" class="menu-check" aria-pressed="false"
+                  data-act="toggleBeginnerMode">Beginner mode</button>
           <button class="danger" data-act="newGame">New Game</button>
         </div>
       </div>

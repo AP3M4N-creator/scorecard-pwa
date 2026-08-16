@@ -161,6 +161,14 @@
     const innSel = document.getElementById('info-innings');
     if (innSel && innSel.value !== String(DEFAULT_REGULATION)) innSel.value = String(DEFAULT_REGULATION);
 
+    // The scoring mode is a *device* preference (I1) — it survives New Game,
+    // Load and Import on purpose, which means `reset()` has to put it back or
+    // one case's `beginner()` leaks into every case after it. Expert is what a
+    // device that has never been touched reports, so it is what a case that
+    // never asks for a mode should run in.
+    safeStorage.removeItem(MODE_KEY);
+    applyScoringMode();
+
     // And the tab, which is shared DOM the same way. The app switches sides on
     // its own — the half-inning ending, an undo restoring the other team — so a
     // case that ended on Home left every later case running against a
@@ -249,6 +257,8 @@
     return cell;
   }
   function sel(team, p, col) { touch(col); selectCell(cellOf(team, p, col)); return cellOf(team, p, col); }
+  // Put this case in Beginner mode. `reset()` puts it back to Expert after.
+  function beginner() { safeStorage.setItem(MODE_KEY, MODE_BEGINNER); applyScoringMode(); }
   function play(code) { touch(curCol()); applyPlay(code); }
   function pitch(type) { touch(curCol()); addPitch(type); }
   function key(k) {
@@ -2294,6 +2304,11 @@
      does have to correct a final card — but it says so once, and the card carries
      a standing FINAL. */
   test('an entry made after a walk-off is accepted, with one notice', () => {
+    // In Beginner mode, because what this case is really about is the
+    // arbitration between two notices for the same entry (`playToastSeq`) —
+    // and since I1 the play description is one of the two only in that mode.
+    // That the caveat itself reaches an Expert card is pinned in the I1 block.
+    beginner();
     sel('home', 0, 8);
     play('HR');                                     // walk-off, 1-0
     ok('game recognised as over', gameOverShown);
@@ -7424,6 +7439,132 @@
     box.remove();
   });
 
+  /* ---- I1: Beginner / Expert ----------------------------------------------
+
+     The container the rest of the beginner work hangs off, so what these pin is
+     the contract the later steps are going to rely on rather than any one
+     surface. Three things, and each of them is a way this could go wrong
+     quietly:
+
+       - **Expert is the default and Expert is today's app.** A device nobody
+         has touched must behave exactly as it did before I1. If that ever stops
+         being true, every Beginner surface built after this becomes a change to
+         everyone's app rather than an opt-in.
+       - **It is a device preference, not a card rule.** It must survive New
+         Game and a load from the library, and it must never appear in
+         `gameState` — where it would ride along into an export and arrive on
+         somebody else's iPad.
+       - **The tick, the attribute and the stored value are one state.** Three
+         representations that can drift; `applyScoringMode` is the only writer.
+
+     The stylesheet is not loaded under jsdom, so nothing here can see the tick
+     itself — what it can see is `aria-pressed`, which is what actually carries
+     the state to assistive tech and what the CSS paints from. */
+
+  test('a device nobody has touched is in Expert mode', () => {
+    eq('the stored value is absent, not a mode', safeStorage.getItem(MODE_KEY), null);
+    eq('and it reads as Expert', scoringMode(), 'expert');
+    ok('which is what the rest of the app asks', !beginnerMode());
+    eq('the document says so too',
+      document.documentElement.getAttribute('data-mode'), 'expert');
+    eq('and the menu item reports unchecked',
+      document.getElementById('mode-toggle').getAttribute('aria-pressed'), 'false');
+  });
+
+  test('the toggle flips all three representations together', () => {
+    toggleBeginnerMode();
+    ok('the app is in Beginner', beginnerMode());
+    eq('the value is stored', safeStorage.getItem(MODE_KEY), MODE_BEGINNER);
+    eq('the document carries it', document.documentElement.getAttribute('data-mode'), 'beginner');
+    eq('the menu item is checked',
+      document.getElementById('mode-toggle').getAttribute('aria-pressed'), 'true');
+    ok('and it says which way it went', /Beginner mode on/.test(toastText()));
+
+    toggleBeginnerMode();
+    ok('and back', !beginnerMode());
+    eq('stored as expert rather than removed', safeStorage.getItem(MODE_KEY), MODE_EXPERT);
+    eq('document', document.documentElement.getAttribute('data-mode'), 'expert');
+    eq('menu item', document.getElementById('mode-toggle').getAttribute('aria-pressed'), 'false');
+  });
+
+  // Anything that is not exactly 'beginner' is Expert. A half-written value is
+  // the case this exists for: it must land on today's app, not on a mode the
+  // scorer never chose.
+  test('a value the app did not write reads as Expert', () => {
+    ['', 'BEGINNER', 'Beginner ', 'true', '1', 'null'].forEach(v => {
+      safeStorage.setItem(MODE_KEY, v);
+      eq(`${JSON.stringify(v)} is not Beginner`, scoringMode(), 'expert');
+    });
+  });
+
+  test('the mode is a device preference, not part of the card', () => {
+    beginner();
+    // It is not in the state object, so it cannot reach a save, an export, or
+    // another scorer's iPad.
+    ok('gameState carries no mode',
+      !/beginner|scoringMode|"mode"/i.test(JSON.stringify(gameState)));
+    // `stateForStorage` is what both the export file and the library entry are
+    // built from, so this is the one that matters — it is the shape that leaves
+    // the device.
+    ok('nor does what gets written or exported',
+      !/beginner/i.test(JSON.stringify(stateForStorage(gameState))));
+
+    // And it outlives the card. New Game replaces `gameState` wholesale and
+    // repaints everything through `applyState`, which is the shared bottom of
+    // Load and Import too — so this is the path all three would break on.
+    // jsdom ships no `confirm`, and stubbing it here rather than globally keeps
+    // every other case honest about not needing one.
+    const realConfirm = window.confirm;
+    window.confirm = () => true;
+    try { newGame(); } finally { window.confirm = realConfirm; }
+
+    ok('New Game leaves the mode alone', beginnerMode());
+    eq('the stored value survived it', safeStorage.getItem(MODE_KEY), MODE_BEGINNER);
+    eq('and the document with it',
+      document.documentElement.getAttribute('data-mode'), 'beginner');
+    ok('on a card that really was replaced', !gameState.teams.visiting.players[0].atBats[0].play);
+  });
+
+  /* The one behaviour I1 ships with, and Adam's ruling: the play description
+     goes Beginner-only. Step 1 sent it to both modes because there was no
+     switch to put it behind, and it fires on every completed plate appearance
+     — 2.2s over the deck, every time. What must NOT follow it behind the
+     switch is a refusal or a caveat: those say something the scorer could not
+     have known, and an expert needs them as much as a beginner does. */
+  test('the play description is Beginner-only; refusals and caveats are not', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    eq('an Expert card records the play in silence', toastText(), '');
+
+    beginner();
+    sel('visiting', 3, 0);
+    play('1B');
+    runnerPopup({ 0: 1, batter: 0 });
+    ok('a Beginner card says what it took down', /Single/.test(toastText()));
+  });
+
+  test('a refusal still reaches an Expert card', () => {
+    // SB with the bases empty: refused, and the refusal is the only way to know
+    // why nothing happened.
+    sel('visiting', 0, 0);
+    applyRunnerEvent('SB');
+    ok('the toast is up', visible('play-reject'));
+    eq('as a refusal', document.getElementById('play-reject').dataset.tone, 'reject');
+    ok('and it is not the mode that decided so', !beginnerMode());
+  });
+
+  test('a caveat still reaches an Expert card', () => {
+    // The "recording anyway" notice on a final card — a `notice`, like the play
+    // description, but one that carries information the cell does not.
+    sel('home', 0, 8);
+    play('HR');                                     // walk-off
+    sel('home', 3, 8);
+    play('HR');                                     // the extra one
+    ok('the caveat is up in Expert', /Game is final/.test(toastText()));
+    eq('and it is a notice, not a refusal',
+      document.getElementById('play-reject').dataset.tone, 'notice');
+  });
+
   /* ---- I4: the play, in a sentence ---------------------------------------
 
      After entry the cell showed `6-3` and nothing else, and the toast fired only for
@@ -7434,12 +7575,19 @@
      Adam's rulings are what most of these pin. The sentence carries no direction (it
      is raised before the spray popup can be answered), a runner is named only if he
      has a name, the screen-reader label stays terse, and only completed plate
-     appearances speak. */
+     appearances speak.
+
+     Every case here runs in Beginner mode, and did not have to before I1 existed:
+     step 1 shipped the description to both modes because there was no switch to put
+     it behind. There is one now, and Adam's ruling puts the description behind it —
+     so a case that wants to read the sentence has to ask for the mode the sentence
+     lives in. The Expert half is pinned in the I1 block. */
 
   // One play on an empty diamond, so the sentence under test is the play's own and
   // not an answer to an advancement popup.
   function saidAfter(code) {
     reset();
+    beginner();
     sel('visiting', 0, 0);
     play(code);
     return toastText();
@@ -7454,6 +7602,7 @@
   });
 
   test('the sentence ends on the count as it now stands', () => {
+    beginner();
     sel('visiting', 0, 0);
     play('K');
     eq('one', toastText(), 'Strikeout. 1 out.');
@@ -7464,6 +7613,7 @@
   });
 
   test('an error says who made it, and that the batter reached', () => {
+    beginner();
     sel('visiting', 0, 0);
     play('E6');
     // The two things a beginner cannot tell from `E6` on a cell: whose mistake it
@@ -7473,12 +7623,14 @@
   });
 
   test('a code the renderer cannot name falls back to the code', () => {
+    beginner();
     sel('visiting', 0, 0);
     play('3U');
     eq('rather than guessing at it', toastText(), '3U. 1 out.');
   });
 
   test('the runners are named when the lineup names them', () => {
+    beginner();
     lineupDirty = true;
     typeInto(document.querySelector('input[data-field="name"][data-team="visiting"][data-p="0"]'), 'Ramirez');
     sel('visiting', 0, 0);
@@ -7489,6 +7641,7 @@
   });
 
   test('and by the base they stood on when it does not', () => {
+    beginner();
     sel('visiting', 0, 0);
     play('2B');
     play('1B'); runnerPopup({ 1: 3, batter: 0 });
@@ -7499,6 +7652,7 @@
   });
 
   test('a runner who only advances says where he stopped', () => {
+    beginner();
     sel('visiting', 0, 0);
     play('1B');
     play('1B'); runnerPopup({ 0: 1, batter: 0 });
@@ -7507,6 +7661,7 @@
   });
 
   test('a runner thrown out on the bases says so, not just the out count', () => {
+    beginner();
     sel('visiting', 0, 0);
     play('1B');
     play('1B'); runnerPopup({ 0: -2, batter: 0 });     // out trying for 3rd
@@ -7515,6 +7670,7 @@
   });
 
   test('two runners are listed in the order they came round', () => {
+    beginner();
     sel('visiting', 0, 0);
     play('1B');
     play('1B'); runnerPopup({ 0: 1, batter: 0 });
@@ -7524,6 +7680,7 @@
   });
 
   test('a fielder\'s choice answers the question its code does not', () => {
+    beginner();
     sel('visiting', 0, 0);
     play('1B');
     promptPositionPlay('FC ');
@@ -7534,6 +7691,7 @@
   });
 
   test('a batter who took the extra base is placed; one who did not is not', () => {
+    beginner();
     sel('visiting', 0, 0);
     play('1B');
     play('1B'); runnerPopup({ 0: 2, batter: 1 });      // batter to 2nd on the throw
@@ -7545,6 +7703,7 @@
   });
 
   test('a walk is not narrated as a placement either', () => {
+    beginner();
     sel('visiting', 0, 0);
     play('BB');
     eq('the play name already says 1st', toastText(), 'Walk. Nobody out.');
@@ -7582,6 +7741,7 @@
   });
 
   test('the screen-reader label is not the sentence', () => {
+    beginner();
     sel('visiting', 0, 0);
     play('1B');
     // Two registers off one set of facts (`cellOutcome`): the label is skimmed

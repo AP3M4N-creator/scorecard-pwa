@@ -1952,6 +1952,27 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
 .hdr-menu-panel button:hover { background: var(--paper-2, rgba(0,50,120,0.07)); }
 .hdr-menu-panel button.danger { color: var(--rb-red, #c0111f); }
 
+/* A menu item that reports a state rather than doing a thing (I1).
+
+   The tick trails the label rather than leading it. Led, it needs a reserved
+   column so the label does not jump when it appears — and that column indents
+   this one item out of line with Summary, Games and Shortcuts, which is a
+   worse thing to look at than the problem it solves. Trailing, nothing shifts
+   and nothing else in the menu has to move.
+
+   The checked row also goes navy-on-tint, so the state is not carried by one
+   small mark: same reasoning as the popup chips under H4, and `aria-pressed`
+   says it a third way for anything not looking. */
+.hdr-menu-panel button.menu-check {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+.hdr-menu-panel button.menu-check::after {
+  content: '✓'; flex: 0 0 auto;
+  font-weight: 700; color: var(--rb-red, #c0111f); visibility: hidden;
+}
+.hdr-menu-panel button.menu-check[aria-pressed="true"]::after { visibility: visible; }
+.hdr-menu-panel button.menu-check[aria-pressed="true"] { background: var(--blue-light); }
+
 /* The team switch lives in the section bar now — one control row
    instead of two. Only the active tab's copy is ever on screen. */
 .sec-bar > .tab-bar { border: none; gap: 4px; padding-right: 12px; margin-right: 6px;
