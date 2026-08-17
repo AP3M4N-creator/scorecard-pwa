@@ -8761,15 +8761,48 @@
       const popup = document.getElementById('practice-popup');
       ok('the prompt is on screen when the card arrives', visible('practice-popup'));
       const shown = [...popup.querySelectorAll('.practice-list li')].map(l => l.textContent);
-      eq('it lists the plays to enter', shown.join(' | '), PRACTICE_TODO.join(' | '));
+      eq('it lists the plays to enter', shown.join(' | '), PRACTICE_TODO.map(t => t.text).join(' | '));
       // Same list, so a scorer who dismisses the popup has not lost it.
       ok('and the notes carry the same list',
-        PRACTICE_TODO.every(t => (gameState.notes || '').includes(t)));
+        PRACTICE_TODO.every(t => (gameState.notes || '').includes(t.text)));
       // No notation anywhere in it — naming the codes would answer the only
       // question the exercise asks.
       ok('with no scorebook codes in the account',
-        !PRACTICE_TODO.some(t => /\b(1B|2B|3B|HR|K|BB|F\d|L\d|P\d|\d-\d)\b/.test(t)));
+        !PRACTICE_TODO.some(t => /\b(1B|2B|3B|HR|K|BB|F\d|L\d|P\d|\d-\d)\b/.test(t.text)));
       dismissPopupById('practice-popup');
+    } finally { window.confirm = realConfirm; clearStorage(); }
+  });
+
+  /* The one that would have caught it. The first version of the account
+     described five plate appearances containing **four outs** — a scorer
+     following it reached the fifth and got "The inning already has 3 outs",
+     which is the app correctly refusing an inning that cannot happen. It
+     shipped because nothing checked the prose, and prose does not add up.
+
+     So the account carries an answer key and this scores it, through the same
+     `applyPlay` a scorer's taps reach. An exercise that does not score is not
+     an exercise. */
+  test('the half-inning the practice card asks for is one that can be scored', () => {
+    const realConfirm = window.confirm;
+    window.confirm = () => true;
+    try {
+      loadPracticeGame();
+      dismissPopupById('practice-popup');
+      PRACTICE_TODO.forEach((step, i) => {
+        const p = i * ROWS_PER_POS;
+        const cell = document.querySelector(`.at-bat-cell[data-team="home"][data-p="${p}"][data-inn="0"]`);
+        ok(`batter ${i + 1} has a cell to bat in`, !!cell);
+        selectCell(cell);
+        applyPlay(step.play, { team: 'home', pIdx: p, innIdx: 0 });
+        // Answer whatever the play raises, exactly as the loader does.
+        practiceAnswerPopups(step.runners);
+        eq(`batter ${i + 1}'s play went on the card`, ab('home', p, 0).play, step.play);
+      });
+      const inn = getInnState('home', 0);
+      eq('the account comes to three outs, not four', inn.outs, PRACTICE_TODO_RESULT.outs);
+      eq('with the runner it describes left on',
+        inn.bases.filter(Boolean).length, PRACTICE_TODO_RESULT.leftOnBase);
+      ok('and nothing was refused along the way', !rejected());
     } finally { window.confirm = realConfirm; clearStorage(); }
   });
 

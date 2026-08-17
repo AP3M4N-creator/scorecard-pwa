@@ -8602,22 +8602,42 @@ const PRACTICE_RESULT = { outs: 3, runs: 1, leftOnBase: 1 };
 
 /* The home half, in words. This is the exercise: the account is what a scorer
    at the game would have in their head, and the card is what they have to turn
-   it into. Deliberately no notation anywhere in it — naming the codes would be
-   giving away the answer to the only question being asked. */
+   it into. Deliberately no notation in the `text` — naming the codes would be
+   giving away the answer to the only question being asked.
+
+   `play` is that answer, and it is here because **the first version of this list
+   was not a legal half-inning.** It described five plate appearances containing
+   four outs; a scorer following it reached the fifth and got "The inning already
+   has 3 outs", which is the app correctly refusing to record an inning that
+   cannot happen. Prose does not add up on its own, so the answer key is carried
+   alongside it and the suite replays it through the real engine and checks it
+   comes to exactly three outs. An account that does not score is not an
+   exercise, it is a trap.
+
+   `runners` answers the advancement popup, the same shape and for the same
+   reason as `PRACTICE_SCRIPT` above. */
 const PRACTICE_TODO = [
-  'Their leadoff man struck out swinging.',
-  'The next batter hit a ground ball to the shortstop, who threw him out at first.',
-  'The third batter lined a single into left field.',
-  'The cleanup hitter hit a fly ball to centre. The runner held at first.',
-  'The fifth batter grounded out, second to first, to end the inning.'
+  { text: 'Their leadoff man struck out swinging.',
+    play: 'K' },
+  { text: 'The next batter hit a ground ball to the shortstop, who threw him out at first.',
+    play: '6-3' },
+  { text: 'The third batter lined a single into left field.',
+    play: '1B' },
+  { text: 'The cleanup hitter hit a fly ball to centre. The centre fielder caught it for '
+        + 'the third out, and the runner held at first.',
+    play: 'F8', runners: { '0': 'Hold 1st' } }
 ];
+
+// What the exercise comes to when it is scored correctly — three outs and the
+// single left on base, which is the same shape as the half above it.
+const PRACTICE_TODO_RESULT = { outs: 3, leftOnBase: 1 };
 
 function practiceNotes() {
   return 'PRACTICE GAME\n\n'
     + 'The top of the 1st is already scored — tap any cell and press Read to hear '
     + 'what it says.\n\n'
     + 'Now score the bottom of the 1st on the Fairview card. Here is what happened:\n\n'
-    + PRACTICE_TODO.map((t, i) => (i + 1) + '. ' + t).join('\n')
+    + PRACTICE_TODO.map((t, i) => (i + 1) + '. ' + t.text).join('\n')
     + '\n\nNothing here is saved over your own games — load Practice Game again any '
     + 'time to start it over.';
 }
@@ -8710,7 +8730,7 @@ function showPracticePrompt() {
   html += '<p class="jsp-hint">The top of the 1st is scored already. Tap any cell '
     + 'on the Bay City card and press Read to hear what it says.</p>';
   html += '<ol class="practice-list">';
-  PRACTICE_TODO.forEach(t => { html += '<li>' + escapeHtml(t) + '</li>'; });
+  PRACTICE_TODO.forEach(t => { html += '<li>' + escapeHtml(t.text) + '</li>'; });
   html += '</ol>';
   html += '<p class="jsp-hint">This list is in Spray &amp; Notes too. Nothing here '
     + 'touches your saved games.</p>';
