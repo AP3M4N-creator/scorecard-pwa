@@ -1377,6 +1377,58 @@ details.info-details > summary:hover { color: var(--navy); }
 /* The one action big enough to find without looking — DONE on the fielder
    picker, which a scorer presses mid-play with the game still going. */
 .jsp-btn--lg { min-height: 46px; font-size: 14px; letter-spacing: 1px; }
+
+/* ---------- The paste sheet -------------------------------------------------
+
+   A lineup box and the parser's reading of it. Both want the whole width of
+   the sheet's 520px column, and the box wants to be the size of the thing
+   going into it — nine lines — so the scorer can see the whole lineup at once
+   rather than scrolling a three-line field. */
+
+/* The guided sheet centres its body, because the answers in the middle are the
+   thing being looked at and they move as the code is built. This sheet is a
+   form read top to bottom — type here, then read what that gave you — so it
+   starts at the top and lets the slack fall at the bottom. Centred, it opened
+   with ~300px of empty sheet above the box on a phone. */
+#paste-lineup-popup .jsp-body { justify-content: flex-start; }
+.pl-text {
+  width: 100%; box-sizing: border-box;
+  min-height: 148px; resize: vertical; line-height: 1.5;
+  /* Overrides `.jsp-input`'s centring flex share — this is a block, not a
+     field sharing a line with a label. */
+  flex: 0 0 auto;
+}
+/* The reading. Compact on purpose: nine rows plus their warnings have to sit
+   under the box without pushing the actions off a phone in landscape. */
+.pl-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 12px; line-height: 1.3;
+}
+.pl-table th {
+  font-family: var(--heading); font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.6px;
+  color: var(--text-light); text-align: left;
+  padding: 2px 4px; border-bottom: 1px solid var(--border-light);
+}
+.pl-table td {
+  padding: 3px 4px; border-bottom: 1px solid var(--border-light);
+  color: var(--text);
+}
+/* The slot number, which is the whole point of the preview: it says which line
+   of the paste lands on which line of the card. */
+.pl-table .pl-slot {
+  width: 22px; text-align: center;
+  font-family: var(--mono); font-weight: 700; color: var(--navy);
+}
+.pl-table .pl-mono { font-family: var(--mono); }
+/* A row the parser had to guess at. Tinted rather than reddened: the reading is
+   probably right, and this is "look at this one", not "this is wrong". */
+.pl-row--warn td { background: var(--cream); }
+.pl-warn { font-size: 11px; color: var(--accent); }
+/* A saved lineup and its remove button on one line. */
+.pl-saved-row { display: flex; gap: 4px; align-items: stretch; }
+.pl-saved-row > .jsp-list-btn { flex: 1 1 auto; }
+.pl-saved-row > .pl-forget { flex: 0 0 auto; min-width: 40px; }
 /* The scorebook mark over the word for it — `K` above SWINGING. This popup
    opens by itself at the third strike, so the two glyphs are the thing the
    scorer is aiming at and they get the room. */

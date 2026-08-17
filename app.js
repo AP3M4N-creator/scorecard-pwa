@@ -592,6 +592,388 @@ function refitNames(force) {
   }, 0);
 }
 
+/* ============================================================
+   Reading a pasted lineup
+
+   Filling a card by hand is 36 controls a side — nine slots by number, name,
+   position and average — and a coach hands the lineup over as text: a message,
+   a spreadsheet column, a photograph copied out. So this reads text.
+
+   It reads by the *shape* of each token rather than by column order, because
+   there is no order to agree on: the same nine batters arrive as
+   "12 Ramirez SS .310", as "Ramirez, 12, SS, .310", and as four tab-separated
+   columns in whichever order the spreadsheet had them. A bare integer is a
+   jersey, a dotted decimal is an average, a word in the position vocabulary is
+   a position, and what is left is the name. Every ambiguity below is resolved
+   in a fixed order and the resolution is *said out loud* in the row's
+   warnings — the dialog shows them, so a wrong guess is caught in the sheet
+   rather than on the card.
+
+   Pure: no DOM, no `gameState`. That is what makes it testable line by line,
+   and there are enough collisions here to want that.
+   ============================================================ */
+
+/* The ten values the position select actually offers (`buildScoringGrid`).
+   Nothing outside this list may ever reach `select.value`: assigning a string
+   that is not one of the options silently blanks the select — `selectedIndex`
+   goes to -1 — so the scorer's position would vanish without a word. Emitting
+   only these, or the empty string, is what makes the write in
+   `writeLineupField` safe, and a test walks the whole alias table against the
+   live option list to keep it that way. */
+const LINEUP_POS = ['P','C','1B','2B','3B','SS','LF','CF','RF','DH'];
+
+/* Scorekeeping numbers, for the coach who writes 6 rather than SS. Consulted
+   only once a jersey has been claimed on the line: a bare digit is a jersey
+   first, because that is how every printed lineup reads. */
+const LINEUP_POS_BY_NUM = ['','P','C','1B','2B','3B','SS','LF','CF','RF'];
+
+const LINEUP_POS_ALIAS = {
+  FIRST:'1B', '1ST':'1B', SECOND:'2B', '2ND':'2B', THIRD:'3B', '3RD':'3B',
+  SHORT:'SS', SHORTSTOP:'SS', LEFT:'LF', CENTER:'CF', CENTRE:'CF', RIGHT:'RF',
+  PITCHER:'P', RHP:'P', LHP:'P', SP:'P', CATCHER:'C', 'DESIGNATED HITTER':'DH',
+  DESIGNATEDHITTER:'DH',
+  /* Written on plenty of lineup cards, but not on this one — it has nine
+     slots and no generic outfielder or extra hitter. Recognised so the row
+     can say the field was left blank on purpose. */
+  OF:'', IF:'', EH:'', EX:'', UTIL:'', UT:''
+};
+
+// `.310`, `0.310`, and the one perfect average a card ever carries.
+const LINEUP_AVG_RE = /^(?:\.\d{1,3}|0\.\d{1,3}|1\.000)$/;
+// A jersey. The trailing dot is tolerated for the "12. Ramirez" case, where the
+// number is data and the dot is just how the line was typed.
+const LINEUP_NUM_RE = /^#?(\d{1,3})\.?$/;
+
+/* A position, or null if the token is not one. Returns `{pos, warn}` so the
+   uncarded names above can report themselves rather than reading as a name. */
+function posFromToken(tok) {
+  const t = String(tok || '').trim().toUpperCase().replace(/\.$/, '').replace(/\s+/g, ' ');
+  if (!t) return null;
+  if (LINEUP_POS.indexOf(t) !== -1) return { pos: t, warn: '' };
+  const key = Object.prototype.hasOwnProperty.call(LINEUP_POS_ALIAS, t) ? t
+            : (Object.prototype.hasOwnProperty.call(LINEUP_POS_ALIAS, t.replace(/ /g, '')) ? t.replace(/ /g, '') : null);
+  if (key === null) return null;
+  const pos = LINEUP_POS_ALIAS[key];
+  if (pos) return { pos: pos, warn: '' };
+  return { pos: '', warn: '"' + t + '" is not a position on the card — left blank.' };
+}
+
+/* Which delimiter the line was written with. First hit wins, and the order is
+   the order of confidence: a tab or a pipe is never accidental, a comma is
+   nearly always deliberate (but see the two `Last, First` rescues), two spaces
+   are usually a column, and one space is only a guess.
+
+   These are *fields*, not tokens. `classifyLineupParts` goes on to split each
+   field on whitespace, so a line does not have to pick one convention and stay
+   with it — "#12 Ramirez, Jose  SS  .310" mixes three of them and still
+   reads. The field boundaries only decide where a name may be assembled. */
+function splitLineupLine(line) {
+  if (/\t/.test(line)) return { mode: 'tab', parts: line.split(/\t+/) };
+  if (line.indexOf('|') !== -1) return { mode: 'pipe', parts: line.split(/\s*\|\s*/) };
+  if (line.indexOf(',') !== -1) return { mode: 'comma', parts: line.split(/\s*,\s*/) };
+  if (/\s{2,}/.test(line)) return { mode: 'gap', parts: line.split(/\s{2,}/) };
+  return { mode: 'loose', parts: line.split(/\s+/) };
+}
+
+// A field that could only be part of a name: no digit in it, and not a position.
+function lineupNamey(part) {
+  const t = String(part || '').trim();
+  if (!t) return false;
+  if (/\d/.test(t)) return false;
+  return !posFromToken(t);
+}
+
+function reversedName(last, first) {
+  return {
+    text: first + ' ' + last,
+    warn: 'Read "' + last + ', ' + first + '" as "' + first + ' ' + last + '".'
+  };
+}
+
+/* "Ramirez, Jose" sitting inside one field — the spreadsheet case, where the
+   delimiter is a tab and the comma is part of the name. Both sides have to be
+   text that could only be a name, and there has to be exactly one comma. */
+function rescueNameField(field) {
+  const m = String(field || '').match(/^([^,]+),\s*([^,]+)$/);
+  if (!m) return null;
+  const last = m[1].trim(), first = m[2].trim();
+  if (!lineupNamey(last) || !lineupNamey(first)) return null;
+  return reversedName(last, first);
+}
+
+/* One line's fields into one row.
+
+   Each field is split on whitespace and every token is classified in one pass,
+   so the four values can arrive in any order and in any mixture of
+   conventions. What the field boundaries are for is the *name*: leftover
+   tokens are assembled per field, which is what lets "De La Cruz" stay one
+   name and what gives the second `Last, First` rescue something to work with.
+
+   `posColHint`, when given, is the field the whole-paste pass decided holds
+   positions — it lets a bare digit there be read as a scorekeeping position
+   rather than claimed as a jersey. */
+function classifyLineupParts(parts, mode, posColHint) {
+  const row = { num: '', name: '', pos: '', avg: '', warnings: [] };
+  const meta = { posCol: -1, numCol: -1 };
+
+  const fields = parts.map(p => {
+    const fixed = rescueNameField(p);
+    if (fixed) { row.warnings.push(fixed.warn); return fixed.text; }
+    return String(p == null ? '' : p);
+  });
+
+  const tokens = [];
+  fields.forEach((f, i) => f.split(/\s+/).forEach(t => {
+    const tok = t.replace(/^[,;]+|[,;]+$/g, '').trim();
+    if (tok) tokens.push({ tok: tok, field: i });
+  }));
+
+  const nameBits = {};
+  tokens.forEach(({ tok, field }) => {
+    const bare = tok.replace(/^#/, '').replace(/\.$/, '');
+    const isBareInt = /^\d{1,3}$/.test(bare);
+
+    // The average wants its dot. A bare three-digit token is a jersey, never an
+    // average — see the note on the jersey below.
+    if (!row.avg && LINEUP_AVG_RE.test(tok)) {
+      row.avg = tok.replace(/^0/, '');
+      return;
+    }
+
+    // A position, if the token is a word. Bare digits fall through to the
+    // jersey and get a second look there.
+    if (!row.pos && !isBareInt) {
+      const hit = posFromToken(tok);
+      if (hit) {
+        row.pos = hit.pos;
+        meta.posCol = field;
+        if (hit.warn) row.warnings.push(hit.warn);
+        return;
+      }
+    }
+
+    if (isBareInt) {
+      const d = parseInt(bare, 10);
+      // The column pass has already worked out that this field holds positions,
+      // so read it as one before claiming it as a jersey.
+      if (!row.pos && field === posColHint && bare.length === 1 && d >= 1 && d <= 9) {
+        row.pos = LINEUP_POS_BY_NUM[d];
+        meta.posCol = field;
+        return;
+      }
+      /* The jersey. This is where the one collision that cannot be resolved
+         lands: a lone three-digit token is read as a jersey, not as an average
+         written without its dot, because "310 Ramirez SS" is a jersey and the
+         line has to choose. Once a jersey is claimed a *second* three-digit
+         number is the average — that reading is safe, and it is said. */
+      if (!row.num) {
+        row.num = bare;
+        meta.numCol = field;
+        return;
+      }
+      if (!row.avg && bare.length === 3) {
+        row.avg = '.' + bare;
+        row.warnings.push('Read "' + tok + '" as ' + row.avg + '.');
+        return;
+      }
+      if (!row.pos && bare.length === 1 && d >= 1 && d <= 9) {
+        row.pos = LINEUP_POS_BY_NUM[d];
+        meta.posCol = field;
+        row.warnings.push('Read "' + tok + '" as ' + row.pos + '.');
+        return;
+      }
+      row.warnings.push('Ignored extra number "' + tok + '".');
+      return;
+    }
+
+    (nameBits[field] = nameBits[field] || []).push(tok);
+  });
+
+  const fieldsWithName = Object.keys(nameBits).map(Number).sort((a, b) => a - b);
+  let pieces = fieldsWithName.map(i => nameBits[i].join(' '));
+
+  /* The second rescue: "Ramirez, Jose, 12, SS, .310", where the comma really is
+     the delimiter and the name is split across two of the fields it made. Two
+     *adjacent* name-bearing fields, both text that could only be a name — the
+     adjacency is what stops a trailing "12, Ramirez, SS, .310, RHB" from
+     reading as "RHB Ramirez".
+
+     The irreducible case is two surnames: "Smith, Jones" has exactly the shape
+     of "Last, First" and nothing can tell them apart, so it reverses and always
+     carries the warning the preview puts in front of the scorer. */
+  if (mode === 'comma' && pieces.length === 2
+      && fieldsWithName[1] === fieldsWithName[0] + 1
+      && lineupNamey(pieces[0]) && lineupNamey(pieces[1])) {
+    const fixed = reversedName(pieces[0], pieces[1]);
+    row.warnings.push(fixed.warn);
+    pieces = [fixed.text];
+  }
+
+  row.name = pieces.join(' ').replace(/\s+/g, ' ').replace(/^[-–—\s]+|[-–—\s]+$/g, '');
+  if (!row.name) row.warnings.push('No name on this line.');
+
+  /* Belt and braces. `input.value = x` does not honour `maxlength` — only
+     typing does — so the fields' 3 and 5 are this function's job to keep, not
+     the markup's. The patterns above cannot exceed them today; this is here so
+     that stays true if they are ever loosened. */
+  row.num = row.num.slice(0, 3);
+  row.avg = row.avg.slice(0, 5);
+
+  return { row: row, meta: meta };
+}
+
+/* Text in, nine rows out.
+
+   Returns `{ rows, pitcher, overflow, warnings, mode }`:
+     rows      up to POSITIONS rows, in slot order. `rows[i]` belongs in
+               starter row `i * ROWS_PER_POS`. Slots the paste does not reach
+               are not returned and are not cleared.
+     pitcher   the non-batting pitcher, pulled out of a ten-line DH lineup.
+     overflow  lines past the nine — reported, never applied.
+     warnings  findings about the paste as a whole.
+     mode      the delimiter used, or 'mixed'. */
+function parseLineupText(text) {
+  const out = { rows: [], pitcher: null, overflow: [], warnings: [], mode: '' };
+  /* A cell copied out of a spreadsheet or a web page brings non-breaking
+     spaces with it, and they are not delimiters: a line split on them would
+     read as a single field. Written as escapes because the characters are
+     invisible in a diff. */
+  const raw = String(text == null ? '' : text).replace(/[\u00a0\u202f\u2007]/g, ' ');
+
+  let lines = raw.split(/\r?\n/)
+    .map(l => l.replace(/[\s,;]+$/, '').trim())
+    // A rule drawn under the heading, or a blank line between the halves.
+    .filter(l => l && !/^[-–—_=*.·•\s]+$/.test(l));
+
+  // A spreadsheet paste brings its heading with it.
+  if (lines.length && /^\s*(#|no\b|no\.|num)/i.test(lines[0]) && /\b(name|player)\b/i.test(lines[0])) {
+    lines = lines.slice(1);
+    out.warnings.push('Header row ignored.');
+  }
+
+  const parsed = [];
+  lines.forEach((line, i) => {
+    /* A leading batting-order marker. Stripped only when punctuation follows
+       *and* the number is this line's own place in the order — which is what
+       tells "1. 12 Ramirez" (marker, then jersey 12) from "12. Ramirez" on the
+       first line, where 12 is the jersey and the dot is just typing. */
+    let body = line;
+    const marker = body.match(/^#?(\d{1,2})\s*[.)\]:—–-]\s+/);
+    if (marker && line.charAt(0) !== '#' && parseInt(marker[1], 10) === i + 1) {
+      body = body.slice(marker[0].length).trim();
+    }
+    if (!body) return;
+    const split = splitLineupLine(body);
+    const parts = split.parts.map(p => String(p).trim()).filter(p => p !== '');
+    parsed.push({ parts: parts, mode: split.mode, line: i + 1 });
+  });
+
+  if (!parsed.length) {
+    out.warnings.push('Nothing to read — paste one batter per line.');
+    return out;
+  }
+
+  const modes = parsed.map(p => p.mode);
+  out.mode = modes.every(m => m === modes[0]) ? modes[0] : 'mixed';
+
+  const first = parsed.map(p => classifyLineupParts(p.parts, p.mode, -1));
+
+  /* One non-local pass. A column that reads as a position on most lines and as
+     a bare digit on one is a position column, and the odd line out is the
+     batter whose jersey happens to be 1 to 9 — the whole point of looking at
+     the paste rather than the line. Only attempted when the paste is plainly
+     columnar: one delimiter throughout, the same field count on every line,
+     and never in `loose` mode, where a two-word name shifts every column. */
+  let posColHint = -1;
+  if (out.mode !== 'mixed' && out.mode !== 'loose' && parsed.length > 1) {
+    const width = parsed[0].parts.length;
+    if (parsed.every(p => p.parts.length === width)) {
+      for (let k = 0; k < width; k++) {
+        const asPos = first.filter(r => r.meta.posCol === k).length;
+        const asNum = first.filter(r => r.meta.numCol === k && r.row.num.length === 1
+                                        && +r.row.num >= 1 && +r.row.num <= 9).length;
+        if (asPos && asNum) { posColHint = k; break; }
+      }
+    }
+  }
+
+  const rows = (posColHint === -1 ? first : parsed.map(p => classifyLineupParts(p.parts, p.mode, posColHint)))
+    .map((r, i) => {
+      const row = r.row;
+      row.line = parsed[i].line;
+      if (!row.num && !row.name && !row.pos && !row.avg) row.warnings.push('Nothing recognized on this line.');
+      return row;
+    });
+  if (posColHint !== -1) out.warnings.push('Column ' + (posColHint + 1) + ' read as position.');
+
+  /* Ten lines, one pitcher, one designated hitter: the pitcher does not bat
+     (OBR 5.11(a)), so he is not one of the nine. Set aside and named rather
+     than dropped — he belongs in the Pitchers table. */
+  let applied = rows;
+  if (rows.length === POSITIONS + 1) {
+    const pitchers = rows.filter(r => r.pos === 'P');
+    const dhs = rows.filter(r => r.pos === 'DH');
+    if (pitchers.length === 1 && dhs.length === 1) {
+      out.pitcher = pitchers[0];
+      applied = rows.filter(r => r !== pitchers[0]);
+      out.warnings.push('The pitcher does not bat with a designated hitter (OBR 5.11(a)) — '
+        + (out.pitcher.num ? '#' + out.pitcher.num + ' ' : '') + (out.pitcher.name || 'that line')
+        + ' belongs in the Pitchers table, not the batting order.');
+    }
+  }
+
+  out.rows = applied.slice(0, POSITIONS);
+  out.overflow = applied.slice(POSITIONS);
+  if (out.overflow.length) {
+    out.warnings.push(out.overflow.length + (out.overflow.length === 1 ? ' extra line is' : ' extra lines are')
+      + ' not in the batting order.');
+  }
+  if (out.rows.length < POSITIONS) {
+    out.warnings.push('Only ' + out.rows.length + (out.rows.length === 1 ? ' batter' : ' batters')
+      + ' — slot' + (out.rows.length + 1 === POSITIONS ? ' ' + POSITIONS : 's ' + (out.rows.length + 1) + ' to ' + POSITIONS)
+      + ' left as they are.');
+  }
+
+  // Conflicts inside the nine. Said, never blocking — and said here, once,
+  // rather than by nine trips through `checkDHRules` on a half-written lineup.
+  const seenNum = {}, seenPos = {};
+  out.rows.forEach(row => {
+    if (row.num) {
+      if (seenNum[row.num]) row.warnings.push('#' + row.num + ' is already in the order.');
+      seenNum[row.num] = true;
+    }
+    if (row.pos) {
+      if (seenPos[row.pos]) row.warnings.push('Two players at ' + row.pos + '.');
+      seenPos[row.pos] = true;
+    }
+  });
+  if (seenPos.DH && seenPos.P) {
+    out.warnings.push('The order lists both a pitcher and a designated hitter — a side may use one or the other (OBR 5.11(a)).');
+  }
+  /* Only worth saying once the scorer is plainly filling positions in. A paste
+     of nine names and numbers and nothing else is a perfectly normal way to
+     start a card, and it should not be nagged about a missing pitcher. */
+  if (out.rows.length === POSITIONS && Object.keys(seenPos).length && !seenPos.P && !seenPos.DH) {
+    out.warnings.push('No pitcher and no designated hitter in the order.');
+  }
+
+  return out;
+}
+
+/* The other direction — nine rows back to the text the parser reads. Used to
+   put a saved roster into the box, so recalling one and pasting one commit
+   down exactly the same path. */
+function lineupRowsToText(rows) {
+  return (rows || []).map(r => {
+    const bits = [];
+    if (r.num) bits.push('#' + r.num);
+    if (r.name) bits.push(r.name);
+    if (r.pos) bits.push(r.pos);
+    if (r.avg) bits.push(r.avg);
+    return bits.join(' ');
+  }).join('\n');
+}
+
 function buildScoringGrid(team, containerId) {
   const wrap = document.getElementById(containerId);
   let html = '<table class="scoring-grid"><thead><tr>';
@@ -2179,7 +2561,11 @@ const CARD_FULL = 'The card is full — no column left for this inning.';
    and they stay off the pending list — but a tap behind them still reaches the
    card, and `setPitcher` reads the *live* selection when its button is pressed,
    so a cell tapped behind Select Pitcher took the pitching change. */
-const ALSO_GUARDED = ['spray-popup', 'pitcher-popup', 'pos-change-popup', 'decision-popup'];
+const ALSO_GUARDED = ['spray-popup', 'pitcher-popup', 'pos-change-popup', 'decision-popup',
+  /* The paste sheet writes nothing until Apply and has a Cancel, so it belongs
+     here rather than on the pending list — but it covers the card and a tap
+     behind it must not reach a cell. */
+  'paste-lineup-popup'];
 function backdropGuarded() { return PENDING_ENTRY_POPUPS.concat(ALSO_GUARDED); }
 
 /* The three that cannot simply be dismissed. Two own an entry that is already
@@ -6400,6 +6786,7 @@ function backfillOutsLog(state) {
 function loadState() {
   adoptExistingQuarantine(CURRENT_GAME_KEY);
   adoptExistingQuarantine(LIBRARY_KEY);
+  adoptExistingQuarantine(ROSTER_KEY);
   const saved = safeStorage.getItem(CURRENT_GAME_KEY);
   if (saved) {
     try {
@@ -7842,6 +8229,319 @@ function recordReentry(team, pIdx, col, innLabel, starterName, subName) {
     spot: Math.floor(pIdx / ROWS_PER_POS) + 1,
     starter: starterName, sub: subName, legal
   });
+}
+
+/* --------------------------------------------------- the paste sheet ---
+   `parseLineupText` reads the text; this is the screen it is read on and the
+   path from a parsed row to the card. Nothing here parses.
+
+   Two things about it are deliberate and neither is obvious:
+
+   It does not go through `applyState()`. That is the wholesale repaint — it
+   rewrites 27x15 cells and clears `selectedCell` — and a lineup arriving in the
+   fourth inning must not throw away the scorer's place. So each field is
+   written to the state and to its own control together, the way `setRowPos`
+   does it, and `flushSave` reconciles the two afterwards.
+
+   It does not fire the position select's `change`. Nine of those would put
+   `checkDHRules` to a half-written lineup nine times, and the scorer would
+   answer prompts about a lineup that does not exist yet. The conflicts those
+   prompts exist to catch are reported by the parser instead, in the preview,
+   before anything is written — and the rules are put to the finished lineup
+   once, at the end.
+   ------------------------------------------------------------------------- */
+
+const ROSTER_KEY = 'baseball-scorecard-rosters';
+
+/* Same two guards as the game library, for the same reason (#25): a stored
+   value that will not parse must not read as "nothing saved yet", because the
+   next save would then write one roster over however many were in there. */
+function getRosterLibrary() {
+  const raw = safeStorage.getItem(ROSTER_KEY);
+  if (raw === null || raw === '') return [];
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch (e) { parsed = undefined; }
+  if (!Array.isArray(parsed)) {
+    quarantineUnreadable(ROSTER_KEY, raw);
+    return [];
+  }
+  return parsed;
+}
+
+function saveRosterLibrary(list) {
+  if (saveBlockedFor(ROSTER_KEY)) {
+    alert('The saved lineups on this device are unreadable and could not be backed up. Download them from the banner at the top of the page, then discard them, before saving another.');
+    return false;
+  }
+  safeStorage.setItem(ROSTER_KEY, JSON.stringify(list));
+  return true;
+}
+
+function teamCardName(team) {
+  return (team === 'visiting' ? gameState.info.visitingTeam : gameState.info.homeTeam)
+    || (team === 'visiting' ? 'Visiting' : 'Home');
+}
+
+// Which starter rows already hold something. Read live, because the four
+// lineup fields are only scraped into state on the 400ms save.
+function filledLineupSlots(team) {
+  const filled = [];
+  for (let s = 0; s < POSITIONS; s++) {
+    const p = s * ROWS_PER_POS;
+    if (['num', 'name', 'pos', 'avg'].some(f => (livePlayerField(team, p, f) || '').trim())) filled.push(s);
+  }
+  return filled;
+}
+
+let pasteLineupDrafts = { visiting: '', home: '' };
+
+function pasteLineupPopup() {
+  let popup = document.getElementById('paste-lineup-popup');
+  if (!popup) {
+    popup = document.createElement('div');
+    popup.id = 'paste-lineup-popup';
+    popup.className = 'jsp jsp--sheet';
+    document.body.appendChild(popup);
+  }
+  return popup;
+}
+
+function openPasteLineup(team) {
+  if (team !== 'visiting' && team !== 'home') return;
+  const popup = pasteLineupPopup();
+  popup.dataset.team = team;   // on the element, so a backdrop dismiss cannot desync it
+  popup.dataset.stage = 'edit';
+  popup.innerHTML =
+    '<div class="jsp-title">Paste Lineup &mdash; ' + escapeHtml(teamCardName(team)) + '</div>'
+    + '<div class="jsp-body">'
+    +   '<p class="jsp-hint">One batter per line &mdash; number, name, position and average, '
+    +     'in any order. Tabs, commas, bars or spaces all work.</p>'
+    +   '<textarea id="pl-text" class="jsp-input pl-text" rows="9" spellcheck="false" '
+    +     'aria-label="Lineup text" placeholder="12 Ramirez SS .310&#10;7 Mays CF .302&#10;3 Ruth RF .342"></textarea>'
+    +   '<div id="pl-saved"></div>'
+    +   '<div id="pl-preview" aria-live="polite"></div>'
+    +   '<div class="jsp-inline"><label class="jsp-hint" for="pl-save-name">Save as</label>'
+    +     '<input id="pl-save-name" class="jsp-input" type="text" maxlength="40">'
+    +     '<button class="jsp-btn jsp-btn--minor" id="pl-save">Save lineup</button></div>'
+    + '</div>'
+    + '<div class="jsp-actions" id="pl-actions"></div>';
+
+  const box = document.getElementById('pl-text');
+  box.value = pasteLineupDrafts[team] || '';
+  /* Typing here trips the document-wide `input` listener that calls autoSave.
+     Harmless — the textarea carries no `data-field`, so `collectState` never
+     looks at it — and not worth suppressing. */
+  box.oninput = function () {
+    pasteLineupDrafts[team] = box.value;
+    // Editing after the overwrite question has been staged takes it back: what
+    // is on the button has to be about the text that is in the box now.
+    popup.dataset.stage = 'edit';
+    renderPasteLineup();
+  };
+  /* Its own keys. The global handler bails as soon as focus is in a TEXTAREA,
+     so Escape would otherwise do nothing here. Plain Enter is left alone — this
+     is a multi-line field and Enter is how the next batter starts. */
+  box.onkeydown = function (e) {
+    if (e.key === 'Escape') { e.preventDefault(); closePasteLineup(); return; }
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); applyPastedLineup(); }
+  };
+  document.getElementById('pl-save-name').value = teamCardName(team);
+  document.getElementById('pl-save').onclick = savePastedLineupRoster;
+
+  openPopup(popup);
+  renderPasteLineup();
+  setTimeout(() => { const b = document.getElementById('pl-text'); if (b) b.focus(); }, 10);
+}
+
+function closePasteLineup() {
+  const popup = document.getElementById('paste-lineup-popup');
+  if (popup) closePopup(popup);
+}
+
+/* Rebuilt whole on every keystroke, the way `renderGuide` is: the preview is
+   the parser's answer, and there is no partial update of an answer. */
+function renderPasteLineup() {
+  const popup = document.getElementById('paste-lineup-popup');
+  if (!popup) return;
+  const team = popup.dataset.team;
+  const res = parseLineupText(document.getElementById('pl-text').value);
+
+  let html = '';
+  if (res.rows.length) {
+    html += '<table class="pl-table"><thead><tr><th class="pl-slot">#</th><th>No.</th>'
+      + '<th>Player</th><th>Pos</th><th>Avg</th></tr></thead><tbody>';
+    res.rows.forEach((row, i) => {
+      html += '<tr' + (row.warnings.length ? ' class="pl-row--warn"' : '') + '>';
+      html += '<td class="pl-slot">' + (i + 1) + '</td>';
+      html += '<td class="pl-mono">' + escapeHtml(row.num) + '</td>';
+      html += '<td>' + escapeHtml(row.name) + '</td>';
+      html += '<td class="pl-mono">' + escapeHtml(row.pos) + '</td>';
+      html += '<td class="pl-mono">' + escapeHtml(row.avg) + '</td>';
+      html += '</tr>';
+      if (row.warnings.length) {
+        html += '<tr class="pl-row--warn"><td></td><td colspan="4" class="pl-warn">'
+          + escapeHtml(row.warnings.join(' ')) + '</td></tr>';
+      }
+    });
+    html += '</tbody></table>';
+  }
+  res.warnings.forEach(w => { html += '<p class="jsp-note">' + escapeHtml(w) + '</p>'; });
+  document.getElementById('pl-preview').innerHTML = html;
+
+  // The saved lineups, if there are any. Tapping one fills the box rather than
+  // applying it, so recall and paste commit down one path and the preview
+  // always shows what is about to land.
+  const saved = getRosterLibrary();
+  let list = '';
+  if (saved.length) {
+    list += '<p class="jsp-hint">Saved lineups</p><div class="jsp-list">';
+    saved.forEach(entry => {
+      list += '<div class="pl-saved-row">'
+        + '<button class="jsp-list-btn pl-recall" data-id="' + escapeHtml(entry.id) + '">'
+        + escapeHtml(entry.name) + ' <span class="jsp-hint">'
+        + (entry.rows || []).length + ' batters</span></button>'
+        + '<button class="jsp-btn jsp-btn--minor pl-forget" data-id="' + escapeHtml(entry.id)
+        + '" aria-label="Remove ' + escapeHtml(entry.name) + '">&times;</button>'
+        + '</div>';
+    });
+    list += '</div>';
+  }
+  document.getElementById('pl-saved').innerHTML = list;
+  popup.querySelectorAll('.pl-recall').forEach(btn => {
+    btn.onclick = function () { recallLineupRoster(this.dataset.id); };
+  });
+  popup.querySelectorAll('.pl-forget').forEach(btn => {
+    btn.onclick = function () { forgetLineupRoster(this.dataset.id); };
+  });
+
+  /* The actions. The overwrite question is a second stage of this same sheet
+     rather than a nested dialog or a `confirm()`: the sheet is already showing
+     exactly what will land, so all that is missing is the count of what it
+     lands on. */
+  const filled = filledLineupSlots(team).length;
+  const staged = popup.dataset.stage === 'confirm';
+  let actions = '<button class="jsp-btn jsp-btn--minor" id="pl-cancel" data-dismiss="cancel">Cancel</button>';
+  if (staged) {
+    actions += '<button class="jsp-btn jsp-btn--primary" id="pl-apply">Overwrite '
+      + filled + (filled === 1 ? ' filled slot' : ' filled slots') + '</button>';
+  } else {
+    actions += '<button class="jsp-btn jsp-btn--primary" id="pl-apply">Apply to card</button>';
+  }
+  document.getElementById('pl-actions').innerHTML = actions;
+  document.getElementById('pl-cancel').onclick = closePasteLineup;
+  const apply = document.getElementById('pl-apply');
+  apply.onclick = function () { applyPastedLineup(); };
+  apply.disabled = !res.rows.length;
+}
+
+function applyPastedLineup() {
+  const popup = document.getElementById('paste-lineup-popup');
+  if (!popup) return;
+  const team = popup.dataset.team;
+  // Always the live text, never a parse stashed from a keystroke ago.
+  const res = parseLineupText(document.getElementById('pl-text').value);
+  if (!res.rows.length) {
+    showPlayReject('Nothing to read — paste one batter per line.');
+    return;
+  }
+
+  const filled = filledLineupSlots(team);
+  if (filled.length && popup.dataset.stage !== 'confirm') {
+    popup.dataset.stage = 'confirm';
+    renderPasteLineup();
+    const apply = document.getElementById('pl-apply');
+    if (apply) apply.focus();
+    return;
+  }
+
+  res.rows.forEach((row, i) => {
+    const p = i * ROWS_PER_POS;
+    writeLineupField(team, p, 'num', row.num);
+    writeLineupField(team, p, 'name', row.name);
+    writeLineupField(team, p, 'pos', row.pos);
+    writeLineupField(team, p, 'avg', row.avg);
+  });
+
+  /* Nine names arrived without a single keystroke, so none of them went through
+     the per-keystroke fit. Unfitted, every long one overflows the Player
+     column. `force`, because they all changed at once. */
+  refitNames(true);
+  // `collectState` inside it re-scrapes every input, so this both persists the
+  // lineup now and reconciles state against the DOM — the dual write checks
+  // itself.
+  flushSave();
+  updateSituation();
+
+  // Now, once, on a lineup that exists. Before the first pitch this takes
+  // `checkDHRules`'s toast path, which is what it wants while a lineup is being
+  // typed; mid-game it asks.
+  const dhRow = res.rows.findIndex(r => r.pos === 'DH');
+  const pRow = res.rows.findIndex(r => r.pos === 'P');
+  if (dhRow !== -1) checkDHRules(team, dhRow * ROWS_PER_POS, '', 'DH', null);
+  else if (pRow !== -1 && dhState(team).dh.length) checkDHRules(team, pRow * ROWS_PER_POS, '', 'P', null);
+
+  const said = 'Lineup applied to the ' + (team === 'visiting' ? 'visiting' : 'home') + ' card — '
+    + res.rows.length + (res.rows.length === 1 ? ' batter.' : ' batters.');
+  showPlayNotice(said);
+  announce(said);
+  closePasteLineup();
+}
+
+/* State and control together, and nothing else — no synthetic events. Setting
+   `select.value` to a string the select has no option for silently blanks it
+   (`selectedIndex` goes to -1), which is why `parseLineupText` may only emit
+   the ten canonical values or the empty string. */
+function writeLineupField(team, p, field, value) {
+  const players = gameState.teams[team] && gameState.teams[team].players;
+  if (players && players[p]) players[p][field] = value;
+  const ctl = field === 'pos'
+    ? document.querySelector(`select[data-field="pos"][data-team="${team}"][data-p="${p}"]`)
+    : document.querySelector(`input[data-field="${field}"][data-team="${team}"][data-p="${p}"]`);
+  if (ctl) ctl.value = value;
+}
+
+function savePastedLineupRoster() {
+  const popup = document.getElementById('paste-lineup-popup');
+  if (!popup) return;
+  const res = parseLineupText(document.getElementById('pl-text').value);
+  if (!res.rows.length) { showPlayReject('Nothing to save — paste a lineup first.'); return; }
+  const nameField = document.getElementById('pl-save-name');
+  const name = (nameField.value || '').trim() || teamCardName(popup.dataset.team);
+
+  const list = getRosterLibrary();
+  // The parsed rows, not the raw text, so a recalled lineup is already clean.
+  const rows = res.rows.map(r => ({ num: r.num, name: r.name, pos: r.pos, avg: r.avg }));
+  const at = list.findIndex(e => e && String(e.name).toLowerCase() === name.toLowerCase());
+  const entry = { id: at >= 0 ? list[at].id : 'r' + Date.now().toString(36), name, savedAt: Date.now(), rows };
+  if (at >= 0) list[at] = entry; else list.push(entry);
+  if (!saveRosterLibrary(list)) return;
+
+  showPlayNotice((at >= 0 ? 'Replaced' : 'Saved') + ' "' + name + '" — ' + rows.length + ' batters.');
+  renderPasteLineup();
+}
+
+function recallLineupRoster(id) {
+  const entry = getRosterLibrary().find(e => e && e.id === id);
+  if (!entry) return;
+  const popup = document.getElementById('paste-lineup-popup');
+  const box = document.getElementById('pl-text');
+  box.value = lineupRowsToText(entry.rows);
+  pasteLineupDrafts[popup.dataset.team] = box.value;
+  popup.dataset.stage = 'edit';
+  document.getElementById('pl-save-name').value = entry.name;
+  renderPasteLineup();
+  box.focus();
+}
+
+function forgetLineupRoster(id) {
+  const list = getRosterLibrary();
+  const at = list.findIndex(e => e && e.id === id);
+  if (at < 0) return;
+  const gone = list[at].name;
+  list.splice(at, 1);
+  if (!saveRosterLibrary(list)) return;
+  showPlayNotice('Removed "' + gone + '".');
+  renderPasteLineup();
 }
 
 /* ------------------------------------------------------------- the DH ---

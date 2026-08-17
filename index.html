@@ -267,6 +267,12 @@
         <button class="sec-btn" data-ui-act="sec" data-panel="pitch">Pitching Record</button>
         <button class="sec-btn" data-ui-act="sec" data-panel="spray">Spray &amp; Notes</button>
         <button class="ghost-btn" data-ui-act="subs" style="margin-left:auto">Show sub rows</button>
+        <!-- After the sub-row toggle, not before it: that button carries the
+             `margin-left:auto` that pushes this end of the bar right, and the
+             phone override keys off it by name. `data-arg` names the team
+             rather than walking the DOM for it, the way the tabs above do —
+             there are two copies of this bar, one per card. -->
+        <button class="ghost-btn" data-act="openPasteLineup" data-arg="visiting">Paste lineup</button>
       </div>
         <!-- I4, Beginner half. One element in one place: it shares the
              section bar's row where there is room and drops to its own line
@@ -417,6 +423,8 @@
         <button class="sec-btn" data-ui-act="sec" data-panel="pitch">Pitching Record</button>
         <button class="sec-btn" data-ui-act="sec" data-panel="spray">Spray &amp; Notes</button>
         <button class="ghost-btn" data-ui-act="subs" style="margin-left:auto">Show sub rows</button>
+        <!-- See the note on the visiting copy. -->
+        <button class="ghost-btn" data-act="openPasteLineup" data-arg="home">Paste lineup</button>
       </div>
         <!-- I4, Beginner half. One element in one place: it shares the
              section bar's row where there is room and drops to its own line

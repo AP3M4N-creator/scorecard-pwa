@@ -122,7 +122,8 @@
     'runner-popup', 'outcome-popup', 'base-picker', 'edit-play-popup',
     'move-runner-popup', 'pos-popup', 'k-popup', 'spray-popup', 'er-review-popup',
     'pitcher-popup', 'recompute-popup', 'popup-backdrop', 'play-reject',
-    'sub-popup', 'dh-popup', 'pos-change-popup', 'backup-reminder', 'guide-popup'
+    'sub-popup', 'dh-popup', 'pos-change-popup', 'backup-reminder', 'guide-popup',
+    'paste-lineup-popup'
   ];
 
   // The lineup inputs and position selects hold state the grid never rebuilds
@@ -220,7 +221,11 @@
     if (visibilityDirty) updateInningVisibility();
     if (lineupDirty) {
       rawAll('select[data-field="pos"]').forEach(s => { s.value = ''; });
-      rawAll('input[data-field="num"],input[data-field="name"]').forEach(i => { i.value = ''; });
+      // AVG is swept too. It was left out while nothing wrote it; the paste
+      // sheet fills all four, and one leaked average reads as a stray value on
+      // every case that runs after it.
+      rawAll('input[data-field="num"],input[data-field="name"],input[data-field="avg"]')
+        .forEach(i => { i.value = ''; });
       lineupDirty = false;
     }
   }
@@ -6430,6 +6435,8 @@
     open('outcome-popup', () => { play('1B'); });
     open('play-reject', () => showPlayReject('x'));
     open('popup-backdrop', () => showPopupBackdrop());
+    open('paste-lineup-popup', () => openPasteLineup('visiting'));
+    dismissPopupById('paste-lineup-popup');
     ok('the case opened something to look at', built.length >= 3);
     built.forEach(el => {
       // I11 moved the thirteen popup shells onto the `.jsp` class, so a popup
@@ -6488,6 +6495,10 @@
     open('dh-popup', () => promptDHChoice('visiting', {
       title: 'DH', body: 'b', options: [{ label: 'one', note: 'n' }, { label: 'two' }]
     }));
+    // The second full-screen sheet. Same reasoning as `guide-popup` above: the
+    // box is different, the vocabulary it owes is not.
+    open('paste-lineup-popup', () => openPasteLineup('visiting'));
+    dismissPopupById('paste-lineup-popup');
 
     ok(`the case opened a fair sample — got ${opened.length}`, opened.length >= 6);
 
@@ -6828,6 +6839,595 @@
     } finally { clearStorage(); }
   });
 
+  /* ---- the paste sheet ----------------------------------------------------
+
+     A lineup was 36 controls a side, typed one at a time. `parseLineupText`
+     reads it as text instead, and most of what follows is put to that function
+     directly: it takes a string and returns rows, so the collisions in it — a
+     bare digit that could be a jersey or a position, a comma that could be a
+     delimiter or part of a name — can each be pinned in one line.
+
+     The cases after those are about the write. Two of them exist to hold
+     decisions rather than to catch bugs: that the position selects really take
+     what the parser emits, and that applying does not clear the selected cell.
+     Both would pass by accident today and both would break silently. */
+
+  function pasteBox() {
+    const el = document.getElementById('pl-text');
+    if (!el) fail('the paste sheet is not open');
+    return el;
+  }
+  function pasteInto(team, text) {
+    lineupDirty = true;
+    openPasteLineup(team);
+    const box = pasteBox();
+    box.value = text;
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    return box;
+  }
+  function applyPaste() { clickId('pl-apply'); }
+  // What the four controls actually hold, which is the half of the write that a
+  // state-only assertion would miss.
+  function slotFromDOM(team, slot) {
+    const p = slot * ROWS_PER_POS;
+    const at = f => {
+      const s = f === 'pos' ? 'select' : 'input';
+      const el = document.querySelector(`${s}[data-field="${f}"][data-team="${team}"][data-p="${p}"]`);
+      return el ? el.value : null;
+    };
+    return { num: at('num'), name: at('name'), pos: at('pos'), avg: at('avg') };
+  }
+  function slotFromState(team, slot) {
+    const pl = gameState.teams[team].players[slot * ROWS_PER_POS];
+    return { num: pl.num, name: pl.name, pos: pl.pos, avg: pl.avg };
+  }
+  const four = r => ({ num: r.num, name: r.name, pos: r.pos, avg: r.avg });
+  const NINE = [
+    '12 Ramirez SS .310', '7 Mays CF .302', '3 Ruth RF .342',
+    '24 Bonds LF .298', '5 Brett 3B .305', '44 Aaron 1B .310',
+    '8 Morgan 2B .271', '9 Bench C .267', '31 Gibson P .180'
+  ].join('\n');
+
+  /* -- reading the text -- */
+
+  test('it reads a lineup written with spaces', () => {
+    eq('the four fields', JSON.stringify(four(parseLineupText('12 Ramirez SS .310').rows[0])),
+      JSON.stringify({ num: '12', name: 'Ramirez', pos: 'SS', avg: '.310' }));
+  });
+
+  test('it reads a lineup pasted out of a spreadsheet', () => {
+    eq('tab-separated', JSON.stringify(four(parseLineupText('12\tRamirez\tSS\t.310').rows[0])),
+      JSON.stringify({ num: '12', name: 'Ramirez', pos: 'SS', avg: '.310' }));
+  });
+
+  test('it reads bars, commas and columns of spaces alike', () => {
+    const want = JSON.stringify({ num: '12', name: 'Ramirez', pos: 'SS', avg: '.310' });
+    eq('bars', JSON.stringify(four(parseLineupText('12 | Ramirez | SS | .310').rows[0])), want);
+    eq('commas', JSON.stringify(four(parseLineupText('12, Ramirez, SS, .310').rows[0])), want);
+    eq('columns', JSON.stringify(four(parseLineupText('12   Ramirez   SS   .310').rows[0])), want);
+  });
+
+  test('the four fields can arrive in any order', () => {
+    eq('reversed', JSON.stringify(four(parseLineupText('.310 SS Ramirez 12').rows[0])),
+      JSON.stringify({ num: '12', name: 'Ramirez', pos: 'SS', avg: '.310' }));
+  });
+
+  test('a name of several words stays one name', () => {
+    eq('three words', parseLineupText('12 De La Cruz SS .310').rows[0].name, 'De La Cruz');
+  });
+
+  test('a leading batting-order marker is not read as a jersey', () => {
+    eq('a dot', parseLineupText('1. 12 Ramirez SS').rows[0].num, '12');
+    eq('a bracket', parseLineupText('1) 12 Ramirez SS').rows[0].num, '12');
+  });
+
+  test('a number that is not its own line stays data', () => {
+    // "12." on the first line is a jersey with a stray dot, not the marker for
+    // batting spot 12 — which is why the marker has to match the ordinal.
+    eq('the jersey survives', parseLineupText('12. Ramirez SS').rows[0].num, '12');
+  });
+
+  test('a hash always means the jersey', () => {
+    eq('hash stripped', parseLineupText('#7 Mays CF .302').rows[0].num, '7');
+    eq('and not read as a marker', parseLineupText('#1. Ramirez SS').rows[0].num, '1');
+  });
+
+  test('Last, First is turned round and says so', () => {
+    const row = parseLineupText('Ramirez, Jose, 12, SS, .310').rows[0];
+    eq('the name', row.name, 'Jose Ramirez');
+    ok('and it is reported', row.warnings.some(w => /as "Jose Ramirez"/.test(w)));
+  });
+
+  test('Last, First inside one column is turned round too', () => {
+    eq('the spreadsheet case', parseLineupText('12\tRamirez, Jose\tSS\t.310').rows[0].name,
+      'Jose Ramirez');
+  });
+
+  test('a comma-separated list of fields is not turned round', () => {
+    eq('the name is left where it is', parseLineupText('12, Ramirez, SS, .310').rows[0].name,
+      'Ramirez');
+  });
+
+  test('trailing text is not turned round into the name', () => {
+    // The two name-ish fields are not adjacent, which is what stops "RHB" being
+    // read as a first name.
+    eq('order kept', parseLineupText('12, Ramirez, SS, .310, RHB').rows[0].name, 'Ramirez RHB');
+  });
+
+  test('one line may mix all three conventions', () => {
+    eq('marker, hash, comma and columns',
+      JSON.stringify(four(parseLineupText('1. #12 Ramirez, Jose  SS  .310').rows[0])),
+      JSON.stringify({ num: '12', name: 'Jose Ramirez', pos: 'SS', avg: '.310' }));
+  });
+
+  test('an average is read with or without its leading zero', () => {
+    eq('bare dot', parseLineupText('12 Ramirez SS .310').rows[0].avg, '.310');
+    eq('leading zero dropped', parseLineupText('12 Ramirez SS 0.310').rows[0].avg, '.310');
+    eq('a perfect one', parseLineupText('12 Ramirez SS 1.000').rows[0].avg, '1.000');
+  });
+
+  test('a dotless average is read once the jersey is taken', () => {
+    const row = parseLineupText('12 Ramirez SS 310').rows[0];
+    eq('read as an average', row.avg, '.310');
+    ok('and it is reported', row.warnings.some(w => /as \.310/.test(w)));
+  });
+
+  test('a lone three-digit number is a jersey, not an average', () => {
+    // The one collision that cannot be resolved. It goes to the jersey because
+    // "310 Ramirez SS" is a jersey, and the line has to choose.
+    eq('the jersey', JSON.stringify(four(parseLineupText('310 Ramirez SS').rows[0])),
+      JSON.stringify({ num: '310', name: 'Ramirez', pos: 'SS', avg: '' }));
+  });
+
+  test('a bare digit is a jersey before it is a position', () => {
+    eq('with nothing else to be', parseLineupText('6 Ramirez').rows[0].num, '6');
+    eq('and no position taken', parseLineupText('6 Ramirez').rows[0].pos, '');
+  });
+
+  test('a bare digit after the jersey is a scorekeeping position', () => {
+    const row = parseLineupText('12 Ramirez 6 .310').rows[0];
+    eq('six is short', row.pos, 'SS');
+    ok('and it is reported', row.warnings.some(w => /as SS/.test(w)));
+  });
+
+  test('a column of digits is read as positions across the whole paste', () => {
+    /* On its own, line three's "9" would be claimed as a jersey — a bare digit
+       is a jersey first. Two lines that put a position in the same column is
+       what settles it, and that can only be seen by reading the paste. */
+    const res = parseLineupText(['Ramirez\tSS\t.310', 'Mays\tCF\t.302', 'Ruth\t9\t.342'].join('\n'));
+    eq('the odd line out', res.rows[2].pos, 'RF');
+    eq('and it is not a jersey', res.rows[2].num, '');
+    ok('and it is reported', res.warnings.some(w => /read as position/.test(w)));
+    eq('the plain lines are untouched', res.rows[0].pos, 'SS');
+  });
+
+  test('numeric and spelled-out positions both land on a real option', () => {
+    for (let d = 1; d <= 9; d++) {
+      const pos = parseLineupText('12 Ramirez ' + d).rows[0].pos;
+      ok(`${d} maps to a carded position — got ${JSON.stringify(pos)}`, LINEUP_POS.indexOf(pos) !== -1);
+    }
+    eq('shortstop', parseLineupText('12 Ramirez shortstop').rows[0].pos, 'SS');
+    eq('center', parseLineupText('12 Mays center').rows[0].pos, 'CF');
+    eq('a right-hander is a pitcher', parseLineupText('12 Gibson RHP').rows[0].pos, 'P');
+  });
+
+  /* The case that protects the write. `select.value = x` where x is not one of
+     the options silently blanks the select — `selectedIndex` goes to -1 — so a
+     parser that emitted "OF" or "1st" would drop the scorer's position without
+     a word. Walked against the live option list rather than a copy of it. */
+  test('every position the parser can emit is an option the select really has', () => {
+    const opts = Array.from(posSel('visiting', 0).options).map(o => o.value);
+    LINEUP_POS.forEach(p => ok(`${p} is an option`, opts.indexOf(p) !== -1));
+    Object.keys(LINEUP_POS_ALIAS).forEach(k => {
+      const v = LINEUP_POS_ALIAS[k];
+      ok(`the alias ${k} resolves to an option or to blank — got ${JSON.stringify(v)}`,
+        v === '' || opts.indexOf(v) !== -1);
+    });
+    // And end to end, through the parser rather than the table.
+    const emitted = new Set();
+    Object.keys(LINEUP_POS_ALIAS).concat(LINEUP_POS).forEach(tok => {
+      emitted.add(parseLineupText('12 Ramirez ' + tok).rows[0].pos);
+    });
+    emitted.forEach(v => ok(`the parser emitted ${JSON.stringify(v)}, which the select has`,
+      v === '' || opts.indexOf(v) !== -1));
+  });
+
+  test('a position the card has no option for is left blank and named', () => {
+    const row = parseLineupText('12 Ramirez OF').rows[0];
+    eq('blank rather than wrong', row.pos, '');
+    ok('and it says which token', row.warnings.some(w => /"OF"/.test(w)));
+  });
+
+  test('the jersey and average fields cannot be overrun', () => {
+    // `input.value = x` does not honour maxlength — only typing does — so the
+    // fields' 3 and 5 are the parser's to keep.
+    parseLineupText(NINE + '\n999 Someone SS 1.000').rows.forEach(r => {
+      ok(`num within 3 — got ${JSON.stringify(r.num)}`, r.num.length <= 3);
+      ok(`avg within 5 — got ${JSON.stringify(r.avg)}`, r.avg.length <= 5);
+    });
+  });
+
+  test('blank lines, rules and a header row are all skipped', () => {
+    eq('blanks', parseLineupText('12 Ramirez SS\n\n\n7 Mays CF').rows.length, 2);
+    eq('a rule drawn under the heading', parseLineupText('12 Ramirez SS\n-----\n7 Mays CF').rows.length, 2);
+    eq('a spreadsheet heading', parseLineupText('#\tName\tPos\tAvg\n12\tRamirez\tSS\t.310').rows.length, 1);
+  });
+
+  test('nine clean lines raise nothing to look at', () => {
+    const res = parseLineupText(NINE);
+    eq('nine rows', res.rows.length, 9);
+    eq('and nothing to say', res.warnings.join(' | '), '');
+    eq('nor on any row', res.rows.map(r => r.warnings.length).join(''), '000000000');
+  });
+
+  test('a short paste says how much of the order it covers', () => {
+    const res = parseLineupText('12 Ramirez SS\n7 Mays CF');
+    eq('two rows', res.rows.length, 2);
+    ok('and says the rest is left alone', res.warnings.some(w => /left as they are/.test(w)));
+  });
+
+  test('more than nine lines keeps the nine and reports the rest', () => {
+    const res = parseLineupText(NINE + '\n1 Extra\n2 More\n3 Spare');
+    eq('nine applied', res.rows.length, 9);
+    eq('three set aside', res.overflow.length, 3);
+    ok('and it is reported', res.warnings.some(w => /extra lines are/.test(w)));
+  });
+
+  test('a tenth line that is the pitcher of a DH lineup is set aside', () => {
+    // OBR 5.11(a): with a designated hitter the pitcher is not in the order, so
+    // ten lines is nine batters and a pitcher, not an overflow.
+    const res = parseLineupText([
+      '12 Ramirez SS .310', '7 Mays CF .302', '3 Ruth RF .342', '24 Bonds LF .298',
+      '5 Brett 3B .305', '44 Aaron 1B .310', '8 Morgan 2B .271', '9 Bench C .267',
+      '20 Molitor DH .306', '31 Gibson P .180'
+    ].join('\n'));
+    eq('nine bat', res.rows.length, 9);
+    eq('and the pitcher is named', res.pitcher && res.pitcher.name, 'Gibson');
+    eq('not treated as overflow', res.overflow.length, 0);
+    ok('and it says where he belongs', res.warnings.some(w => /Pitchers table/.test(w)));
+  });
+
+  test('a conflict inside the nine is reported instead of prompted', () => {
+    ok('a repeated jersey',
+      parseLineupText('12 Ramirez SS\n12 Mays CF').rows[1].warnings.some(w => /already in the order/.test(w)));
+    ok('two men at one position',
+      parseLineupText('12 Ramirez SS\n7 Mays SS').rows[1].warnings.some(w => /Two players at SS/.test(w)));
+    ok('two designated hitters',
+      parseLineupText('12 Ramirez DH\n7 Mays DH').rows[1].warnings.some(w => /Two players at DH/.test(w)));
+    ok('a pitcher and a designated hitter together',
+      parseLineupText('12 Ramirez P\n7 Mays DH').warnings.some(w => /5\.11\(a\)/.test(w)));
+  });
+
+  test('a lineup of names and numbers is not nagged about a pitcher', () => {
+    // Nine names and nine numbers is a perfectly ordinary way to start a card.
+    const res = parseLineupText(['12 Ramirez', '7 Mays', '3 Ruth', '24 Bonds', '5 Brett',
+      '44 Aaron', '8 Morgan', '9 Bench', '31 Gibson'].join('\n'));
+    eq('nothing said about positions', res.warnings.filter(w => /pitcher/.test(w)).length, 0);
+  });
+
+  test('an empty paste yields no rows and says why', () => {
+    const res = parseLineupText('');
+    eq('no rows', res.rows.length, 0);
+    ok('and one sentence about it', res.warnings.some(w => /paste one batter per line/.test(w)));
+  });
+
+  test('reading a lineup changes nothing on the card', () => {
+    const before = JSON.stringify(stateForStorage(gameState));
+    parseLineupText(NINE);
+    eq('the card is untouched', JSON.stringify(stateForStorage(gameState)), before);
+  });
+
+  test('a lineup survives a round trip through the text it is written as', () => {
+    const rows = parseLineupText(NINE).rows;
+    eq('back the way it went in',
+      JSON.stringify(parseLineupText(lineupRowsToText(rows)).rows.map(four)),
+      JSON.stringify(rows.map(four)));
+  });
+
+  /* -- the sheet -- */
+
+  test('the paste button opens the sheet for its own card', () => {
+    openPasteLineup('home');
+    const popup = document.getElementById('paste-lineup-popup');
+    ok('it is open', visible('paste-lineup-popup'));
+    // On the element, not in a module variable: a backdrop dismiss only hides
+    // the popup, and a variable would survive it out of step.
+    eq('and it knows which card', popup.dataset.team, 'home');
+    ok('and says so', /Home/.test(popup.querySelector('.jsp-title').textContent));
+  });
+
+  test('the preview redraws as the lineup is typed', () => {
+    pasteInto('visiting', '12 Ramirez SS .310');
+    const one = document.querySelectorAll('#pl-preview .pl-table tbody tr').length;
+    ok('one batter shows a row', one >= 1);
+    const box = pasteBox();
+    box.value = '12 Ramirez SS .310\n7 Mays CF .302';
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    ok('a second batter shows more',
+      document.querySelectorAll('#pl-preview .pl-table tbody tr').length > one);
+  });
+
+  test('the preview marks the row the parser had to guess at', () => {
+    pasteInto('visiting', '12 Ramirez SS .310\n7 Mays 8 302');
+    const warned = document.querySelectorAll('#pl-preview tr.pl-row--warn').length;
+    ok('the guessed row is marked', warned >= 1);
+    ok('and the reading is spelled out',
+      /as CF|as \.302/.test(document.getElementById('pl-preview').textContent));
+  });
+
+  test('the preview says which slot each line lands on', () => {
+    pasteInto('visiting', NINE);
+    const slots = Array.from(document.querySelectorAll('#pl-preview .pl-table tbody td.pl-slot'))
+      .map(td => td.textContent);
+    eq('one to nine', slots.join(''), '123456789');
+  });
+
+  test('Apply does nothing until there is something to read', () => {
+    pasteInto('visiting', '');
+    eq('the button is off', document.getElementById('pl-apply').disabled, true);
+    pasteBox().value = '12 Ramirez SS';
+    pasteBox().dispatchEvent(new Event('input', { bubbles: true }));
+    eq('and on again', document.getElementById('pl-apply').disabled, false);
+  });
+
+  test('Escape inside the text box closes the sheet', () => {
+    /* The global key handler bails as soon as focus is in a TEXTAREA, so this
+       only works because the field handles Escape itself. */
+    pasteInto('visiting', '12 Ramirez SS');
+    const box = pasteBox();
+    box.onkeydown({ key: 'Escape', preventDefault() {}, metaKey: false, ctrlKey: false });
+    ok('it is shut', !visible('paste-lineup-popup'));
+  });
+
+  test('plain Enter in the text box starts the next batter instead of applying', () => {
+    pasteInto('visiting', '12 Ramirez SS');
+    let prevented = false;
+    pasteBox().onkeydown({ key: 'Enter', preventDefault() { prevented = true; }, metaKey: false, ctrlKey: false });
+    ok('the key is left alone', !prevented);
+    ok('and the sheet is still open', visible('paste-lineup-popup'));
+    eq('and nothing was written', slotFromDOM('visiting', 0).name, '');
+  });
+
+  test('command-Enter applies', () => {
+    pasteInto('visiting', '12 Ramirez SS .310');
+    pasteBox().onkeydown({ key: 'Enter', preventDefault() {}, metaKey: true, ctrlKey: false });
+    eq('the batter is on the card', slotFromDOM('visiting', 0).name, 'Ramirez');
+  });
+
+  test('the sheet keeps its draft per card', () => {
+    pasteInto('visiting', '12 Ramirez SS');
+    closePasteLineup();
+    openPasteLineup('home');
+    eq('the other card starts empty', pasteBox().value, '');
+    closePasteLineup();
+    openPasteLineup('visiting');
+    eq('and the first card kept what was typed', pasteBox().value, '12 Ramirez SS');
+  });
+
+  /* -- the write -- */
+
+  test('applying a paste fills the nine batting slots', () => {
+    pasteInto('visiting', NINE);
+    applyPaste();
+    const want = [
+      { num: '12', name: 'Ramirez', pos: 'SS', avg: '.310' },
+      { num: '7', name: 'Mays', pos: 'CF', avg: '.302' },
+      { num: '3', name: 'Ruth', pos: 'RF', avg: '.342' },
+      { num: '24', name: 'Bonds', pos: 'LF', avg: '.298' },
+      { num: '5', name: 'Brett', pos: '3B', avg: '.305' },
+      { num: '44', name: 'Aaron', pos: '1B', avg: '.310' },
+      { num: '8', name: 'Morgan', pos: '2B', avg: '.271' },
+      { num: '9', name: 'Bench', pos: 'C', avg: '.267' },
+      { num: '31', name: 'Gibson', pos: 'P', avg: '.180' }
+    ];
+    want.forEach((w, s) => {
+      // Both halves of the dual write, because either one alone would pass while
+      // the card and the state disagreed.
+      eq(`slot ${s + 1} on the card`, JSON.stringify(slotFromDOM('visiting', s)), JSON.stringify(w));
+      eq(`slot ${s + 1} in the state`, JSON.stringify(slotFromState('visiting', s)), JSON.stringify(w));
+    });
+  });
+
+  test('the position selects really take what the parser emits', () => {
+    // A select handed a value it has no option for goes to selectedIndex -1 and
+    // shows nothing. This is the case that would catch it.
+    pasteInto('visiting', NINE);
+    applyPaste();
+    for (let s = 0; s < POSITIONS; s++) {
+      const sel = posSel('visiting', s * ROWS_PER_POS);
+      ok(`slot ${s + 1} landed on a real option — index ${sel.selectedIndex}`, sel.selectedIndex >= 0);
+    }
+  });
+
+  test('a paste writes the batting slots and leaves the sub rows alone', () => {
+    pasteInto('visiting', NINE);
+    applyPaste();
+    for (let p = 0; p < POSITIONS * ROWS_PER_POS; p++) {
+      if (p % ROWS_PER_POS === 0) continue;
+      const pl = gameState.teams.visiting.players[p];
+      eq(`row ${p} is still empty in the state`, [pl.num, pl.name, pl.pos, pl.avg].join(''), '');
+      const inp = document.querySelector(`input[data-field="name"][data-team="visiting"][data-p="${p}"]`);
+      eq(`row ${p} is still empty on the card`, inp.value, '');
+    }
+  });
+
+  test('a paste shorter than the order leaves the slots it did not reach', () => {
+    setPlayer('visiting', 24, '99', 'Holdover');
+    pasteInto('visiting', '12 Ramirez SS\n7 Mays CF');
+    applyPaste();  // filled slots, so this only stages the question
+    applyPaste();
+    eq('the pasted slots landed', slotFromDOM('visiting', 0).name, 'Ramirez');
+    eq('and the ninth is as it was', slotFromDOM('visiting', 8).name, 'Holdover');
+  });
+
+  test('a lineup already on the card is not replaced without asking', () => {
+    setPlayer('visiting', 0, '99', 'Holdover');
+    pasteInto('visiting', NINE);
+    applyPaste();
+    eq('nothing written yet', slotFromDOM('visiting', 0).name, 'Holdover');
+    ok('the sheet is still open', visible('paste-lineup-popup'));
+    ok('and it is asking', /Overwrite/.test(document.getElementById('pl-apply').textContent));
+    applyPaste();
+    eq('and the second press writes', slotFromDOM('visiting', 0).name, 'Ramirez');
+  });
+
+  test('cancelling the overwrite question leaves the card as it was', () => {
+    setPlayer('visiting', 0, '99', 'Holdover');
+    pasteInto('visiting', NINE);
+    applyPaste();
+    clickId('pl-cancel');
+    ok('the sheet is shut', !visible('paste-lineup-popup'));
+    eq('and the lineup is untouched', slotFromDOM('visiting', 0).name, 'Holdover');
+  });
+
+  test('applying a paste queues a name refit', () => {
+    /* Nine names arrived without a keystroke, so none of them went through the
+       per-keystroke fit — unfitted, the long ones overflow the Player column. */
+    /* Cleared by hand first. `reset()` empties the harness's timer map, but
+       app.js's own `_nameFitQueued` is not part of gameState and nothing puts it
+       back — so it still holds the id of a timer an earlier case queued and
+       this harness dropped, and `!== 0` would pass on that alone. */
+    _nameFitQueued = 0;
+    pasteInto('visiting', NINE);
+    applyPaste();
+    ok('a refit is on the clock', _nameFitQueued !== 0);
+    ok('and it is a live timer', timerQueued(_nameFitQueued));
+    flushTimers();
+    eq('and it ran', _nameFitQueued, 0);
+  });
+
+  test('applying a paste persists it without waiting for the debounce', () => {
+    try {
+      clearStorage();
+      pasteInto('visiting', NINE);
+      applyPaste();
+      // No timer run: `flushSave`, not `autoSave`. It also re-scrapes every
+      // input, so this is the assertion that the dual write agrees with itself.
+      const saved = JSON.parse(safeStorage.getItem('baseball-scorecard'));
+      eq('the lineup is in storage', saved.teams.visiting.players[0].name, 'Ramirez');
+      eq('with its position', saved.teams.visiting.players[0].pos, 'SS');
+      eq('and its average', saved.teams.visiting.players[0].avg, '.310');
+    } finally { clearStorage(); }
+  });
+
+  test('applying a paste does not clear the selected cell', () => {
+    // Which is why the write is a dual write and not `applyState()` — a lineup
+    // arriving in the fourth inning must not cost the scorer his place.
+    sel('visiting', 0, 3);
+    pasteInto('visiting', NINE);
+    applyPaste();
+    ok('there is still a selection', !!selectedCell);
+    eq('and it is the same cell', selectedCell.id, 'cell-visiting-0-3');
+  });
+
+  test('applying a paste does not disturb plays already scored', () => {
+    sel('visiting', 0, 0);
+    play('1B');
+    clickId('spray-skip');
+    pasteInto('visiting', NINE);
+    applyPaste();
+    eq('the single is still there', ab('visiting', 0, 0).play, '1B');
+    eq('and the man is still on first', onB('visiting', 0, 0), 0);
+  });
+
+  test('a pasted DH lineup is answered once, not nine times', () => {
+    // Writing nine positions through the select would put checkDHRules to a
+    // half-written lineup nine times over. The parser reports the conflicts
+    // instead, and the rules are put to the finished lineup once.
+    pasteInto('visiting', [
+      '12 Ramirez SS .310', '7 Mays CF .302', '3 Ruth RF .342', '24 Bonds LF .298',
+      '5 Brett 3B .305', '44 Aaron 1B .310', '8 Morgan 2B .271', '9 Bench C .267',
+      '20 Molitor DH .306'
+    ].join('\n'));
+    applyPaste();
+    ok('no question was asked before the first pitch', !visible('dh-popup'));
+    eq('and the designated hitter is on the card', slotFromDOM('visiting', 8).pos, 'DH');
+  });
+
+  test('the live readout picks up a pasted batter', () => {
+    // It names the batter off these very inputs, so the write has to tell it.
+    sel('visiting', 0, 0);
+    pasteInto('visiting', NINE);
+    applyPaste();
+    eq('the leadoff man is on the readout, jersey and all',
+      document.getElementById('ls-batter').textContent, '#12 Ramirez');
+  });
+
+  test('applying a paste announces itself', () => {
+    pasteInto('visiting', NINE);
+    applyPaste();
+    ok('the toast says what landed', /9 batters/.test(toastText()));
+    ok('and so does the live region', /9 batters/.test(liveRegion()));
+  });
+
+  /* -- saved lineups -- */
+
+  test('a lineup can be saved and recalled', () => {
+    try {
+      safeStorage.removeItem('baseball-scorecard-rosters');
+      pasteInto('visiting', NINE);
+      document.getElementById('pl-save-name').value = 'Cardinals';
+      clickId('pl-save');
+      const saved = getRosterLibrary();
+      eq('one lineup stored', saved.length, 1);
+      eq('under its name', saved[0].name, 'Cardinals');
+      eq('with nine batters', saved[0].rows.length, 9);
+
+      // Recall fills the box rather than applying, so recall and paste land
+      // down one path and the preview always shows what is about to happen.
+      pasteBox().value = '';
+      pasteBox().dispatchEvent(new Event('input', { bubbles: true }));
+      recallLineupRoster(saved[0].id);
+      ok('the box is filled again', /Ramirez/.test(pasteBox().value));
+      applyPaste();
+      eq('and it lands the same way', slotFromDOM('visiting', 0).name, 'Ramirez');
+      eq('with its position', slotFromDOM('visiting', 0).pos, 'SS');
+    } finally { safeStorage.removeItem('baseball-scorecard-rosters'); clearStorage(); }
+  });
+
+  test('saving under a name that is taken replaces it', () => {
+    try {
+      safeStorage.removeItem('baseball-scorecard-rosters');
+      pasteInto('visiting', NINE);
+      document.getElementById('pl-save-name').value = 'Cardinals';
+      clickId('pl-save');
+      pasteBox().value = '1 Someone P';
+      pasteBox().dispatchEvent(new Event('input', { bubbles: true }));
+      document.getElementById('pl-save-name').value = 'cardinals';   // same name, other case
+      clickId('pl-save');
+      const saved = getRosterLibrary();
+      eq('still one lineup', saved.length, 1);
+      eq('and it is the new one', saved[0].rows.length, 1);
+    } finally { safeStorage.removeItem('baseball-scorecard-rosters'); }
+  });
+
+  test('a saved lineup can be removed', () => {
+    try {
+      safeStorage.removeItem('baseball-scorecard-rosters');
+      pasteInto('visiting', NINE);
+      clickId('pl-save');
+      const id = getRosterLibrary()[0].id;
+      forgetLineupRoster(id);
+      eq('it is gone', getRosterLibrary().length, 0);
+    } finally { safeStorage.removeItem('baseball-scorecard-rosters'); }
+  });
+
+  test('saved lineups that will not parse are quarantined, not overwritten', () => {
+    /* The #25 failure mode, and the reason this mirrors the game library: a
+       stored value that will not parse must not read as "nothing saved yet",
+       because the next save would write one lineup over however many were in
+       there. */
+    try {
+      safeStorage.setItem('baseball-scorecard-rosters', '{not json');
+      eq('it reads as empty', getRosterLibrary().length, 0);
+      eq('but the text is kept', safeStorage.getItem('baseball-scorecard-rosters-unreadable'),
+        '{not json');
+    } finally {
+      safeStorage.removeItem('baseball-scorecard-rosters');
+      safeStorage.removeItem('baseball-scorecard-rosters-unreadable');
+    }
+  });
+
   /* ---- F26: a blocked option has to say why it is blocked -----------------
      `setOptionBlocked` set `disabled`, an opacity, a cursor and three colours,
      and said nothing at all. Three of the batter's options would go grey at
@@ -7091,7 +7691,8 @@
       sel('visiting', 0, 0); play('1B'); clickId('spray-skip');
       sel('visiting', 3, 0); play('2B');
     }],
-    ['outcome-popup', () => { dpPending(); }]
+    ['outcome-popup', () => { dpPending(); }],
+    ['paste-lineup-popup', () => { openPasteLineup('visiting'); }]
   ];
 
   F32_DIALOGS.forEach(([id, open]) => {
