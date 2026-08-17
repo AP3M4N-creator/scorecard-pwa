@@ -7,20 +7,25 @@
 > 1 at `934f509`, 2 at `92b0448`, 3 at `19c7f7c`, 4 at `258d71c`, 5 across
 > `d03ea1c` `52f65c2` `06ba6cb` `756a5e0`, 6 at `8c921a1`, 7 at `5ebb93a`.
 >
-> **Two things to know before trusting a number in here.**
+> **This file is kept current, and a test keeps it honest.**
 >
-> *The `file:line` references are stale as a class.* Eight steps added roughly
-> 1,300 lines to `app.js` alone, and much of what they point at has moved or
-> been rewritten. Search for the symbol, not the line. They have been left as
-> written rather than chased, because they will go stale again on the next
-> change and the symbol names have not.
+> *Every `file:line` reference has been repointed at the source as it stands*,
+> and `run-tests.js` now checks them — a reference past the end of its file, or
+> one written as `` `symbol` (`file:N`) `` whose symbol is no longer at line N,
+> fails the suite. Eight steps moved most of this code (roughly 1,300 lines into
+> `app.js` alone), so do not trust a line number here that the suite has not
+> seen; run it after moving code, and fix what it reports rather than deleting
+> the reference.
 >
-> *The budget figures below have been re-measured and corrected in place*, with
-> what the audit originally estimated kept alongside — several of the estimates
-> were wrong in ways worth seeing. **The living record is the source, not this
-> file:** the measured target table in `styles.css` (search `F27`) and the
-> per-item blocks in `app.js` are what get updated from now on. This document is
-> the reasoning that led to the work, not a description of the app as it stands.
+> *The budget figures have been re-measured and corrected in place*, with what
+> the audit originally estimated kept alongside — several of the estimates were
+> wrong in ways worth seeing. Where a finding has since been fixed, the fix is
+> noted in italics at the finding rather than the finding being deleted: what
+> was wrong and why is the part worth keeping.
+>
+> The measured target table in `styles.css` (search `F27`) remains the primary
+> record for layout figures; this file agrees with it and says so where it
+> matters.
 
 **The ask.** Someone who has never scored a baseball game should be able to learn on this
 app, and entering a play should follow the order the play actually happened rather than
@@ -43,7 +48,7 @@ four of guided builder, field-map picker, plain-English echo, and context-aware 
 ### The glossary already exists. It is filed under the wrong name.
 
 **B1 — The plain-English glossary is real, buried, and partial.**
-`index.html:417-493` is a modal titled **"Keyboard Shortcuts."** Its last section, "Buttons with
+`index.html:490-577` is a modal titled **"Keyboard Shortcuts."** Its last section, "Buttons with
 no hotkey," is in fact a glossary — *"K+WP — dropped third strike"*, *"CI — catcher's
 interference"*, *"IF — infield fly"*, *"SH — sacrifice bunt"*, *"FC — fielder's choice"*, *"BK —
 balk"*, *"PB — passed ball"*. That is exactly the content a beginner needs, written in exactly
@@ -52,7 +57,7 @@ the right register.
 Three things are wrong with it, none of them the writing:
 
 - It is **titled for a keyboard**, on an app whose primary device is an iPad with no keyboard.
-  Six of its eight sections are irrelevant to a beginner, and `app.js:8479` concedes the modal
+  Six of its eight sections are irrelevant to a beginner, and `app.js:9971` concedes the modal
   "is the only documentation the app has."
 - It is **incomplete in the opposite direction**: the codes a beginner meets *first* — the ones
   on the always-visible core row — are the ones the glossary section omits, because they have
@@ -65,10 +70,10 @@ Three things are wrong with it, none of them the writing:
 
 | Row | Says | Actually |
 |---|---|---|
-| `index.html:422` | Foul is a **"Black ✕"** | Renders navy — `rgba(0,50,120,0.88)`, `styles.css:1350` |
-| `index.html:459` | WP/PB — **"All runners advance 1"** | Opens a popup asking *who moved* unless exactly one runner is on (`applyRunnerEvent`, `app.js:4549`) |
+| `index.html:508` | Foul is a **"Black ✕"** | Renders navy — `rgba(0,50,120,0.88)`, `styles.css:918` |
+| `index.html:541` | WP/PB — **"All runners advance 1"** | Opens a popup asking *who moved* unless exactly one runner is on (`applyRunnerEvent`, `app.js:5197`) |
 
-The "Red ✕" for a strike is fair — `#8f0c14` (`styles.css:1341`) is a dark red. The foul row is
+The "Red ✕" for a strike is fair — `#8f0c14` (`styles.css:2133`) is a dark red. The foul row is
 simply wrong, and the WP/PB row teaches a beginner a rule the app itself doesn't follow.
 
 **B3 — There is no legend for the card at all.**
@@ -91,18 +96,20 @@ happened to each runner.* Every one of those pieces already exists as a step in 
 the entry point demands you know `GO` before you can describe a ground ball.
 
 **B5 — Fielder numbers are taught in the worst possible layout.**
-`showPositionPopup` (`app.js:6018-6025`) is a 3×3 numeric grid, `1 P` … `9 RF`, laid out in
+`showPositionPopup` (`app.js:6800`) was a 3×3 numeric grid, `1 P` … `9 RF`, laid out in
 reading order — which is not where those players stand. Fielder numbering is the single most
-important thing a new scorer must internalize, it is inherently spatial, and it is presented as
-a phone dialpad.
+important thing a new scorer must internalize, it is inherently spatial, and it was presented as
+a phone dialpad. *Fixed at step 2: the grid is now the positioned field map, whose geometry is
+the single table `FIELD_MAP` (`app.js:6673`) and whose markup both mounts share through
+`fieldMapMarkup` (`app.js:6783`).*
 
 **B6 — Success is silent.**
-After entry the cell shows `6-3` and nothing more. `showPlayToast` (`app.js:1672`) fires only for
+After entry the cell shows `6-3` and nothing more. `showPlayToast` (`app.js:2079`) fires only for
 refusals and caveats. A beginner has no way to tell whether the app understood them.
 
-The renderer for this already exists: `describeCellForScreenReader` (`app.js:748`) produces
+The renderer for this already exists: `describeCellForScreenReader` (`app.js:914`) produces
 *"Visiting, batting order 3, inning 5: 2B, 1 RBI, scored"* for the screen-reader live region, and
-`updateCellAria` (`app.js:772`) keeps it in sync from every paint path so it cannot drift. It is
+`updateCellAria` (`app.js:1023`) keeps it in sync from every paint path so it cannot drift. It is
 one adaptation away from being the beginner's feedback loop.
 
 **B7 — Nothing is ever context-disabled.**
@@ -115,17 +122,21 @@ The messages are already centralized and well-written (`NO_CELL`, `INNING_OVER`,
 after the tap instead of as instruction before it.
 
 **B8 — The best "as it happened" surface doesn't say what it's resolving.**
-`showRunnerPopup` (`app.js:3091`) is genuinely good design: it walks each runner by name, offers
+`showRunnerPopup` (`app.js:3747`) is genuinely good design: it walks each runner by name, offers
 `Hold / 2nd / 3rd / Home` and `Out at…`, and carries a separate `on E` tick because *which* base
 he took and *why* are two questions. But it titles itself the generic **"Advance Runners"** for
-every hit and every error (`app.js:3124`); only WP and PB pass a specific title. The scorer is
-answering a question without being told which play they're answering it for.
+every hit and every error; only WP and PB passed a specific title, through `RUNNER_EVENT_TITLE`.
+The scorer is answering a question without being told which play they're answering it for.
+*Fixed at step 0.3: the table `PLAY_TITLE` (`app.js:1794`) and its reader `playTitle`
+(`app.js:1805`) name the play, and the popup titles itself "Single — Who Moved" in
+`RUNNER_EVENT_TITLE`'s register (`app.js:5179`).*
 
 **B9 — Two runner surfaces, two vocabularies.**
-`showRunnerPopup` says `Hold / 2nd / 3rd / Home / Out 2nd`. `showRunnerOutcomePopup`
-(`app.js:2573`, for DP/FC/TP) says `Hold 1st / Safe 2nd / Out at 2nd`. Same question, two
-dialects, and the code comment at `app.js:3114` shows the team already noticed the *visual*
-version of this problem and fixed it — the wording was left behind.
+`showRunnerPopup` said `Hold / 2nd / 3rd / Home / Out 2nd`. The DP/FC/TP outcome popup, whose
+chips are built by `ocChip` (`app.js:3093`), says `Hold 1st / Safe 2nd / Out at 2nd`. Same
+question, two dialects — and the *visual* version of this problem had already been noticed and
+fixed, with the wording left behind. *Fixed at step 0.3, the explicit dialect winning: the
+advancement popup adopted `Hold 1st / Safe 2nd / Out at 2nd` and took the height cost.*
 
 **B10 — Correction is spelled as nine separate concepts.**
 Undo · Redo · Edit · Rnrs · Spray · RBI+ · RBI− · E/UE · Clear Play · Clear Cell. A beginner who
@@ -143,21 +154,25 @@ optional, and the count lives up in the linescore strip, far from the buttons pr
 - **H1 — The popups don't look like the app.** ~160 hardcoded hex values in `app.js` inline
   styles, in a Material palette that exists nowhere in the token set: `#ccc` ×38, `#fff` ×34,
   `#f5f5f5` ×14, `#555` ×13, **`#2e7d32` ×13**, `#e8f5e9` ×6, `#fce4ec` ×4, `#1565c0` ×4. The
-  green/pink selected-state pair is the runner-outcome and edit-play popups
-  (`app.js:2663-2688`, `4719-4723`, `4913-4916`, `5182-5183`).
+  green/pink selected-state pair was the runner-outcome and edit-play popups.
+  *Fixed at step 3: every one of those inline styles is gone, and a hex literal in generated
+  popup markup now fails a test. The shell is `.jsp` (`styles.css:1110`) and the chips are
+  `.jsp-chip` (`styles.css:1243`).*
 - **H2 — The JS-built popup controls were never touch-audited.** The stylesheet carries a
-  measured target table (`styles.css:1005-1015`) covering the deck, lineup and linescore. It does
-  not cover the popups, which run 13–25px tall: `font-size:9px;padding:1px 5px` on the pitching-
-  decision "change" button (`app.js:8109`, ≈13px), `padding:3px 8px;font-size:10px` on every
-  runner-outcome button (`app.js:2663-2688`, ≈19px), `padding:2px 7px` on "↻ Fix Stats"
-  (`app.js:603`, ≈18px). These are controls a scorer uses mid-play.
-- **H3 — The sub-row placeholder is effectively invisible.** `styles.css:594` paints the "PH /
+  measured target table (`styles.css:1714`) covering the deck, lineup and linescore. It did
+  not cover the popups, which ran 13–25px tall: `font-size:9px;padding:1px 5px` on the pitching-
+  decision "change" button (≈13px), `padding:3px 8px;font-size:10px` on every runner-outcome
+  button (≈19px), `padding:2px 7px` on "↻ Fix Stats" (`app.js:680`, ≈18px). These are controls
+  a scorer uses mid-play. *Fixed at step 3: the popups are on the 40px standard and are in the
+  target table now — the second half of it, under "The popups app.js builds (I11)".*
+- **H3 — The sub-row placeholder is effectively invisible.** `styles.css:813` paints the "PH /
   Sub" placeholder in `--border-light` = `rgba(0,50,120,0.2)` on `--row-alt` — ≈**1.48:1**. It is
   the only thing identifying which slot a sub row belongs to, and the rest of the file holds
-  itself to 4.5:1 with measured evidence.
-- **H4 — Popup selected state is colour-only**, with no `aria-pressed`.
+  itself to 4.5:1 with measured evidence. *Fixed at step 0.4; `run-tests.js` pins the contrast.*
+- **H4 — Popup selected state is colour-only**, with no `aria-pressed`. *Fixed at step 3: an
+  inset ring and 700 weight carry it through greyscale, and `aria-pressed` is on every chip.*
 - **H5 — No keyboard entry into the grid.** No `tabindex` on `.at-bat-cell`, and arrow
-  navigation bails early without a prior tap (`app.js:8396`).
+  navigation bails early without a prior tap (`app.js:9752`).
 
 ---
 
@@ -202,15 +217,15 @@ one — `F8`, `L7` and `P2` are three codes, and writing a catcher's pop-up as `
 notation in a feature whose whole purpose is teaching notation.
 
 **I3 · Field-map fielder picker.**
-Replace the 3×3 keypad's *layout* (`app.js:6018-6025`) with a positioned diamond-and-outfield
+Replace the 3×3 keypad's *layout* (`app.js:6800`) with a positioned diamond-and-outfield
 SVG: 6 between second and third, 8 in dead center, 3 by the first-base bag. Keep the numbers,
 keep `posPadTap`, keep "Type it" as the escape hatch for a fast scorer. Follows the existing
-inline-SVG pattern (`diamondSVG` `app.js:378`; the scoreboard mini-diamond `index.html:127`).
+inline-SVG pattern (`diamondSVG` `app.js:449`; the scoreboard mini-diamond `index.html:141`).
 
 Worth offering in **both** modes — an expert taps a spatial target faster than they read a grid.
 
 **I4 · Plain-English echo after every play.**
-Cheapest item here per unit of value, because `describeCellForScreenReader` (`app.js:748`)
+Cheapest item here per unit of value, because `describeCellForScreenReader` (`app.js:914`)
 already does most of it. Extend it from *"2B, 1 RBI, scored"* toward *"Doubled to left field.
 Ramirez scored from second. 1 out."* Then:
 
@@ -366,8 +381,8 @@ Eight steps. Three of the ordering calls are non-obvious and carry their reasoni
 
 | | Fix | Why it leads |
 |---|---|---|
-| 0.1 | `index.html:459` — WP/PB row: "All runners advance 1" → "Pick who moved" | Actively misteaches a rule. Worst defect per character of fix. |
-| 0.2 | `index.html:422` — foul "Black ✕" → navy | Wrong. |
+| 0.1 | `index.html:541` — WP/PB row: "All runners advance 1" → "Pick who moved" | Actively misteaches a rule. Worst defect per character of fix. |
+| 0.2 | `index.html:508` — foul "Black ✕" → navy | Wrong. |
 | 0.3 | **I9** — runner popup names its play; align the two dialects (B8 + B9) | Roughly one line. Helps experts too. |
 | 0.4 | **H3** — sub-row placeholder contrast | The only slot identifier, and it's invisible. |
 

@@ -528,6 +528,60 @@ function deliveryChecks() {
   check('.nojekyll is present, so Pages serves the site as static files', () =>
     exists('.nojekyll') ? null : '.nojekyll is missing — Pages will run Jekyll over the site');
 
+  /* The audit doc cites the source ~30 times as `file:line`, and eight steps of
+     work moved most of what it points at. Repointing them by hand once is easy;
+     keeping them pointed is not, and a reference that has drifted is worse than
+     no reference — it reads as precise and sends you to the wrong place.
+
+     Two checks, because there are two ways to be wrong. A line past the end of
+     its file is unambiguous rot. And where the doc names the thing it is citing
+     — the `` `symbol` (`file:N`) `` form it uses for functions and constants —
+     the symbol has to actually be declared at that line, which is the check
+     that catches code moving *within* a file. Prose that merely mentions a
+     symbol somewhere in the sentence is not matched; only the adjacent form is,
+     so tightening the doc's wording can never invent a failure here. */
+  check('the audit doc still points at the code it cites', () => {
+    const doc = 'UI-AUDIT-BEGINNER-2026-08-14.md';
+    if (!exists(doc)) return null;   // deleted on purpose is not this test's business
+    const text = read(doc);
+    const lines = {};
+    const lineCount = f => {
+      if (!(f in lines)) lines[f] = exists(f) ? read(f).split('\n').length : -1;
+      return lines[f];
+    };
+    const bad = [];
+
+    // (1) every cited line exists
+    const ref = /`(app\.js|index\.html|styles\.css|ui\.js|run-tests\.js):(\d+)(?:-(\d+))?`/g;
+    let m;
+    while ((m = ref.exec(text))) {
+      const [, file, from, to] = m;
+      const n = lineCount(file);
+      if (n < 0) { bad.push(`${file} does not exist`); continue; }
+      const last = Number(to || from);
+      if (last > n) bad.push(`${file}:${m[2]}${to ? '-' + to : ''} is past the end of ${file} (${n} lines)`);
+    }
+
+    // (2) `symbol` (`file:N`) — the symbol has to be declared there
+    const named = /`([A-Za-z_$][\w$]*)`\s*\(`(app\.js|ui\.js):(\d+)`\)/g;
+    while ((m = named.exec(text))) {
+      const [, sym, file, at] = m;
+      if (lineCount(file) < 0) continue;
+      const src = read(file).split('\n');
+      const decl = new RegExp('(function|const|let|var)\\s+' + sym + '\\b');
+      // A small window, not the whole file: the point is that the number is
+      // right, not merely that the symbol exists somewhere.
+      const near = src.slice(Math.max(0, Number(at) - 3), Number(at) + 2);
+      if (!near.some(l => decl.test(l))) {
+        const real = src.findIndex(l => decl.test(l));
+        bad.push(real >= 0
+          ? `${sym} is cited at ${file}:${at} but is declared at ${file}:${real + 1}`
+          : `${sym} is cited at ${file}:${at} but is no longer declared in ${file}`);
+      }
+    }
+    return bad.length ? bad.join('; ') : null;
+  });
+
   /* The other half of the same hazard, and the one a person cannot eyeball: every
      URL the install precaches has to resolve. The list is deliberately exact
      (sw.js:14-15) and it is edited by hand whenever the fonts or icons change. */
