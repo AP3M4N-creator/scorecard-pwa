@@ -630,7 +630,13 @@ function buildScoringGrid(team, containerId) {
     html += `<td class="stat-cell" id="st-rbi-${team}-${sp}"></td>`;
     html += `<td class="stat-cell" id="st-bb-${team}-${sp}"></td>`;
     for (let inn = 0; inn < INNINGS; inn++) {
-      html += `<td class="at-bat-cell" id="cell-${team}-${sp}-${inn}" rowspan="${ROWS_PER_POS}" aria-label="${describeCellForScreenReader(team, sp, inn)}" data-team="${team}" data-p="${sp}" data-inn="${inn}">`;
+      // `tabindex="-1"` on every cell and `0` on exactly one of them — the
+      // roving pattern (I13, closing H5). Focusable so the arrow keys have
+      // something to move, out of the tab ring so 135 cells per card do not
+      // become 135 tab stops. `rovingTabStop` keeps the single `0` on the
+      // selected cell; before this the grid could not be reached from a
+      // keyboard at all.
+      html += `<td class="at-bat-cell" id="cell-${team}-${sp}-${inn}" rowspan="${ROWS_PER_POS}" tabindex="-1" aria-label="${describeCellForScreenReader(team, sp, inn)}" data-team="${team}" data-p="${sp}" data-inn="${inn}">`;
       html += `<div class="pitcher-change-mark" id="pcm-${team}-${sp}-${inn}"></div>`;
       html += `<div class="sub-change-mark" id="scm-${team}-${sp}-${inn}"></div>`;
       html += `<div class="pitch-track" id="pt-${team}-${sp}-${inn}"></div>`;
@@ -749,12 +755,73 @@ function selectCell(td) {
   }
   selectedCell = td;
   td.classList.add('selected');
+  rovingTabStop(td);
   // `aria-current`, not `aria-selected`: these are ordinary table cells, and
   // promoting the card to role="grid" to make aria-selected legal would cost a
   // screen reader the table navigation it already has.
   td.setAttribute('aria-current', 'true');
   announce('Selected ' + describeCellForScreenReader(td.dataset.team, parseInt(td.dataset.p), parseInt(td.dataset.inn)));
   updateSituation();
+}
+
+/* ------------------------------------------------ I13 — the grid by keyboard ---
+
+   H5: `.at-bat-cell` carried no `tabindex`, so Tab walked straight past the card
+   — 135 cells a Magic Keyboard could not reach — and the arrow keys bailed on
+   `if (!selectedCell) return`, which meant the only way into the grid was a
+   finger on the glass. Every hotkey the app has acts on the selected cell, so
+   with no way to select one from the keyboard the whole hotkey layer was
+   unreachable on a fresh card.
+
+   The roving tab stop is the standard answer and the cheap one: every cell is
+   focusable but out of the tab ring, and exactly one carries `tabindex="0"`.
+   Tab reaches that one, the arrows move it, and the tab ring stays two stops
+   long (one per card) instead of 270.
+
+   The stop follows the selection rather than leading it, so there is one idea
+   of "where the scorer is" and not two. `document.activeElement` is left alone
+   when the selection moved for a reason other than a keypress — a play landing
+   advances the selection, and stealing focus out of a popup's field mid-entry
+   to follow it is how a scorer loses what they were typing. */
+function rovingTabStop(td) {
+  if (!td || typeof document === 'undefined') return;
+  const grid = td.closest('table');
+  if (grid) grid.querySelectorAll('.at-bat-cell[tabindex="0"]').forEach(c => {
+    if (c !== td) c.setAttribute('tabindex', '-1');
+  });
+  td.setAttribute('tabindex', '0');
+}
+
+/* The cell an arrow key should land on when nothing is selected yet. The first
+   at-bat with nothing written in it, read the way the card is filled — down the
+   order, then on to the next inning — because that is where the scorer is
+   working. A full card falls back to the leadoff cell, which is at least a real
+   place to start arrowing from rather than a refusal. */
+function firstKeyboardCell(team) {
+  const t = team || document.querySelector('.tab-content.active')?.id.replace('tab-', '') || 'visiting';
+  const players = gameState.teams[t] ? gameState.teams[t].players : [];
+  for (let col = 0; col < visibleInningCount(); col++) {
+    for (let p = 0; p < players.length; p += ROWS_PER_POS) {
+      const abt = players[p] && players[p].atBats && players[p].atBats[col];
+      if (abt && !abt.play) {
+        const cell = document.querySelector(`.at-bat-cell[data-team="${t}"][data-p="${p}"][data-inn="${col}"]`);
+        if (cell) return cell;
+      }
+    }
+  }
+  return document.querySelector(`.at-bat-cell[data-team="${t}"][data-p="0"][data-inn="0"]`);
+}
+
+/* One tab stop per card, kept alive even before anything is selected — without
+   this the very first Tab has nowhere to go and H5 is only half closed. */
+function seedTabStops() {
+  if (typeof document === 'undefined') return;
+  ['visiting', 'home'].forEach(team => {
+    const grid = document.querySelector(`#grid-${team}`);
+    if (!grid || grid.querySelector('.at-bat-cell[tabindex="0"]')) return;
+    const first = document.querySelector(`.at-bat-cell[data-team="${team}"][data-p="0"][data-inn="0"]`);
+    if (first) first.setAttribute('tabindex', '0');
+  });
 }
 
 function renderDiamond(team, pIdx, innIdx) {
@@ -863,6 +930,94 @@ function describeCellForScreenReader(team, pIdx, col) {
     bits.push('on ' + A11Y_BASES[o.lastBase]);
   }
   return where + ': ' + bits.join(', ');
+}
+
+/* ------------------------------------------------ I7 — read the cell back ---
+
+   B3's problem from the other end. The legend (I6) explains the nine marks in
+   the abstract; this points at one filled cell and says what *it* says. A
+   beginner who has just scored an inning has no way to check themselves — the
+   card is the only record and it is written in the notation they are still
+   learning, so a mis-entry looks exactly like a correct one.
+
+   Which renderer this can use is decided by what a finished cell still knows.
+   `describePlayInWords` (I4) needs `before` — the inning as it stood when the
+   play began — because "Ramirez scored from second" is a claim about two
+   moments, and `finishPlay` is the only place that holds both. Reading a cell
+   an hour later, that is gone. So this renders from `cellOutcome`, which is
+   exactly what `describeCellForScreenReader` renders from, and the two say the
+   same facts in two registers: terse for a screen reader that is announcing a
+   selection, whole sentences for a scorer who asked to be told. Sharing the
+   *facts* rather than the string is the arrangement step 1 settled on, and it
+   is what keeps them from drifting.
+
+   What it cannot say, it does not say. No runner movement, no "who was on" —
+   those are not in the cell, and a readout that guessed would be worse than one
+   that is narrow. */
+function readCellInWords(team, pIdx, col) {
+  const o = cellOutcome(team, pIdx, col);
+  if (!o) return ['Nothing recorded here yet.'];
+  const lines = [playSentence(o.play)];
+
+  // Where he ended, but only when the play's own name has not already said —
+  // the same test `describePlayInWords` applies, for the same reason.
+  const implied = IMPLIED_BATTER_BASE[o.play];
+  if (o.scored) {
+    lines.push(o.unearned ? 'He came round to score, unearned.' : 'He came round to score.');
+  } else if (o.outOnBase != null) {
+    lines.push('He was out at ' + SENTENCE_BASES[o.outOnBase] + '.');
+  } else if (o.lastBase >= 0 && (implied === undefined || implied !== o.lastBase)) {
+    lines.push('He got as far as ' + SENTENCE_BASES[o.lastBase] + '.');
+  } else if (o.lastBase < 0 && o.outNumber &&
+             (o.play === 'FC' || /^FC /.test(o.play))) {
+    // Only the fielder's choice. Every other out says so in its own name, and
+    // "Strikeout. He did not reach." is the readout telling a beginner the one
+    // thing they already knew. `describePlayInWords` draws the line in exactly
+    // the same place, which is the point of the two sharing their facts.
+    lines.push('He did not reach.');
+  }
+
+  if (o.rbi) lines.push(o.rbi === 1 ? 'He drove in a run.' : 'He drove in ' + o.rbi + ' runs.');
+  // Which out of the three, because that is the number the next decision hangs
+  // on and the cell writes it in a corner a beginner has no reason to read.
+  if (o.outNumber) lines.push('That was out number ' + o.outNumber + ' of the inning.');
+  return lines;
+}
+
+// Where the cell is, as a heading. Same three facts the screen-reader label
+// opens with, in the register the rest of the popups are written in.
+function cellHeading(team, pIdx, col) {
+  const side = team === 'visiting' ? 'Visiting' : 'Home';
+  const spot = Math.floor(pIdx / ROWS_PER_POS) + 1;
+  const name = String(livePlayerField(team, getActivePlayerIndex(team, pIdx, col), 'name') || '').trim();
+  return (name || side + ' #' + spot) + ' — Inning ' + (getRealInning(team, col) + 1);
+}
+
+function promptReadCell() {
+  if (!requireSelection()) return;
+  const team = selectedCell.dataset.team;
+  const pIdx = parseInt(selectedCell.dataset.p);
+  const col = parseInt(selectedCell.dataset.inn);
+
+  let popup = document.getElementById('read-popup');
+  if (!popup) {
+    popup = document.createElement('div');
+    popup.id = 'read-popup';
+    popup.className = 'jsp';
+    document.body.appendChild(popup);
+  }
+  let html = '<div class="jsp-title">' + escapeHtml(cellHeading(team, pIdx, col)) + '</div>';
+  html += '<div class="jsp-body">';
+  readCellInWords(team, pIdx, col).forEach(line => {
+    html += '<p class="read-line">' + escapeHtml(line) + '</p>';
+  });
+  html += '</div>';
+  html += '<div class="jsp-actions">'
+    + '<button class="jsp-btn jsp-btn--wide" data-dismiss="cancel" id="read-close">Close</button>'
+    + '</div>';
+  popup.innerHTML = html;
+  openPopup(popup);
+  document.getElementById('read-close').onclick = function () { closePopup(popup); };
 }
 
 function updateCellAria(team, pIdx, col) {
@@ -8324,14 +8479,31 @@ function closeGameLibrary() {
   document.getElementById('game-library-modal').classList.remove('active');
 }
 
+/* The practice card's row (I10). Pinned above the scorer's own games and built
+   here rather than stored, so it is always present, always the same, and cannot
+   be deleted — there is nothing to delete. It carries no Delete button for the
+   same reason, and no `id`, so `updateLibraryButtons` never mistakes it for the
+   entry the current game came from. */
+function practiceLibraryRow() {
+  return '<ul class="game-list game-list--pinned"><li class="game-practice">'
+    + '<div>'
+    + '<div class="game-info-text">Practice Game <span class="game-pin">● always here</span></div>'
+    + '<div class="game-date">A half-inning scored, and a half-inning to score</div>'
+    + '</div>'
+    + '<div><button class="load-btn" data-act="loadPracticeGame">Open</button></div>'
+    + '</li></ul>';
+}
+
 function renderGameLibrary() {
   const library = getGameLibrary();
   const listEl = document.getElementById('game-library-list');
   if (library.length === 0) {
-    listEl.innerHTML = '<p style="font-size:12px;color:var(--text-light);padding:10px">No saved games yet. Click "Save as New Game" to save this game.</p>';
+    listEl.innerHTML = practiceLibraryRow()
+      + '<p style="font-size:12px;color:var(--text-light);padding:10px">No saved games yet. Click "Save as New Game" to save this game.</p>';
     return;
   }
-  let html = '<ul class="game-list">';
+  let html = practiceLibraryRow();
+  html += '<ul class="game-list">';
   library.forEach((game, idx) => {
     const date = escapeHtml(game.date || 'No date');
     const teams = escapeHtml(game.teams || 'Unknown teams');
@@ -8371,6 +8543,184 @@ function buildLibraryEntry(id) {
     lastSaved: gameState.lastSaved,
     state: JSON.parse(JSON.stringify(stateForStorage(gameState)))
   };
+}
+
+/* ===================================================== I10 — practice game ===
+
+   B11: the first game a scorer keeps is the first game they score, and there is
+   nowhere to be wrong safely. This is that place — a card that arrives half
+   filled in, so the top of the first can be read against the plain-English
+   readout (I7) and the bottom of the first can be entered from a written
+   account of what happened.
+
+   Adam's two rulings:
+
+   - **A pinned built-in row**, first in the Game Library, never written to
+     storage. It cannot be deleted, overwritten, or lost, and it is
+     unmistakably not one of their own games — which a seeded real entry would
+     not be, once it had a couple of innings on it.
+   - **Read one, then score one.** The visitors' half is scored; the home half
+     is empty with an account of it to work from. Either half alone teaches only
+     half of what a beginner is missing — whether they can read the card, and
+     whether they can write it.
+
+   **It is a script, not a snapshot.** The plays below are replayed through
+   `applyPlay` exactly as a scorer would enter them, rather than stored as a
+   `gameState` blob. A blob is a second copy of the state shape that goes stale
+   the first time the shape changes and fails silently when it does; a script
+   cannot, because it only knows play codes — which are the app's most stable
+   interface, pinned by the whole scoring suite. It also means the practice card
+   is, by construction, a card this app can actually produce. */
+
+const PRACTICE_TEAMS = { visiting: 'Bay City', home: 'Fairview' };
+
+/* The visitors' first, chosen so the finished half-inning shows a beginner one
+   of each mark the legend names: a hit, a strikeout, an extra-base hit that
+   drives a run in, a fielder-numbered ground out, a fly out. Three outs, one
+   run, one man left on, and nothing that needs a judgement call to read back.
+
+   `runners` is the answer to the advancement popup that play raises, keyed by
+   the chip's `data-base` — `'0'` for the man on first, `'batter'` for the
+   batter himself. Every runner has to be given a base explicitly: the popup has
+   no default and refuses Confirm without one, which is correct for a scorer and
+   means a script cannot get away with hand-waving either. Where a play raises
+   no popup the key is absent, and the suite pins the whole outcome, so a change
+   to the engine that alters what is asked fails loudly rather than quietly
+   producing a different practice card. */
+const PRACTICE_SCRIPT = [
+  { p: 0,  play: '1B'  },
+  { p: 3,  play: 'K'   },
+  { p: 6,  play: '2B',  runners: { '0': 'Safe Home', batter: 'Safe 2nd' } },
+  { p: 9,  play: '6-3', runners: { '1': 'Hold 2nd' } },
+  { p: 12, play: 'F8',  runners: { '1': 'Hold 2nd' } }
+];
+
+// What the finished half-inning must come to. Checked by the suite rather than
+// trusted — the script is replayed through the live engine, so this is the line
+// that notices if the engine ever scores it differently.
+const PRACTICE_RESULT = { outs: 3, runs: 1, leftOnBase: 1 };
+
+/* The home half, in words. This is the exercise: the account is what a scorer
+   at the game would have in their head, and the card is what they have to turn
+   it into. Deliberately no notation anywhere in it — naming the codes would be
+   giving away the answer to the only question being asked. */
+const PRACTICE_TODO = [
+  'Their leadoff man struck out swinging.',
+  'The next batter hit a ground ball to the shortstop, who threw him out at first.',
+  'The third batter lined a single into left field.',
+  'The cleanup hitter hit a fly ball to centre. The runner held at first.',
+  'The fifth batter grounded out, second to first, to end the inning.'
+];
+
+function practiceNotes() {
+  return 'PRACTICE GAME\n\n'
+    + 'The top of the 1st is already scored — tap any cell and press Read to hear '
+    + 'what it says.\n\n'
+    + 'Now score the bottom of the 1st on the Fairview card. Here is what happened:\n\n'
+    + PRACTICE_TODO.map((t, i) => (i + 1) + '. ' + t).join('\n')
+    + '\n\nNothing here is saved over your own games — load Practice Game again any '
+    + 'time to start it over.';
+}
+
+/* Answer the popups the script's own plays raise, the way a scorer would —
+   with the real controls, clicked. The advancement popup comes first because it
+   opens first: `applyPlayEffects` asks where the runners went before
+   `finishPlay` offers the spray chart, and dismissing them the other way round
+   was what left the second half of the script unplayed the first time.
+
+   The spray chart is skipped rather than answered: a practice card should not
+   claim a hit location nobody chose. */
+function practiceAnswerPopups(runners) {
+  const runner = document.getElementById('runner-popup');
+  if (runner && runner.style.display && runner.style.display !== 'none') {
+    Object.keys(runners || {}).forEach(base => {
+      const chip = Array.prototype.find.call(
+        runner.querySelectorAll('.jsp-chip[data-base="' + base + '"]'),
+        c => c.textContent.trim() === runners[base] && !c.disabled);
+      if (chip) chip.click();
+    });
+    const confirmBtn = document.getElementById('rp-confirm');
+    if (confirmBtn) confirmBtn.click();
+  }
+  const spray = document.getElementById('spray-popup');
+  if (spray && spray.style.display && spray.style.display !== 'none') {
+    const skip = document.getElementById('spray-skip');
+    if (skip) skip.click(); else closePopup(spray);
+  }
+}
+
+function loadPracticeGame() {
+  collectState();
+  // The same weighing the other three doors out of a card do (F5) — this one is
+  // just as destructive as Load, and arrives from the same list.
+  if (!confirm(currentGameHasUnsavedChanges()
+        ? 'This card has unsaved changes that will be lost. Open the practice game anyway?'
+        : 'Open the practice game? This replaces the card on screen.')) return;
+
+  clearTimeout(_saveTimer); _saveTimer = null;
+  if (timerInterval) clearInterval(timerInterval);
+  gameState = createEmptyState();
+  // No `currentGameId`: the practice card belongs to no library entry, so
+  // "Update Saved Game" must not offer to write it over one.
+  safeStorage.removeItem(CURRENT_GAME_KEY);
+  playHistory = [];
+  redoHistory = [];
+  gameOverShown = false;
+  backupPromptDismissed = false;
+  gameState.info.visitingTeam = PRACTICE_TEAMS.visiting;
+  gameState.info.homeTeam = PRACTICE_TEAMS.home;
+  gameState.notes = practiceNotes();
+  applyState();
+  switchTab('visiting');
+
+  PRACTICE_SCRIPT.forEach(step => {
+    const cell = document.querySelector(
+      `.at-bat-cell[data-team="visiting"][data-p="${step.p}"][data-inn="0"]`);
+    if (!cell) return;
+    selectCell(cell);
+    applyPlay(step.play, { team: 'visiting', pIdx: step.p, innIdx: 0 });
+    practiceAnswerPopups(step.runners);
+  });
+
+  // The home card is the one with work to do on it, so that is where the
+  // scorer is put — and the first empty cell is already selected by the tab
+  // switch, so the very first play they enter has somewhere to go.
+  switchTab('home');
+  const first = document.querySelector('.at-bat-cell[data-team="home"][data-p="0"][data-inn="0"]');
+  if (first) selectCell(first);
+  autoSave();
+  closeGameLibrary();
+  showPracticePrompt();
+}
+
+/* The account, on screen at the moment it is needed. It is also written into
+   the notes, because a popup is read once and this is a list to work from —
+   but a scorer who has just loaded a practice card should not have to go
+   looking through a tab to find out what the exercise is. */
+function showPracticePrompt() {
+  let popup = document.getElementById('practice-popup');
+  if (!popup) {
+    popup = document.createElement('div');
+    popup.id = 'practice-popup';
+    popup.className = 'jsp';
+    document.body.appendChild(popup);
+  }
+  let html = '<div class="jsp-title">Your turn — bottom of the 1st</div>';
+  html += '<div class="jsp-body">';
+  html += '<p class="jsp-hint">The top of the 1st is scored already. Tap any cell '
+    + 'on the Bay City card and press Read to hear what it says.</p>';
+  html += '<ol class="practice-list">';
+  PRACTICE_TODO.forEach(t => { html += '<li>' + escapeHtml(t) + '</li>'; });
+  html += '</ol>';
+  html += '<p class="jsp-hint">This list is in Spray &amp; Notes too. Nothing here '
+    + 'touches your saved games.</p>';
+  html += '</div>';
+  html += '<div class="jsp-actions">'
+    + '<button class="jsp-btn jsp-btn--wide jsp-btn--primary" id="practice-start">Start scoring</button>'
+    + '</div>';
+  popup.innerHTML = html;
+  openPopup(popup);
+  document.getElementById('practice-start').onclick = function () { closePopup(popup); };
 }
 
 function saveAsNewGame() {
@@ -9361,6 +9711,8 @@ function renderManualWinProbChart(containerId) {
   renderWinProbSVG(container, data, vTeam, hTeam, vis, true);
 }
 
+const ARROW_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+
 /* Keyboard handler */
 document.addEventListener('keydown', function(e) {
   // Before the `inInput` bail below, deliberately: a dialog holds inputs of its
@@ -9390,7 +9742,21 @@ document.addEventListener('keydown', function(e) {
     openGuardedPopups().forEach(dismissPopupById);
     return;
   }
-  if (!selectedCell) return;
+  /* An arrow with nothing selected used to return here, which is what made the
+     card unreachable from a keyboard: no selection, no hotkeys, and no way to
+     get a selection without touching the screen (H5). An arrow is now a way in
+     — it picks the cell the scorer is working on and stops there, so the first
+     press orients rather than moves. Everything else still needs a cell,
+     because everything else writes to one. */
+  if (!selectedCell) {
+    if (!ARROW_KEYS.includes(e.key)) return;
+    const entry = firstKeyboardCell();
+    if (!entry) return;
+    e.preventDefault();
+    selectCell(entry);
+    if (entry.focus) entry.focus();
+    return;
+  }
 
   const team = selectedCell.dataset.team;
   const p = parseInt(selectedCell.dataset.p);
@@ -9439,7 +9805,15 @@ document.addEventListener('keydown', function(e) {
   if (np !== p || ni !== inn) {
     e.preventDefault();
     const next = document.querySelector(`.at-bat-cell[data-team="${team}"][data-p="${np}"][data-inn="${ni}"]`);
-    if (next) selectCell(next);
+    if (next) {
+      selectCell(next);
+      // Only an arrow moves focus. `selectCell` runs from a dozen places — a
+      // play landing, a load, an inning rolling over — and dragging focus along
+      // with it would pull the caret out of whatever field the scorer was in.
+      // Here the arrow *is* the focus move, so the roving stop has to follow or
+      // the next Tab returns to a cell the scorer left three presses ago.
+      if (next.focus) next.focus();
+    }
   }
 });
 
@@ -9718,6 +10092,16 @@ document.addEventListener('click', function(e) {
   if (cell) selectCell(cell);
 });
 
+/* Tabbing onto a cell selects it, so the keyboard has one idea of "here"
+   rather than two — a focus ring on one cell and the red selection on another
+   is the state H5 would otherwise have created (I13). Guarded on identity: the
+   arrow path calls `focus()` on a cell it has just selected, and without this
+   that would announce the same cell twice. */
+document.addEventListener('focusin', function(e) {
+  const cell = e.target.closest && e.target.closest('.at-bat-cell');
+  if (cell && cell !== selectedCell) selectCell(cell);
+});
+
 /* Init */
 function init() {
   // Field images set directly in HTML
@@ -9730,6 +10114,9 @@ function init() {
   // in rather than repainted into it (I1).
   applyScoringMode();
   loadState();
+  // After `loadState`, which may restore a selection of its own: this only
+  // seeds a stop where there is none, so a restored card keeps its own (I13).
+  seedTabStops();
 }
 
 // tests.html sets window.__NO_AUTO_INIT__ so it can load app.js and exercise

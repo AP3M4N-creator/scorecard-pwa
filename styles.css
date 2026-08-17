@@ -523,6 +523,16 @@ details.info-details > summary:hover { color: var(--navy); }
 [data-mode="beginner"] .quick-btn.qb-guide { display: inline-flex; }
 [data-mode="beginner"] .quick-btn.qb-out-four { display: none; }
 
+/* I7 — "Read it back", and the same specificity caveat as above. This is the
+   one key Beginner mode *adds* rather than swaps, which it can only afford
+   because I2's swap left 136.1px of slack on the first deck line; the measured
+   figure after both is in the I2 block. */
+.quick-btn.qb-read { display: none; }
+[data-mode="beginner"] .quick-btn.qb-read { display: inline-flex; }
+
+/* One fact per line, so the readout is scanned rather than read. */
+.read-line { font-size: 13px; line-height: 1.45; color: var(--text); }
+
 /* ---------- The play, in a sentence, kept on screen (I4, Beginner half) ----
 
    Expert mode gets nothing here — since I1 a completed play is recorded in
@@ -1539,6 +1549,24 @@ details.info-details > summary:hover { color: var(--navy); }
 .modal-box .game-list li button.load-btn:hover { background: var(--blue-light); }
 .modal-box .game-list li button.del-btn { color: var(--accent); border-color: rgba(192,17,31,0.35); }
 .modal-box .game-list li button.del-btn:hover { background: rgba(192,17,31,0.08); }
+
+/* I10 — the practice card's pinned row. Tinted and ruled off from the games
+   below it because the one thing it must never be mistaken for is one of them:
+   it is built at render time, not stored, so "Delete" would have nothing to
+   delete and "Update Saved Game" must never point at it. */
+.modal-box .game-list--pinned { margin-bottom: 4px; }
+.modal-box .game-list li.game-practice {
+  background: var(--cream); border-bottom: 2px solid var(--navy);
+  padding-left: 10px; padding-right: 10px; border-radius: 4px 4px 0 0;
+}
+.game-pin {
+  font-family: var(--heading); font-size: 11px; font-weight: 600;
+  letter-spacing: .04em; color: var(--navy); margin-left: 6px;
+}
+/* The account of the half-inning to score. A numbered list because it is a
+   sequence of plate appearances and the order is the exercise. */
+.practice-list { margin: 4px 0 4px 18px; padding: 0; }
+.practice-list li { font-size: 13px; line-height: 1.5; margin-bottom: 4px; }
 .modal-close {
   padding: 9px 18px; min-height: 40px; cursor: pointer; margin-top: 10px;
   font-family: var(--heading); font-size: 13px; font-weight: 600; letter-spacing: .04em;
@@ -1719,7 +1747,7 @@ details.info-details > summary:hover { color: var(--navy); }
      lineup name              151x42    121x46     72x53     87x46     87x46
      lineup # / AVG            27x42     24x46     20x53     25x46     25x46
      position select           37x42     34x46     30x53     33x46     33x46
-     linescore R/H/E           25x28     25x28     25x26     16x23     25x24
+     linescore R/H/E           25x31     25x31     31x39     16x23     25x24
      deck play buttons         45x46     45x46     45x46     45x46     40x40
      deck handle (target)          -         -         -    350x44    789x38
      +EI (target)              44x40     44x40     52x42     44x40     44x40
@@ -1770,11 +1798,18 @@ details.info-details > summary:hover { color: var(--navy); }
 
    Still short, on purpose:
 
-   - The linescore cells, 25-26px wide. Fifteen columns share the strip with the
-     live readout and the widths are what let a nine-inning card sit on one row;
-     a wider cell is a narrower readout or a second row. The height went as far
-     as it could go for free (21 -> 28) and the next pixel costs strip height,
-     which comes straight off the batting order.
+   - The linescore cells, 25px wide at four of the five sizes. Fifteen columns
+     share the strip with the live readout and the widths are what let a
+     nine-inning card sit on one row; a wider cell is a narrower readout or a
+     second row.
+
+     Re-measured for I12 on a fitted card, and there was a little more height
+     than F27 found: the landscape sizes took 29 -> 32 with all nine batting
+     rows still on screen (36 is where the ninth falls off, so the fourth pixel
+     is the one that costs a batting slot). 834x1194 turned out to be the one
+     viewport not fighting anything — caption on its own line, 301px of table
+     column genuinely spare, card ending above the deck — so it reaches the
+     app's 40px standard outright at 31x39, and has its own block.
    - The play buttons in phone landscape, 40x40. That width is measured, not
      chosen: line one comes to 774px against a 798px box, so 4px more per key
      overflows into a second row — and a second row costs 45px of a screen that
@@ -1785,9 +1820,16 @@ details.info-details > summary:hover { color: var(--navy); }
    - The masthead's own buttons, 34-38px. On a phone they are behind the menu,
      whose items are 42px, so the small ones are the ones a finger rarely wants.
 
-   The linescore at 390x844 is the one place nothing was gained: the strip is
-   stacked there, the caption is a real caption rather than a spacer, and the
-   column has no slack to hand over. 16x23, and it is the honest floor. */
+   The linescore at 390x844 is the one place nothing was gained, and I12 went
+   back and confirmed it rather than taking it on trust. The table looks like it
+   has 52px going spare in its column; it does not. The caption carrying +EI
+   sits on the *same line* there — the table already runs flush to the box's
+   right edge, and widening the cells moves nothing. Height is spent too: 7
+   batting rows today, 6 at 28px. 16x23, and it is the honest floor.
+
+   844x390 is the other one, for the height reason alone: 2 batting rows today
+   and 1 at 32px. Half the visible card for 7px of target is not a trade this
+   app makes. */
 @media (pointer: coarse) {
   html { touch-action: manipulation; -webkit-tap-highlight-color: rgba(0,50,120,0.14); }
 }
@@ -2176,6 +2218,29 @@ details.info-details > summary::before { color: var(--rb-red); }
    140px it occupies — so the base's mobile body padding would double up. */
 @media (max-width: 834px) { body { padding-bottom: 0; } }
 
+/* ---------- I12: tablet portrait, the one size with room on both axes -------
+
+   834x1194 is the only viewport where the linescore is not fighting anything.
+   The caption sits on its own line rather than beside the table, so the table
+   has the full 758px column and wants 457 of it — 301px genuinely spare, which
+   is not true at any other size (at 1194x834 the live readout is flush against
+   it, and at 390x844 the +EI caption takes the 52px that looks free). And the
+   card ends well above the deck, so height is free too: measured on a fitted
+   card, the editable rows go to the full 40px standard with all nine batting
+   rows still on screen.
+
+   So this is the one place the linescore reaches the figure the rest of the app
+   holds. 25x26 -> 32x39.
+
+   The head row stays where it is — a label, not a target, which is the same
+   call F27 made in the landscape block. The 32px width is capped by the
+   extra-innings case rather than by the spare: nineteen data columns plus the
+   name column have to fit when +EI is pressed, and (758 - 118) / 19 = 33.7. */
+@media (min-width: 561px) and (max-width: 834px) {
+  .linescore th, .linescore td { width: 32px; }
+  .linescore td { height: 40px; }
+}
+
 /* The theme sizes the scoreboard up (15px team names and figures), which is
    what overran the phone in the first place. Take it back down inside the
    stacked strip — this has to live here, after the theme's own linescore
@@ -2327,9 +2392,17 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
      label, not a target. 22px -> 29px, and the table lands at 80px inside the
      81px it already had, so the strip does not grow by a pixel and neither does
      anything below it. (F27) */
+  /* I12, taking the last of it. F27 spent the 14px that was going spare inside
+     `.ls-table-col` and stopped there, correctly — at the time the next pixel
+     came off the batting order. Re-measured on a fitted card with the drawer
+     flat: 29 -> 32 still shows all nine rows at 1194x834, and 36 is where the
+     ninth falls off. So three more pixels are there and the fourth is not.
+     1024x768 would take 34; one rule covers both sizes and 32 is the number
+     that is safe at both. Width is still untouchable here for F27's reason —
+     the live readout is flush against the table. */
   .linescore th, .linescore td { width: 26px; }
   .linescore th { height: 22px; }
-  .linescore td { height: 29px; }
+  .linescore td { height: 32px; }
   .linescore th.team-col, .linescore td.team-col { width: 92px; }
   .linescore td.team-col { font-size: 13px; }
   /* Every pixel the name column takes here comes off the live readout beside

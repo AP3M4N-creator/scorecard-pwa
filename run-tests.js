@@ -295,6 +295,49 @@ function stylesheetChecks() {
         : `the flat drawer is back to ${vert}px of vertical padding — that is the 2px of page scroll at 1194x834 (F44)`;
     });
 
+    /* I12. The linescore's editable rows were the smallest control in the app
+       and every attempt to grow them comes straight off the batting order —
+       the strip is above the card and the card is what has to fit on one page.
+       Re-measured on a fitted card with the drawer flat: 32px keeps all nine
+       batting rows at 1194x834 and 36px does not. So this is a ceiling, not a
+       target, and it is the kind of number somebody rounds up to 40 later
+       because 40 is the standard everywhere else in the file. */
+    check('the linescore rows stop at the height the nine-row fit allows', () => {
+      // Three blocks in this file share that media query, and only one of them
+      // carries the strip — so take the one that actually sets the rule rather
+      // than the first, which is a different block 1700 lines earlier.
+      const q = '@media (min-width: 835px) and (min-height: 501px)';
+      let at = -1, i = -1;
+      while ((i = css.indexOf(q, i + 1)) >= 0) {
+        if (css.slice(i, i + 12000).includes('.linescore td {')) { at = i; break; }
+      }
+      if (at < 0) return 'no landscape strip block sets the linescore height any more — F27 and I12 are both unpinned';
+      const m = css.slice(at, at + 12000).match(/\.linescore td\s*\{[^}]*?height:\s*(\d+)px/);
+      if (!m) return "could not read .linescore td's height out of the landscape strip block";
+      const px = Number(m[1]);
+      if (px > 32) return `the linescore rows are ${px}px in landscape — 36 is where the ninth batting row falls off the page at 1194x834, which is the slot F44 spent a whole pass saving (I12)`;
+      return px < 29 ? `the linescore rows are ${px}px, below the 29 F27 had already bought` : null;
+    });
+
+    /* The one viewport where the linescore is not fighting anything: caption on
+       its own line, 301px of table column spare, card ending above the deck. It
+       is the only size that reaches the app's 40px standard, and it needs its
+       own block to do it — folded into any neighbouring breakpoint it would
+       take the phone or the landscape sizes with it, and both are already
+       trading batting rows. */
+    check('tablet portrait keeps the one block where the linescore is full size', () => {
+      const at = css.indexOf('@media (min-width: 561px) and (max-width: 834px)');
+      if (at < 0) return 'the tablet-portrait linescore block is gone — 834x1194 drops back to 25x26 (I12)';
+      const body = css.slice(at, at + 2000);
+      const h = body.match(/\.linescore td\s*\{[^}]*?height:\s*(\d+)px/);
+      const w = body.match(/\.linescore th, \.linescore td\s*\{[^}]*?width:\s*(\d+)px/);
+      if (!h || !w) return 'the tablet-portrait block no longer sets both the linescore width and height';
+      if (Number(h[1]) < 40) return `tablet portrait is back to ${h[1]}px rows, and it is the one size that can afford the 40px standard`;
+      // 19 data columns plus the name column have to fit when +EI is pressed:
+      // (758 - 118) / 19 = 33.7, so 32 is the cap and 34 would clip LOB.
+      return Number(w[1]) > 33 ? `the cells are ${w[1]}px wide — a 15-inning card stops fitting the 758px column past 33` : null;
+    });
+
     check('the row floor has not been lowered to buy the fit instead', () => {
       const m = code('ui.js').match(/FIT_MIN\s*=\s*(\d+)/);
       if (!m) return 'no FIT_MIN in ui.js — the fit engine no longer has a row floor';

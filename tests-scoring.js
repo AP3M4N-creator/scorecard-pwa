@@ -8522,6 +8522,257 @@
     ok('still nothing opened', !visible('guide-popup'));
   });
 
+  /* ---- I13: the grid from a keyboard (H5) ---------------------------------
+
+     `.at-bat-cell` carried no `tabindex`, so Tab walked past the card entirely,
+     and the arrow handler bailed on `if (!selectedCell) return`. Between them
+     that made the whole hotkey layer unreachable on a fresh card from a Magic
+     Keyboard: no way to select a cell, and every hotkey acts on the selection.
+
+     The roving tab stop is what fixes it, and the thing to pin is that it stays
+     *roving* — 270 cells in the tab ring would be the obvious wrong fix, and it
+     would pass any test that only asked whether the grid was reachable. */
+
+  test('the card is reachable from a keyboard, one stop at a time', () => {
+    const cells = [...rawAll('#grid-visiting .at-bat-cell')];
+    ok(`there are cells to check — got ${cells.length}`, cells.length > 100);
+    ok('every one of them can take focus',
+      cells.every(c => c.hasAttribute('tabindex')));
+    const stops = cells.filter(c => c.getAttribute('tabindex') === '0');
+    eq('and exactly one is in the tab ring', stops.length, 1);
+    // Both cards, or Tab reaches one team's card and not the other's.
+    eq('the home card has its own single stop',
+      rawAll('#grid-home .at-bat-cell[tabindex="0"]').length, 1);
+  });
+
+  test('the tab stop follows the selection rather than sitting where it started', () => {
+    const target = cellOf('visiting', 3, 2);
+    sel('visiting', 3, 2);
+    eq('the selected cell is the stop', target.getAttribute('tabindex'), '0');
+    eq('and it is still the only one in this card',
+      rawAll('#grid-visiting .at-bat-cell[tabindex="0"]').length, 1);
+    sel('visiting', 6, 2);
+    eq('the cell left behind is out of the ring again', target.getAttribute('tabindex'), '-1');
+    eq('and the new one is in it', cellOf('visiting', 6, 2).getAttribute('tabindex'), '0');
+  });
+
+  /* The half of H5 that was not about `tabindex`. An arrow used to return
+     without doing anything at all when nothing was selected, which is the state
+     every card starts in. */
+  test('an arrow key gets into the grid when nothing is selected', () => {
+    if (selectedCell) selectedCell.classList.remove('selected');
+    selectedCell = null;
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+    ok('a cell is selected now', !!selectedCell);
+    // The first press orients rather than moves: the cell it lands on is the
+    // one being worked on, not one column to the right of it.
+    eq('and it is the first at-bat with nothing in it', selectedCell.dataset.inn, '0');
+    eq('at the top of the order', selectedCell.dataset.p, '0');
+  });
+
+  test('the arrow entry point follows the card, not a fixed corner', () => {
+    sel('visiting', 0, 0); play('K');
+    sel('visiting', 3, 0); play('K');
+    if (selectedCell) selectedCell.classList.remove('selected');
+    selectedCell = null;
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+    eq('it skips the two that are filled', selectedCell.dataset.p, '6');
+  });
+
+  test('a key that writes still needs a cell to write to', () => {
+    if (selectedCell) selectedCell.classList.remove('selected');
+    selectedCell = null;
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: '1', bubbles: true, cancelable: true }));
+    ok('a play hotkey with no selection selects nothing', !selectedCell);
+    ok('and writes nothing', !ab('visiting', 0, 0).play);
+  });
+
+  test('tabbing onto a cell selects it, so there is one idea of where you are', () => {
+    sel('visiting', 0, 0);
+    const other = cellOf('visiting', 6, 3);
+    other.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    eq('the focused cell is the selected one', selectedCell, other);
+  });
+
+  /* ---- I7: read the cell back ---------------------------------------------
+
+     The readout renders from `cellOutcome`, which is what the screen-reader
+     label renders from, because a finished cell no longer knows what
+     `describePlayInWords` needs — `before`, the inning as it stood, which only
+     `finishPlay` ever holds. Sharing the facts rather than the string is the
+     arrangement step 1 settled on; what these check is that the sentences stay
+     inside what the cell actually knows. */
+
+  test('a filled cell reads back as what it says', () => {
+    beginner();
+    sel('visiting', 0, 0); play('2B');
+    dismissPopupById('spray-popup');
+    const lines = readCellInWords('visiting', 0, 0);
+    eq('it names the play', lines[0], 'Double.');
+    // Not "He got as far as 2nd" — a double says that in its own name, and the
+    // readout applies the same `IMPLIED_BATTER_BASE` test I4 does.
+    ok('and does not repeat what the play already said',
+      !lines.some(l => /got as far as 2nd/.test(l)));
+  });
+
+  test('the readout says the things the cell knows and stops there', () => {
+    beginner();
+    sel('visiting', 0, 0); play('K');
+    const k = readCellInWords('visiting', 0, 0);
+    eq('a strikeout names itself', k[0], 'Strikeout.');
+    ok('and says which out it was', k.some(l => /out number 1 of the inning/.test(l)));
+    // "Strikeout. He did not reach." is the readout telling a beginner the one
+    // thing they already knew — only a fielder's choice leaves it open.
+    ok('without telling you a strikeout did not reach',
+      !k.some(l => /did not reach/.test(l)));
+
+    /* The one out whose name does not say whether the batter reached, so it is
+       the one the readout has to say it for. Written onto the cell rather than
+       entered through the outcome popup: what is under test is the renderer
+       against a cell shape, and driving the popup would be testing the popup. */
+    const fc = ab('visiting', 3, 0);
+    fc.play = 'FC 6';
+    fc.bases = [false, false, false, false];
+    fc.out = 1;
+    ok("a fielder's choice does say it, because its name does not",
+      readCellInWords('visiting', 3, 0).some(l => /did not reach/.test(l)));
+  });
+
+  test('an empty cell says so rather than saying nothing', () => {
+    eq('one line, and it is the truth',
+      readCellInWords('visiting', 12, 4).join(' '), 'Nothing recorded here yet.');
+    // The screen-reader label agrees, off the same `cellOutcome`.
+    ok('and the screen reader is told the same',
+      /empty$/.test(describeCellForScreenReader('visiting', 12, 4)));
+  });
+
+  test('Read opens a readout of the selected cell', () => {
+    beginner();
+    sel('visiting', 0, 0); play('1B');
+    dismissPopupById('spray-popup');
+    sel('visiting', 0, 0);
+    promptReadCell();
+    ok('the popup opens', visible('read-popup'));
+    const popup = document.getElementById('read-popup');
+    ok('on the shared shell', popup.classList.contains('jsp'));
+    eq('one line per fact',
+      [...popup.querySelectorAll('.read-line')].map(l => l.textContent).join(' | '),
+      readCellInWords('visiting', 0, 0).join(' | '));
+    ok('titled by who and when', /Inning 1/.test(popup.querySelector('.jsp-title').textContent));
+    clickId('read-close');
+    ok('and closes', !visible('read-popup'));
+  });
+
+  test('Read needs a cell, like every other tool that works on one', () => {
+    if (selectedCell) selectedCell.classList.remove('selected');
+    selectedCell = null;
+    promptReadCell();
+    ok('it refuses without one', rejected());
+    ok('and opens nothing', !visible('read-popup'));
+  });
+
+  test('the readout has a key on both decks', () => {
+    ['visiting', 'home'].forEach(t => {
+      const btn = document.querySelector(`#qb-${t} .qb-read`);
+      ok(`${t} has it`, !!btn);
+      eq(`${t}: it opens the readout`, btn.dataset.act, 'promptReadCell');
+    });
+    // Not an entry path: it writes nothing, and it must not dim when the
+    // half-inning ends — reading a finished inning back is the point.
+    ok('and it is not dimmed with the entry controls',
+      !ENTRY_ACTS.includes('promptReadCell'));
+  });
+
+  /* ---- I10: the practice game ---------------------------------------------
+
+     A script replayed through `applyPlay`, not a stored `gameState`. That is
+     the whole design decision worth pinning: a snapshot would be a second copy
+     of the state shape that goes stale silently, where a script can only go
+     stale loudly — if the engine ever scores these five codes differently, or
+     asks a question the script has no answer for, the half-inning comes out
+     wrong and this notices. */
+
+  test('the practice card is the half-inning it claims to be', () => {
+    const realConfirm = window.confirm;
+    window.confirm = () => true;
+    try {
+      loadPracticeGame();
+      dismissPopupById('practice-popup');
+      eq('every scripted play landed',
+        PRACTICE_SCRIPT.map(s => ab('visiting', s.p, 0).play).join(' '),
+        '1B K 2B 6-3 F8');
+      const inn = getInnState('visiting', 0);
+      eq('three outs', inn.outs, PRACTICE_RESULT.outs);
+      eq('one man left on', inn.bases.filter(Boolean).length, PRACTICE_RESULT.leftOnBase);
+      const runs = gameState.teams.visiting.players.reduce((n, pl) =>
+        n + (pl.atBats || []).filter(a => a && a.bases && a.bases[3] && a.outOnBase == null).length, 0);
+      eq('and a run in', runs, PRACTICE_RESULT.runs);
+      // The exercise half is untouched — that is the half the scorer does.
+      ok('the home half is empty and waiting',
+        gameState.teams.home.players.every(pl => (pl.atBats || []).every(a => !a || !a.play)));
+      ok('and nothing was left open over it', !visible('runner-popup') && !visible('spray-popup'));
+    } finally { window.confirm = realConfirm; clearStorage(); }
+  });
+
+  test('the practice card belongs to no saved game', () => {
+    const realConfirm = window.confirm;
+    window.confirm = () => true;
+    try {
+      const before = getGameLibrary().length;
+      loadPracticeGame();
+      dismissPopupById('practice-popup');
+      // Without this, "Update Saved Game" would offer to write the practice
+      // card over whichever entry the scorer had open before it.
+      ok('it carries no library id', !gameState.currentGameId);
+      eq('and it wrote nothing to the library', getGameLibrary().length, before);
+    } finally { window.confirm = realConfirm; clearStorage(); }
+  });
+
+  test('the practice card can be declined like any other door out of a card', () => {
+    const realConfirm = window.confirm;
+    let asked = '';
+    window.confirm = (msg) => { asked = msg; return false; };
+    try {
+      sel('visiting', 0, 0); play('1B');
+      dismissPopupById('spray-popup');
+      loadPracticeGame();
+      ok('it asks first', !!asked);
+      ok('and says what is at stake', /unsaved changes|replaces the card/i.test(asked));
+      eq('the card on screen is untouched', ab('visiting', 0, 0).play, '1B');
+    } finally { window.confirm = realConfirm; }
+  });
+
+  test('the library pins a practice row that cannot be lost', () => {
+    renderGameLibrary();
+    const row = document.querySelector('#game-library-list .game-practice');
+    ok('the row is there on an empty library', !!row);
+    ok('it opens the practice game',
+      row.querySelector('[data-act="loadPracticeGame"]'));
+    // No Delete, because there is nothing stored to delete — the row is built
+    // at render time. A Delete here would be a button that cannot work.
+    ok('and offers no Delete', !row.querySelector('.del-btn'));
+  });
+
+  test('the account of the half-inning is written once and shown twice', () => {
+    const realConfirm = window.confirm;
+    window.confirm = () => true;
+    try {
+      loadPracticeGame();
+      const popup = document.getElementById('practice-popup');
+      ok('the prompt is on screen when the card arrives', visible('practice-popup'));
+      const shown = [...popup.querySelectorAll('.practice-list li')].map(l => l.textContent);
+      eq('it lists the plays to enter', shown.join(' | '), PRACTICE_TODO.join(' | '));
+      // Same list, so a scorer who dismisses the popup has not lost it.
+      ok('and the notes carry the same list',
+        PRACTICE_TODO.every(t => (gameState.notes || '').includes(t)));
+      // No notation anywhere in it — naming the codes would answer the only
+      // question the exercise asks.
+      ok('with no scorebook codes in the account',
+        !PRACTICE_TODO.some(t => /\b(1B|2B|3B|HR|K|BB|F\d|L\d|P\d|\d-\d)\b/.test(t)));
+      dismissPopupById('practice-popup');
+    } finally { window.confirm = realConfirm; clearStorage(); }
+  });
+
   /* ---- I2: the entry point ------------------------------------------------
 
      Nothing fits by addition on this deck — 14.6px of slack at 844x390 against
