@@ -3,7 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<!-- maximum-scale=1 is what stops iOS Safari zooming the page in when a field
+     under 16px takes focus (F47). It is not belt-and-braces behind the 16px
+     sizes: `shrinkName` writes an *inline* font-size, as low as 6px, on any
+     name too long for its column - measured at 9.3px on an iPad in portrait -
+     and no stylesheet can reach an inline style. The same is true of the AVG
+     and jersey cells and the phone linescore, whose columns are too narrow to
+     hold 16px at all. Users can still pinch-zoom: iOS has ignored
+     user-scalable=no since 10, and clamps maximum-scale only for the
+     automatic focus zoom, not for a deliberate gesture. -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover">
 <title>Baseball Scorecard</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">

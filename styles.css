@@ -312,7 +312,10 @@ details.info-details > summary:hover { color: var(--navy); }
 }
 .info-row input, .ump-row input, .info-row select {
   border: none; border-bottom: 1px solid var(--border-light);
-  background: transparent; padding: 5px 2px; font-size: 14px; width: 110px;
+  /* 16px, not 14: below 16 iOS Safari zooms the page in on focus (F47). 106px of
+     usable column here, and the longest thing typed into it is a team name, which
+     already ran past the box at 12px — so the size costs nothing. */
+  background: transparent; padding: 5px 2px; font-size: 16px; width: 110px;
   border-radius: 0;
 }
 .info-row select { width: 62px; cursor: pointer; }
@@ -370,9 +373,15 @@ details.info-details > summary:hover { color: var(--navy); }
   overflow: hidden; text-overflow: ellipsis;
 }
 .linescore td.total { background: rgba(255,255,255,0.12); }
+/* 16px against the iOS zoom threshold (F47). The box is 25px on an 11" iPad in
+   landscape and 31px in portrait, so 16px holds the two digits any real inning or
+   total needs — `buildLinescore` caps the field at two for exactly that reason.
+   The phone keeps 12px in the two blocks near the end of this file: its box is
+   16.3px, where even one digit is tight, so 16px is not available there at all and
+   `maximum-scale=1` is what covers it. */
 .linescore input {
   width: 100%; height: 100%; border: none; text-align: center; background: transparent;
-  font-family: var(--mono); font-size: 13px; font-weight: 600; color: #fff; padding: 0;
+  font-family: var(--mono); font-size: 16px; font-weight: 600; color: #fff; padding: 0;
 }
 .linescore input:focus { outline: 2px solid var(--gold); outline-offset: -2px; }
 .linescore td.total input { color: var(--gold); font-weight: 700; }
@@ -769,9 +778,21 @@ details.info-details > summary:hover { color: var(--navy); }
 .scoring-grid td.player-cell input,
 .scoring-grid td.avg-cell input {
   position: absolute; inset: 0;
-  width: 100%; height: 100%; border: none; background: transparent; padding: 6px 6px; font-size: 14px;
+  /* 16px against the iOS zoom threshold (F47). Only the name column keeps it —
+     `.num-cell` and `.avg-cell` restate 12px below, because they cannot hold 16.
+     A name too long for its column is shrunk *inline* by `shrinkName` and lands
+     under 16 anyway, which is why the viewport meta is the real fix here. */
+  width: 100%; height: 100%; border: none; background: transparent; padding: 6px 6px; font-size: 16px;
 }
 .scoring-grid td.player-cell input { font-weight: 600; }
+/* The two columns that stay under 16px, and the reason is width, not taste (F47).
+   Measured in iPad *portrait*, which is tighter than landscape: AVG has 28px of
+   usable column and ".333" at 16px needs 38.4px; the # has 17.2px and "24" needs
+   19.2px. F13 already took the side padding off both to buy the digits room, so
+   there is nothing left to reclaim, and `table-layout: fixed` is over-constrained
+   below 1100px — a declared width here is ignored. So these two keep 12px and
+   `maximum-scale=1` in index.html is what stops them zooming. Raising them without
+   widening the columns cuts a batting average mid-glyph. */
 .scoring-grid td.num-cell input,
 .scoring-grid td.avg-cell input { text-align: center; font-family: var(--mono); font-size: 12px; font-weight: 500; }
 /* A 2-digit jersey is ~16px of 12px mono, and at 1024px the # column gets 24px —
@@ -788,7 +809,9 @@ details.info-details > summary:hover { color: var(--navy); }
 .scoring-grid td.pos-cell select {
   position: absolute; inset: 0;
   width: 100%; height: 100%; border: none; background: transparent;
-  font-family: var(--mono); font-size: 12px; cursor: pointer;
+  /* 16px against the iOS zoom threshold (F47); "1B" needs 19.2px and the column
+     gives 29.3px even in iPad portrait, which is the tighter of the two. */
+  font-family: var(--mono); font-size: 16px; cursor: pointer;
   appearance: none; -webkit-appearance: none; text-align: center; text-align-last: center; padding: 4px 0;
 }
 .scoring-grid td.pos-cell select:focus { outline: 2px solid var(--navy); outline-offset: -2px; }
@@ -802,7 +825,10 @@ details.info-details > summary:hover { color: var(--navy); }
 .pos-starter td { background: var(--card); }
 .pos-sub td { background: var(--row-alt); }
 .pos-sub td.stat-cell { background: var(--row-alt); }
-.pos-sub td.player-cell input { font-style: italic; padding-left: 16px; font-weight: 400; font-size: 13px; }
+/* 16px like the starter above it (F47 — below 16 iOS zooms on focus). The sub
+   line no longer reads subordinate by *size*, so the indent, the lighter weight and
+   the .75 opacity in the re-skin block carry that on their own now. */
+.pos-sub td.player-cell input { font-style: italic; padding-left: 16px; font-weight: 400; font-size: 16px; }
 /* H3 — this placeholder is the only thing naming which slot a sub row belongs to,
    and it is the whole content of every empty sub row the "show subs" toggle
    reveals at once. It was painted in --border-light, rgba(0,50,120,0.2), which
@@ -990,7 +1016,11 @@ details.info-details > summary:hover { color: var(--navy); }
 .pitcher-grid td { padding: 0; height: 32px; background: var(--card); }
 .pitcher-grid td input {
   width: 100%; height: 100%; border: none; text-align: center; background: transparent;
-  font-family: var(--mono); font-size: 13px; padding: 4px;
+  /* 16px against the iOS zoom threshold (F47), and the 4px of side padding goes
+     with it: every one of these is centred, so the padding bought nothing, and the
+     widest real value — an IP of "10.1" at 38.4px — does not fit the 35px the
+     padding left. The same trade F13 made on the # and AVG columns. */
+  font-family: var(--mono); font-size: 16px; padding: 4px 1px;
 }
 .pitcher-grid td input:focus { outline: 2px solid var(--navy); outline-offset: -2px; }
 .pitcher-grid td.p-name input { text-align: left; padding-left: 8px; font-family: var(--font); font-weight: 600; }
@@ -1032,7 +1062,8 @@ details.info-details > summary:hover { color: var(--navy); }
   letter-spacing: .12em; text-transform: uppercase; color: var(--text-light);
 }
 .notes-box textarea {
-  width: 100%; min-height: 220px; padding: 10px 12px; font-size: 14px; resize: vertical;
+  /* 16px against the iOS zoom threshold (F47) — a full-width box, so it is free. */
+  width: 100%; min-height: 220px; padding: 10px 12px; font-size: 16px; resize: vertical;
   font-family: var(--font); background: var(--card);
   border: 1px solid var(--border-light); border-radius: 2px;
 }
@@ -1163,11 +1194,13 @@ details.info-details > summary:hover { color: var(--navy); }
    zooms. Do not lower it. The family is the card's, so what the scorer types reads
    the way it will read on the line.
 
-   Qualified with `.jsp-input` rather than left as a bare `.sn-field`, which loses:
-   `.jsp-input`'s 12px is declared ~190 lines further down this file, and at equal
-   specificity the later rule wins. Measured at 12px in the browser before this —
-   the sheet was open, anchored and focused, and still zooming. Two classes beat one
-   wherever the blocks sit, so this cannot come back by a block being moved. */
+   `.jsp-input` carries 16px itself since F47, so this is no longer the only thing
+   holding the sheet above the threshold — but the qualification stays. Written as a
+   bare `.sn-field` it *lost*: `.jsp-input`'s old 12px was declared ~190 lines
+   further down at equal specificity, and the later rule won. It measured 12px in
+   the browser while the stylesheet plainly said 16 — the sheet open, anchored and
+   focused, and still zooming. Two classes beat one wherever the blocks sit, so
+   neither a block being moved nor `.jsp-input` being lowered again can undo it. */
 .jsp-input.sn-field {
   font-family: var(--font); font-size: 16px; min-height: 44px;
   padding: 6px 10px; width: 100%;
@@ -1360,9 +1393,13 @@ details.info-details > summary:hover { color: var(--navy); }
 
 /* A label and a field on one line — "Or position play: [______]". */
 .jsp-inline { display: flex; gap: 6px; align-items: center; }
+/* 16px against the iOS zoom threshold (F47). This one rule is every field in
+   every popup — the paste sheet's lineup box and its Save-as, the position-play
+   box, the sub-name sheet — and none of them sits on the card, so there is no
+   layout to trade for it. */
 .jsp-input {
   flex: 1; min-height: 40px; padding: 4px 8px;
-  font-family: var(--mono); font-size: 12px;
+  font-family: var(--mono); font-size: 16px;
   border: 1px solid var(--border-light); border-radius: 4px;
   background: var(--card); color: var(--text);
 }
@@ -2102,7 +2139,7 @@ details.info-details > summary::before { color: var(--rb-red); }
 .linescore th.team-col { opacity: .85; }
 .linescore td { background: rgba(255,255,255,0.05); }
 .linescore td.team-col { font-size: 15px; letter-spacing: .05em; }
-.linescore input { color: var(--rb-white); font-size: 15px; }
+.linescore input { color: var(--rb-white); font-size: 16px; }
 .linescore td.total { background: var(--rb-red); }
 .linescore td.total input { color: var(--rb-white); }
 .linescore td.ls-active { background: var(--rb-red) !important; box-shadow: inset 0 0 0 2px var(--rb-white); }
@@ -2505,7 +2542,7 @@ details.info-details > summary:hover { background: rgba(255,255,255,0.16); borde
      deck can afford the full 150 and the readout still fits whole; at the
      835 edge it cannot, and a name shrunk a size is the cheaper loss. */
   .linescore td.team-col > span { max-width: min(150px, 13vw); }
-  .linescore input { font-size: 13px; }
+  .linescore input { font-size: 16px; }
 
   #live-stats { flex: 1; display: flex; align-items: center; min-width: 0; }
   .live-cell { padding: 0 11px; gap: 2px; }

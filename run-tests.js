@@ -391,13 +391,53 @@ function stylesheetChecks() {
           + ` (candidates: ${decls.map(d => d.sel + ' ' + d.px + 'px').join(', ')})`;
     });
 
-    // And the card is deliberately *not* raised with it: the sub line reads as
-    // subordinate to the starter above it, which is what the 13px italic buys.
-    check('the card keeps its 13px sub line, which is why the sheet exists', () => {
-      const m = css.match(/\.pos-sub td\.player-cell input\s*\{[^}]*?font-size:\s*([\d.]+)px/);
-      if (!m) return 'the sub row\'s name field no longer declares a size of its own';
-      return parseFloat(m[1]) < 16 ? null
-        : 'the card\'s sub line is now >=16px — if that was deliberate the sheet may be redundant';
+    /* F47 — the whole app, not just the sheet. Every rule that sizes a focusable
+       control has to land at 16px or above, because below that iOS Safari zooms the
+       page in on focus. Two are allowed to stay under, and only because their
+       columns physically cannot hold 16px (measured in iPad portrait, the tighter
+       orientation): AVG has 28px and ".333" needs 38.4px, and the phone linescore
+       box is 16.3px. Those two are covered by `maximum-scale=1` instead, which the
+       next check pins. Anything *else* under 16px is the original defect. */
+    const ZOOM_EXEMPT = [
+      // selector, px — width-bound, documented at the rule itself
+      ['.scoring-grid td.num-cell input,.scoring-grid td.avg-cell input', 12],
+      ['.linescore input', 12],
+    ];
+    check('no focusable control is sized below the iOS zoom threshold', () => {
+      const bad = [];
+      const rule = /([^{}@]+)\{([^}]*)\}/g;
+      let m;
+      while ((m = rule.exec(css))) {
+        const sel = m[1].trim().replace(/\s*\n\s*/g, '');
+        if (!/\b(input|select|textarea)\b/.test(sel)) continue;
+        const size = /font-size:\s*([\d.]+)px/.exec(m[2]);
+        if (!size) continue;
+        const px = parseFloat(size[1]);
+        if (px >= 16) continue;
+        const key = sel.replace(/\s*,\s*/g, ',');
+        if (ZOOM_EXEMPT.some(([s, p]) => s === key && p === px)) continue;
+        bad.push(`${sel} is ${px}px`);
+      }
+      return bad.length
+        ? `iOS Safari will zoom the page on focus for: ${bad.join('; ')}`
+        : null;
+    });
+
+    // The other half of F47, and the load-bearing half: `shrinkName` writes an
+    // inline font-size — as low as 6px, measured at 9.3px on an iPad in portrait —
+    // on any name too long for its column, and no stylesheet can reach an inline
+    // style. Without this line those names still zoom however the CSS is written.
+    check('the viewport meta still pins the scale that stops the focus zoom', () => {
+      const html = read('index.html');
+      const m = /<meta\s+name="viewport"[^>]*content="([^"]*)"/i.exec(html);
+      if (!m) return 'there is no viewport meta at all';
+      const content = m[1];
+      if (!/maximum-scale\s*=\s*1\b/.test(content)) {
+        return `viewport meta has no maximum-scale=1 — inline-shrunk names zoom again: "${content}"`;
+      }
+      return /user-scalable\s*=\s*no/.test(content)
+        ? 'viewport meta adds user-scalable=no, which blocks deliberate pinch-zoom; maximum-scale=1 alone is enough'
+        : null;
     });
 
     check('a shown sub row still declares a height', () => {

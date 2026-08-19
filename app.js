@@ -1110,7 +1110,12 @@ function buildLinescore() {
     const existing = row.querySelector('.team-col');
     let html = '';
     for (let i = 0; i < INNINGS; i++) {
-      html += `<td data-inn-col="${i}"><input type="text" data-ls="${t}" data-inn="${i}" maxlength="3" data-act="updateLinescoreTotals" data-arg="${t}" data-act-on="input"></td>`;
+      // Two digits, not three (F47). These are the only focusable boxes in the
+      // strip — R/H/E/LOB are readonly — so they are the ones that had to come up
+      // to 16px against the iOS zoom threshold, and at 16px a third digit needs
+      // 28.8px of a 25px box on an iPad in landscape. No half-inning has ever
+      // scored 100 runs, so the cap costs the scorer nothing and buys the size.
+      html += `<td data-inn-col="${i}"><input type="text" data-ls="${t}" data-inn="${i}" maxlength="2" data-act="updateLinescoreTotals" data-arg="${t}" data-act-on="input"></td>`;
     }
     html += `<td class="total"><input type="text" data-ls="${t}" data-stat="r" readonly tabindex="-1"></td>`;
     html += `<td class="total"><input type="text" data-ls="${t}" data-stat="h" readonly tabindex="-1"></td>`;
