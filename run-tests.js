@@ -399,7 +399,11 @@ function stylesheetChecks() {
        box is 16.3px. Those two are covered by `maximum-scale=1` instead, which the
        next check pins. Anything *else* under 16px is the original defect. */
     const ZOOM_EXEMPT = [
-      // selector, px — width-bound, documented at the rule itself
+      /* Width-bound, documented at the rule itself. The # and AVG cells are only
+         allowed to stay at 12px because F48 made them `readonly tabindex="-1"` —
+         a control that never takes focus can never trigger the zoom, whatever its
+         size. The scoring suite has the test that holds them non-focusable; if
+         that is ever undone this exemption becomes the original defect again. */
       ['.scoring-grid td.num-cell input,.scoring-grid td.avg-cell input', 12],
       ['.linescore input', 12],
     ];

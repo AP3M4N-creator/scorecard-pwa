@@ -57,7 +57,7 @@ the right register.
 Three things are wrong with it, none of them the writing:
 
 - It is **titled for a keyboard**, on an app whose primary device is an iPad with no keyboard.
-  Six of its eight sections are irrelevant to a beginner, and `app.js:10811` concedes the modal
+  Six of its eight sections are irrelevant to a beginner, and `app.js:10860` concedes the modal
   "is the only documentation the app has."
 - It is **incomplete in the opposite direction**: the codes a beginner meets *first* — the ones
   on the always-visible core row — are the ones the glossary section omits, because they have
@@ -70,10 +70,10 @@ Three things are wrong with it, none of them the writing:
 
 | Row | Says | Actually |
 |---|---|---|
-| `index.html:525` | Foul is a **"Black ✕"** | Renders navy — `rgba(0,50,120,0.88)`, `styles.css:944` |
+| `index.html:525` | Foul is a **"Black ✕"** | Renders navy — `rgba(0,50,120,0.88)`, `styles.css:965` |
 | `index.html:558` | WP/PB — **"All runners advance 1"** | Opens a popup asking *who moved* unless exactly one runner is on (`applyRunnerEvent`, `app.js:5592`) |
 
-The "Red ✕" for a strike is fair — `#8f0c14` (`styles.css:2215`) is a dark red. The foul row is
+The "Red ✕" for a strike is fair — `#8f0c14` (`styles.css:2241`) is a dark red. The foul row is
 simply wrong, and the WP/PB row teaches a beginner a rule the app itself doesn't follow.
 
 **B3 — There is no legend for the card at all.**
@@ -156,23 +156,23 @@ optional, and the count lives up in the linescore strip, far from the buttons pr
   `#f5f5f5` ×14, `#555` ×13, **`#2e7d32` ×13**, `#e8f5e9` ×6, `#fce4ec` ×4, `#1565c0` ×4. The
   green/pink selected-state pair was the runner-outcome and edit-play popups.
   *Fixed at step 3: every one of those inline styles is gone, and a hex literal in generated
-  popup markup now fails a test. The shell is `.jsp` (`styles.css:1141`) and the chips are
-  `.jsp-chip` (`styles.css:1276`).*
+  popup markup now fails a test. The shell is `.jsp` (`styles.css:1162`) and the chips are
+  `.jsp-chip` (`styles.css:1302`).*
 - **H2 — The JS-built popup controls were never touch-audited.** The stylesheet carries a
-  measured target table (`styles.css:1796`) covering the deck, lineup and linescore. It did
+  measured target table (`styles.css:1822`) covering the deck, lineup and linescore. It did
   not cover the popups, which ran 13–25px tall: `font-size:9px;padding:1px 5px` on the pitching-
   decision "change" button (≈13px), `padding:3px 8px;font-size:10px` on every runner-outcome
   button (≈19px), `padding:2px 7px` on "↻ Fix Stats" (`app.js:1062`, ≈18px). These are controls
   a scorer uses mid-play. *Fixed at step 3: the popups are on the 40px standard and are in the
   target table now — the second half of it, under "The popups app.js builds (I11)".*
-- **H3 — The sub-row placeholder is effectively invisible.** `styles.css:839` paints the "PH /
+- **H3 — The sub-row placeholder is effectively invisible.** `styles.css:860` paints the "PH /
   Sub" placeholder in `--border-light` = `rgba(0,50,120,0.2)` on `--row-alt` — ≈**1.48:1**. It is
   the only thing identifying which slot a sub row belongs to, and the rest of the file holds
   itself to 4.5:1 with measured evidence. *Fixed at step 0.4; `run-tests.js` pins the contrast.*
 - **H4 — Popup selected state is colour-only**, with no `aria-pressed`. *Fixed at step 3: an
   inset ring and 700 weight carry it through greyscale, and `aria-pressed` is on every chip.*
 - **H5 — No keyboard entry into the grid.** No `tabindex` on `.at-bat-cell`, and arrow
-  navigation bails early without a prior tap (`app.js:10592`).
+  navigation bails early without a prior tap (`app.js:10641`).
 
 ---
 

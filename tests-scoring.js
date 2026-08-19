@@ -4137,6 +4137,102 @@
     eq('and the position', gameState.teams.visiting.players[1].pos, 'LF');
   });
 
+  /* F48 — the two cells that cannot hold 16px do not take focus at all.
+
+     AVG resolves to 28px of usable column in iPad portrait and ".333" at 16px needs
+     38.4px; widening is not available, because `table-layout: fixed` is
+     over-constrained there and asking for 58px moved the cell by 1px. Adam saw the
+     page scale up and stay scaled when he tapped one on the iPad. A control that
+     never takes focus cannot do that whatever its size, so these two are set in the
+     sheet instead — and this is the test the stylesheet's 12px exemption leans on. */
+  test('the # and AVG cells cannot take focus (F48)', () => {
+    ['num', 'avg'].forEach(field => {
+      ['visiting', 'home'].forEach(team => {
+        // `[data-p]` scopes this to the batting order: the pitcher table carries
+        // data-field="num" too, on `[data-pitcher]` rows, and those are 16px and
+        // keep their focus.
+        const all = [...document.querySelectorAll(
+          `.scoring-grid input[data-field="${field}"][data-team="${team}"][data-p]`)];
+        ok(field + ' cells exist on the ' + team + ' card', all.length > 0);
+        /* `disabled`, not `readonly`. `readonly` plus `tabindex="-1"` was the
+           first attempt and it does not refuse focus — measured in the browser,
+           the field took it happily; tabindex only governs the tab *order*. A
+           disabled control cannot be focused at all, which is a fact about the
+           DOM rather than a bet on Safari honouring a meta tag. */
+        ok('every ' + field + ' cell is disabled',
+          all.every(e => e.disabled));
+        ok('and refuses focus when asked directly', all.every(e => {
+          e.focus();
+          return document.activeElement !== e;
+        }));
+        // The cell around it is the control instead, or the value is unreachable.
+        ok('while its cell is reachable and announces itself', all.every(e => {
+          const td = e.closest('td');
+          return td && td.getAttribute('tabindex') === '0'
+            && td.getAttribute('role') === 'button'
+            && (td.getAttribute('aria-label') || '').length > 0;
+        }));
+      });
+    });
+    // The name and position keep taking focus — they are 16px and fine.
+    const nm = document.querySelector('input[data-field="name"][data-team="visiting"][data-p="0"]');
+    ok('the name cell still takes focus', !nm.hasAttribute('readonly'));
+  });
+
+  test('tapping an AVG cell opens the sheet on that batter (F48)', () => {
+    const cell = document.querySelector(
+      'input[data-field="avg"][data-team="visiting"][data-p="6"]').closest('td');
+    cell.click();
+    ok('the sheet opened', visible('sub-name-popup'));
+    const popup = document.getElementById('sub-name-popup');
+    eq('aimed at the row that was tapped, not at his substitute', popup.dataset.p, '6');
+    eq('in editing mode', popup.dataset.kind, 'row');
+    ok('and there is an average field', !!document.getElementById('sn-avg'));
+  });
+
+  // The position is a `<select>`, which `livePlayerField` cannot see — it looks for
+  // an `input[data-field]` — so the prefill reads the control itself.
+  test('the sheet opens on the position already on the card (F48)', () => {
+    const card = document.querySelector('select[data-field="pos"][data-team="visiting"][data-p="6"]');
+    card.value = 'SS';
+    posSelectChanged(card);
+    document.querySelector('input[data-field="avg"][data-team="visiting"][data-p="6"]')
+      .closest('td').click();
+    eq('the sheet shows SS, not a blank', document.getElementById('sn-pos').value, 'SS');
+    closeSubNameSheet();
+  });
+
+  test('the sheet writes an average back onto the card (F48)', () => {
+    lineupDirty = true;
+    writeLineupField('visiting', 6, 'name', 'Ortiz');
+    document.querySelector('input[data-field="avg"][data-team="visiting"][data-p="6"]')
+      .closest('td').click();
+    eq('it opened on the name already there', document.getElementById('sn-name').value, 'Ortiz');
+    document.getElementById('sn-avg').value = '.312';
+    applySubName();
+    eq('the average is in state', gameState.teams.visiting.players[6].avg, '.312');
+    eq('and on the card',
+      document.querySelector('input[data-field="avg"][data-team="visiting"][data-p="6"]').value, '.312');
+    eq('and the name it opened on is untouched', gameState.teams.visiting.players[6].name, 'Ortiz');
+  });
+
+  // An edit is "the row becomes what the sheet says", so a blank has to be able to
+  // land — otherwise a name typed by mistake could never be taken back out.
+  test('an edit may clear a field, where naming a substitute may not (F48)', () => {
+    writeLineupField('visiting', 9, 'name', 'Typo');
+    document.querySelector('input[data-field="avg"][data-team="visiting"][data-p="9"]')
+      .closest('td').click();
+    document.getElementById('sn-name').value = '';
+    applySubName();
+    ok('the sheet closed rather than refusing', !visible('sub-name-popup'));
+    eq('and the name is cleared', gameState.teams.visiting.players[9].name, '');
+    // Whereas the SUB path still insists on one.
+    sel('visiting', 0, 1);
+    markSub();
+    applySubName();
+    ok('naming a substitute still refuses a blank', visible('sub-name-popup'));
+  });
+
   /* Enter and Escape are the sheet's own, because the global key handler bails as
      soon as focus is in an INPUT or a SELECT — which is every control in here. A
      scorer types the name and presses return; that has to be the whole gesture. */

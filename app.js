@@ -1002,10 +1002,10 @@ function buildScoringGrid(team, containerId) {
     // the slot, because a sub bats on the starter's line.
     html += `<tr class="pos-starter" data-team="${team}" data-player="${sp}">`;
     html += `<td class="order-cell" rowspan="${ROWS_PER_POS}">${pos + 1}</td>`;
-    html += `<td class="num-cell"><input type="text" data-field="num" data-team="${team}" data-p="${sp}" maxlength="3"></td>`;
+    html += `<td class="num-cell" tabindex="0" role="button" aria-label="Jersey number, batting spot ${pos + 1} — opens a sheet to set it"><input type="text" data-field="num" data-team="${team}" data-p="${sp}" maxlength="3" disabled></td>`;
     html += `<td class="player-cell"><input type="text" data-field="name" data-team="${team}" data-p="${sp}"></td>`;
     html += `<td class="pos-cell">${posSelect.replace('data-field="pos"', `data-field="pos" data-team="${team}" data-p="${sp}"`)}</td>`;
-    html += `<td class="avg-cell"><input type="text" data-field="avg" data-team="${team}" data-p="${sp}" maxlength="5"></td>`;
+    html += `<td class="avg-cell" tabindex="0" role="button" aria-label="Batting average, batting spot ${pos + 1} — opens a sheet to set it"><input type="text" data-field="avg" data-team="${team}" data-p="${sp}" maxlength="5" disabled></td>`;
     html += `<td class="stat-cell" id="st-ab-${team}-${sp}"></td>`;
     html += `<td class="stat-cell" id="st-h-${team}-${sp}"></td>`;
     html += `<td class="stat-cell" id="st-r-${team}-${sp}"></td>`;
@@ -1037,10 +1037,10 @@ function buildScoringGrid(team, containerId) {
       const subp = sp + r;
       const ph = ROWS_PER_POS > 2 ? `PH / Sub ${r}` : 'PH / Sub';
       html += `<tr class="pos-sub" data-team="${team}" data-player="${subp}">`;
-      html += `<td class="num-cell"><input type="text" data-field="num" data-team="${team}" data-p="${subp}" maxlength="3"></td>`;
+      html += `<td class="num-cell" tabindex="0" role="button" aria-label="Jersey number, ${ph} — opens a sheet to set it"><input type="text" data-field="num" data-team="${team}" data-p="${subp}" maxlength="3" disabled></td>`;
       html += `<td class="player-cell"><input type="text" data-field="name" data-team="${team}" data-p="${subp}" placeholder="${ph}"></td>`;
       html += `<td class="pos-cell">${posSelect.replace('data-field="pos"', `data-field="pos" data-team="${team}" data-p="${subp}"`)}</td>`;
-      html += `<td class="avg-cell"><input type="text" data-field="avg" data-team="${team}" data-p="${subp}" maxlength="5"></td>`;
+      html += `<td class="avg-cell" tabindex="0" role="button" aria-label="Batting average, ${ph} — opens a sheet to set it"><input type="text" data-field="avg" data-team="${team}" data-p="${subp}" maxlength="5" disabled></td>`;
       html += `<td class="stat-cell" id="st-ab-${team}-${subp}"></td>`;
       html += `<td class="stat-cell" id="st-h-${team}-${subp}"></td>`;
       html += `<td class="stat-cell" id="st-r-${team}-${subp}"></td>`;
@@ -7996,24 +7996,33 @@ function subNameSheet() {
    Returns false when the slot has no such row in the DOM, so the caller can fall
    back to the toast that points at "Show sub rows". */
 function openSubNameSheet(team, pIdx, row, kind) {
-  const slotBase = Math.floor(pIdx / ROWS_PER_POS) * ROWS_PER_POS;
-  const r = row || 1;
-  const target = slotBase + r;
+  /* Editing addresses the row it was handed. SUB and PR address a row *of the
+     slot* instead, because they are given the starter's index and default to row
+     1 — which is why `row || 1` cannot be shared: a starter's own row number is 0
+     and that would fall through to 1, aiming the sheet at his substitute. */
+  const target = kind === 'row'
+    ? pIdx
+    : Math.floor(pIdx / ROWS_PER_POS) * ROWS_PER_POS + (row || 1);
   // The row has to exist to be named. It does for every real slot; this is the
   // guard that keeps a malformed card from opening a sheet that writes nowhere.
   if (!document.querySelector(
       `input[data-field="name"][data-team="${team}"][data-p="${target}"]`)) return false;
 
   const runner = kind === 'pr';
+  const editing = kind === 'row';
   const popup = subNameSheet();
   // On the element rather than in a variable, so a backdrop dismiss cannot
   // desync them and a second SUB cannot land its name on the first one's row.
   popup.dataset.team = team;
   popup.dataset.p = String(target);
-  popup.dataset.kind = runner ? 'pr' : 'sub';
+  // 'row' has to reach the element too: `applySubName` reads this back to decide
+  // whether a blank is a refusal (naming a substitute) or an intended clear
+  // (editing a row that already exists).
+  popup.dataset.kind = editing ? 'row' : runner ? 'pr' : 'sub';
   popup.innerHTML =
-    '<div class="jsp-title">' + (runner ? 'Pinch runner for ' : 'Substitute for ')
-      + escapeHtml(rowLabel(team, pIdx)) + '</div>'
+    '<div class="jsp-title">'
+      + (editing ? 'Edit ' : runner ? 'Pinch runner for ' : 'Substitute for ')
+      + escapeHtml(rowLabel(team, editing ? target : pIdx)) + '</div>'
     + '<div class="jsp-body">'
     +   '<div class="sn-grid">'
     +     '<label class="jsp-hint" for="sn-num">No.</label>'
@@ -8032,12 +8041,42 @@ function openSubNameSheet(team, pIdx, row, kind) {
     +       LINEUP_POS.map(p => '<option value="' + p + '">' + p + '</option>').join('')
     +     '</select>'
     +   '</div>'
+    /* AVG is here rather than on the card because it cannot be typed there any
+       more (F48): its column resolves to 28px in iPad portrait and ".333" at 16px
+       needs 38.4px, so the cell is `readonly` and this is where it is set. Its
+       own row, since the three above already fill the width. */
+    +   '<div class="sn-grid sn-grid--avg">'
+    +     '<label class="jsp-hint" for="sn-avg">Avg</label>'
+    +     '<input id="sn-avg" class="jsp-input sn-field sn-field--avg" type="text" '
+    +       'inputmode="decimal" maxlength="5" autocomplete="off" spellcheck="false" '
+    +       'placeholder=".000">'
+    +   '</div>'
     + '</div>'
     + '<div class="jsp-actions">'
     +   '<button class="jsp-btn jsp-btn--minor" id="sn-cancel" data-dismiss="cancel">Cancel</button>'
     +   '<button class="jsp-btn jsp-btn--primary" id="sn-apply">'
-    +     (runner ? 'Add runner' : 'Add substitute') + '</button>'
+    +     (editing ? 'Save' : runner ? 'Add runner' : 'Add substitute') + '</button>'
     + '</div>';
+
+  /* Editing an existing row opens on what is already there, so the sheet is a
+     correction rather than a re-entry. A substitution opens blank: that row is
+     nobody yet. */
+  if (editing) {
+    document.getElementById('sn-num').value = livePlayerField(team, target, 'num') || '';
+    document.getElementById('sn-name').value = livePlayerField(team, target, 'name') || '';
+    /* Straight off the card's own select, not through `livePlayerField` — that
+       looks for an `input[data-field]` and the position is a `<select>`, so it
+       always misses and falls back to state. State is current in practice
+       (`posSelectChanged` writes it synchronously), but reading the control that
+       actually holds the value cannot go stale at all. */
+    const cardPos = document.querySelector(
+      `select[data-field="pos"][data-team="${team}"][data-p="${target}"]`);
+    const pv = (cardPos && cardPos.value) || livePlayerField(team, target, 'pos') || '';
+    // Only a value the select actually offers — see LINEUP_POS. A stray string
+    // silently blanks it.
+    if (LINEUP_POS.indexOf(pv) !== -1) document.getElementById('sn-pos').value = pv;
+    document.getElementById('sn-avg').value = livePlayerField(team, target, 'avg') || '';
+  }
 
   document.getElementById('sn-cancel').onclick = closeSubNameSheet;
   document.getElementById('sn-apply').onclick = applySubName;
@@ -8090,13 +8129,19 @@ function applySubName() {
   const num = (document.getElementById('sn-num').value || '').trim();
   const name = (document.getElementById('sn-name').value || '').trim();
   const pos = document.getElementById('sn-pos').value || '';
+  const avg = (document.getElementById('sn-avg').value || '').trim();
+  const editing = popup.dataset.kind === 'row';
 
-  /* A name is what the sheet is for, and the row stays `visibility: collapse`
-     without one — so a jersey number on its own would be written somewhere the
-     scorer cannot see. The move itself is already on the card either way, which
-     is what Cancel is for, and the message says which move so it is not calling
-     a pinch runner a substitution. */
-  if (!name) {
+  /* Naming a substitute needs a name: his row stays `visibility: collapse`
+     without one, so a jersey number alone would be written where the scorer
+     cannot see it. The move itself is already on the card either way, which is
+     what Cancel is for, and the message says which move so it does not call a
+     pinch runner a substitution.
+
+     Editing an existing row is the opposite case — the sheet opened on what was
+     already there, so what it holds is what the row becomes, blanks included.
+     Refusing an empty name would make clearing one impossible. */
+  if (!name && !editing) {
     showPlayReject('Enter a name — or Cancel, the '
       + (popup.dataset.kind === 'pr' ? 'pinch runner' : 'substitution') + ' is already recorded.');
     const n = document.getElementById('sn-name');
@@ -8107,12 +8152,15 @@ function applySubName() {
   /* `.slice`, not just the field's `maxlength`: `input.value = x` does not honour
      maxlength — only typing does — and `writeLineupField` sets it from script.
      Same belt-and-braces the paste parser keeps for the same reason. */
-  if (num) writeLineupField(team, p, 'num', num.slice(0, 3));
+  if (num || editing) writeLineupField(team, p, 'num', num.slice(0, 3));
   writeLineupField(team, p, 'name', name);
-  if (pos) {
+  if (avg || editing) writeLineupField(team, p, 'avg', avg.slice(0, 5));
+  if (pos || editing) {
     const sel = document.querySelector(`select[data-field="pos"][data-team="${team}"][data-p="${p}"]`);
-    if (sel) { sel.value = pos; posSelectChanged(sel); }
-    else writeLineupField(team, p, 'pos', pos);
+    // Only a value the select offers, or the empty option — anything else blanks
+    // it silently (see LINEUP_POS).
+    if (sel && (pos === '' || LINEUP_POS.indexOf(pos) !== -1)) { sel.value = pos; posSelectChanged(sel); }
+    else if (!sel) writeLineupField(team, p, 'pos', pos);
   }
 
   /* The name arrived without a keystroke in the cell, so it never went through
@@ -8124,8 +8172,9 @@ function applySubName() {
   flushSave();
   updateSituation();
 
-  const who = (num ? '#' + num + ' ' : '') + name;
-  const said = (popup.dataset.kind === 'pr' ? 'Pinch runner ' : 'Substitute ') + who + ' is on the card.';
+  const who = (num ? '#' + num + ' ' : '') + (name || rowLabel(team, p));
+  const said = editing ? who + ' updated.'
+    : (popup.dataset.kind === 'pr' ? 'Pinch runner ' : 'Substitute ') + who + ' is on the card.';
   showPlayNotice(said);
   announce(said);
   closeSubNameSheet();
@@ -10974,6 +11023,44 @@ document.getElementById('info-innings')?.addEventListener('change', function() {
 document.addEventListener('click', function(e) {
   const cell = e.target.closest('.at-bat-cell');
   if (cell) selectCell(cell);
+});
+
+/* F48 — the # and AVG cells are `readonly tabindex="-1"`, so a tap on them does
+   nothing on its own. This is what it does instead.
+
+   They stopped taking focus because their columns cannot hold 16px and below that
+   iOS Safari zooms the page in and does not zoom back out: AVG resolves to 28px in
+   iPad portrait and ".333" at 16px needs 38.4px, and widening is not on the table —
+   `table-layout: fixed` is over-constrained there, and asking for 58px moved the
+   cell by 1px. So the two of them are set in the sheet, where the field is 16px and
+   nothing has to be traded for it.
+
+   Delegated on the cell rather than the input: a `readonly` input still receives
+   clicks, but the cell is the bigger target and the whole cell is what a scorer
+   aims at. */
+function openRowSheetFor(cell) {
+  const inp = cell && cell.querySelector('input[data-p]');
+  if (!inp) return false;
+  const team = inp.dataset.team;
+  const p = parseInt(inp.dataset.p);
+  if (!team || Number.isNaN(p)) return false;
+  return openSubNameSheet(team, p, null, 'row');
+}
+document.addEventListener('click', function (e) {
+  const cell = e.target.closest && e.target.closest('td.num-cell, td.avg-cell');
+  if (cell) openRowSheetFor(cell);
+});
+/* The cell carries `tabindex="0"` and `role="button"`, because disabling the input
+   took 108 stops out of the tab order and a Magic Keyboard is a supported way to
+   score this card — without this there would be no way to set a jersey or an
+   average from the keyboard at all. Enter and Space are what a role="button"
+   promises. */
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const cell = e.target.closest && e.target.closest('td.num-cell, td.avg-cell');
+  if (!cell || e.target !== cell) return;
+  e.preventDefault();
+  openRowSheetFor(cell);
 });
 
 /* Tabbing onto a cell selects it, so the keyboard has one idea of "here"
