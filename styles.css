@@ -1133,6 +1133,49 @@ details.info-details > summary:hover { color: var(--navy); }
    with nothing to read, so they centre and set in the display face. */
 .jsp--centred { text-align: center; font-family: var(--heading); }
 
+/* ---------- F46 — the sheet that names a substitute -------------------------
+
+   Two departures from `.jsp`, and both are about the iPad keyboard.
+
+   `top: 50%` is where every other popup sits, and it is wrong for the only popup
+   in the app whose whole job is to be typed into. `position: fixed` anchors to the
+   *layout* viewport, which iOS does not shrink when the keyboard opens — so a
+   popup centred at 417px of an 834px screen has its lower half behind a ~350px
+   keyboard, and the app has no `visualViewport` listener to notice. Anchored near
+   the top instead, a ~170px sheet spans 12-182px and clears any iPad keyboard by
+   construction rather than by measuring one.
+
+   And the fields are 16px, against `.jsp-input`'s 12px. Below 16px Safari on iOS
+   zooms the page in on focus and does not zoom back out on blur — the defect this
+   sheet exists to route around. The 16px lives here, on a sheet nobody is reading
+   the card through, so the card keeps its 13px italic sub line unchanged. */
+.jsp--top { top: calc(12px + var(--sa-t)); transform: translateX(-50%); }
+
+/* No. | Player | Pos, labels over fields. The name takes what the other two do
+   not: a jersey is at most three digits and a position at most two characters, and
+   the name is the one that runs long. */
+.sn-grid {
+  display: grid; grid-template-columns: 3.5em 1fr 4.5em;
+  gap: 3px 6px; align-items: center; width: 100%;
+}
+.sn-grid > .jsp-hint { align-self: end; }
+/* 16px is not a taste decision here — it is the threshold below which iOS Safari
+   zooms. Do not lower it. The family is the card's, so what the scorer types reads
+   the way it will read on the line.
+
+   Qualified with `.jsp-input` rather than left as a bare `.sn-field`, which loses:
+   `.jsp-input`'s 12px is declared ~190 lines further down this file, and at equal
+   specificity the later rule wins. Measured at 12px in the browser before this —
+   the sheet was open, anchored and focused, and still zooming. Two classes beat one
+   wherever the blocks sit, so this cannot come back by a block being moved. */
+.jsp-input.sn-field {
+  font-family: var(--font); font-size: 16px; min-height: 44px;
+  padding: 6px 10px; width: 100%;
+}
+.jsp-input.sn-field--num, .jsp-input.sn-field--pos {
+  font-family: var(--mono); text-align: center; padding: 6px 2px;
+}
+
 /* ---------- The guided builder's sheet (I2) ----------------------------------
 
    The one popup that fills the screen, and it has to. Part C's two budgets are

@@ -2565,7 +2565,11 @@ const ALSO_GUARDED = ['spray-popup', 'pitcher-popup', 'pos-change-popup', 'decis
   /* The paste sheet writes nothing until Apply and has a Cancel, so it belongs
      here rather than on the pending list — but it covers the card and a tap
      behind it must not reach a cell. */
-  'paste-lineup-popup'];
+  'paste-lineup-popup',
+  /* Same shape (F46). The substitution itself is already on the card by the time
+     the name sheet opens — cancelling leaves an unnamed sub, which is what
+     walking away from the cell used to do — so it is guarded, not must-answer. */
+  'sub-name-popup'];
 function backdropGuarded() { return PENDING_ENTRY_POPUPS.concat(ALSO_GUARDED); }
 
 /* The three that cannot simply be dismissed. Two own an entry that is already
@@ -7928,42 +7932,198 @@ function markSub() {
   // that holds the substitute's name is `visibility: collapse` until it *has* a
   // name — so SUB was a press with no toast, no mark and no next step, and the
   // one way in ("Show sub rows", far right of the section bar) is not something
-  // the press points at. One tap should land the caret where the name goes (F7).
-  const nameInp = revealSubRow(team, pIdx);
+  // the press points at. One tap should land the caret where the name goes (F7) —
+  // in a sheet rather than in the cell itself, for the three reasons at
+  // `openSubNameSheet` (F46). The sheet's own title is the feedback, so there is
+  // no toast behind it; the fallback below still needs one.
+  const asked = openSubNameSheet(team, pIdx, 1, 'sub');
   announce('Substitute for ' + rowLabel(team, pIdx) + ' — enter his name.');
-  showPlayNotice(nameInp ? 'Enter the substitute\'s name.'
-                         : 'Substitution recorded — open Show sub rows to name him.');
+  if (!asked) showPlayNotice('Substitution recorded — open Show sub rows to name him.');
 }
 
-/* Open one slot's sub row and put the caret in it.
+/* F46 — name the substitute in a sheet, not in the cell.
 
-   A `visibility: collapse` row refuses focus, so the field cannot be reached
-   until the row is shown — which is the deadlock behind F7. Only the affected
-   slot's row is opened: `.show-subs` opens all eighteen, and that drops the fit
-   from 9 visible batting slots to about 4 at 1194x834.
+   This used to put the caret straight into the sub row's name field, which is the
+   right instinct and the wrong field. Three things about that cell make it
+   unusable on the iPad this app is scored on:
 
-   `row` is which of the slot's rows to open, and it defaults to 1 because SUB
-   always writes row 1. A pinch runner does not: he goes in behind whoever is
-   currently on base, so with a sub already in the slot he lands in row 2, and
-   opening row 1 there would put the caret on the wrong man's name (F24). */
-function revealSubRow(team, pIdx, row) {
+     - It is 13px (`.pos-sub td.player-cell input`), and every text control in
+       the app is under 16px. Safari on iOS zooms the whole page in whenever a
+       field below 16px takes focus, and does not zoom back out on blur. That
+       alone is the "the screen jumps and I cannot see what I am typing" report.
+
+     - A low slot's sub row lands ~623-644px down an 834px screen, and at that
+       moment the grid is already at its scroll end and `--grid-max-h` has left
+       the page with none. So there are ~190px of clearance under the field and
+       no scroll left in either box, while the keyboard wants ~350px.
+
+     - `fit()` budgets against `window.innerHeight`, which iOS does not change
+       when the keyboard opens. The height budget cannot see the keyboard, so it
+       cannot get out of its way.
+
+   A sheet fixes all three at once and costs the card nothing: its fields are
+   16px so nothing zooms, and it is anchored near the top (`.jsp--top`) so it
+   clears any keyboard by construction rather than by measuring one. The card
+   keeps the 13px italic sub line it is supposed to have.
+
+   Nothing is written until Add: the substitution itself is already on the card by
+   the time this opens, which is why the sheet is backdrop-guarded rather than
+   must-answer — cancelling leaves an unnamed sub, exactly as walking away from
+   the cell used to. */
+
+// The shell, built once and refilled — the same shape as `pasteLineupPopup`.
+function subNameSheet() {
+  let popup = document.getElementById('sub-name-popup');
+  if (!popup) {
+    popup = document.createElement('div');
+    popup.id = 'sub-name-popup';
+    popup.className = 'jsp jsp--top';
+    document.body.appendChild(popup);
+  }
+  return popup;
+}
+
+/* `row` is which of the slot's rows is being named, and it defaults to 1 because
+   SUB always writes row 1. A pinch runner does not: he goes in behind whoever is
+   currently on base, so with a sub already in the slot he lands in row 2, and row
+   1 there would be naming the wrong man (F24).
+
+   Returns false when the slot has no such row in the DOM, so the caller can fall
+   back to the toast that points at "Show sub rows". */
+function openSubNameSheet(team, pIdx, row, kind) {
   const slotBase = Math.floor(pIdx / ROWS_PER_POS) * ROWS_PER_POS;
   const r = row || 1;
-  const inp = document.querySelector(
-    `input[data-field="name"][data-team="${team}"][data-p="${slotBase + r}"]`);
-  if (!inp) return null;
-  const tr = inp.closest('tr');
-  if (tr) tr.classList.add('revealed');
-  inp.focus();
-  if (inp.scrollIntoView) inp.scrollIntoView({ block: 'center' });
-  // A SUB pressed by mistake and left empty shouldn't strand an open blank row.
-  // Once a name is typed the `:not(:placeholder-shown)` rule holds the row open
-  // on its own, so dropping the class then costs nothing.
-  inp.addEventListener('blur', function drop() {
-    inp.removeEventListener('blur', drop);
-    if (tr && !inp.value.trim()) tr.classList.remove('revealed');
-  });
-  return inp;
+  const target = slotBase + r;
+  // The row has to exist to be named. It does for every real slot; this is the
+  // guard that keeps a malformed card from opening a sheet that writes nowhere.
+  if (!document.querySelector(
+      `input[data-field="name"][data-team="${team}"][data-p="${target}"]`)) return false;
+
+  const runner = kind === 'pr';
+  const popup = subNameSheet();
+  // On the element rather than in a variable, so a backdrop dismiss cannot
+  // desync them and a second SUB cannot land its name on the first one's row.
+  popup.dataset.team = team;
+  popup.dataset.p = String(target);
+  popup.dataset.kind = runner ? 'pr' : 'sub';
+  popup.innerHTML =
+    '<div class="jsp-title">' + (runner ? 'Pinch runner for ' : 'Substitute for ')
+      + escapeHtml(rowLabel(team, pIdx)) + '</div>'
+    + '<div class="jsp-body">'
+    +   '<div class="sn-grid">'
+    +     '<label class="jsp-hint" for="sn-num">No.</label>'
+    +     '<label class="jsp-hint" for="sn-name">Player</label>'
+    +     '<label class="jsp-hint" for="sn-pos">Pos</label>'
+    /* The caps are the card's own, read off `buildScoringGrid`: 3 on the jersey,
+       none at all on the name — `refitNames` shrinks a long one to fit rather
+       than refusing it. A tighter cap here would silently truncate a name the
+       card would have taken. */
+    +     '<input id="sn-num" class="jsp-input sn-field sn-field--num" type="text" '
+    +       'inputmode="numeric" maxlength="3" autocomplete="off" spellcheck="false">'
+    +     '<input id="sn-name" class="jsp-input sn-field" type="text" '
+    +       'autocomplete="off" spellcheck="false">'
+    +     '<select id="sn-pos" class="jsp-input sn-field sn-field--pos">'
+    +       '<option value=""></option>'
+    +       LINEUP_POS.map(p => '<option value="' + p + '">' + p + '</option>').join('')
+    +     '</select>'
+    +   '</div>'
+    + '</div>'
+    + '<div class="jsp-actions">'
+    +   '<button class="jsp-btn jsp-btn--minor" id="sn-cancel" data-dismiss="cancel">Cancel</button>'
+    +   '<button class="jsp-btn jsp-btn--primary" id="sn-apply">'
+    +     (runner ? 'Add runner' : 'Add substitute') + '</button>'
+    + '</div>';
+
+  document.getElementById('sn-cancel').onclick = closeSubNameSheet;
+  document.getElementById('sn-apply').onclick = applySubName;
+  /* Its own keys. The global handler bails as soon as focus is in an INPUT or a
+     SELECT, so neither of these would fire on their own. Enter is the whole
+     point — a scorer types the name and presses it — and it is safe here because
+     every field is single-line. */
+  popup.onkeydown = function (e) {
+    if (e.key === 'Escape') { e.preventDefault(); closeSubNameSheet(); return; }
+    if (e.key === 'Enter') { e.preventDefault(); applySubName(); }
+  };
+
+  openPopup(popup);
+  setTimeout(focusSubName, 10);
+  return true;
+}
+
+/* The name, not the number: it is the field the press is about, and the one the
+   scorer has in his head.
+
+   Deferred a tick for the same reason the paste sheet defers — `openPopup`
+   focuses the shell so a reader takes the title first, and focusing a child in
+   the same tick would talk over it. Named rather than inline so the suite can
+   reach it: the harness is synchronous, and the inside of a `setTimeout` was the
+   one part of opening this sheet it could not otherwise see. */
+function focusSubName() {
+  const n = document.getElementById('sn-name');
+  if (n) n.focus();
+}
+
+function closeSubNameSheet() {
+  const popup = document.getElementById('sub-name-popup');
+  if (popup) closePopup(popup);
+}
+
+/* Write what the sheet holds onto the sub row it was opened for.
+
+   Straight to the controls and to state together, the way `writeLineupField`
+   already does for a pasted lineup — no synthetic events. The position goes
+   through `posSelectChanged` afterwards rather than `writeLineupField`, because
+   a position landing on a row is what the DH rules are about and a hand change
+   to that same select is the path they already watch. */
+function applySubName() {
+  const popup = document.getElementById('sub-name-popup');
+  if (!popup) return;
+  const team = popup.dataset.team;
+  const p = parseInt(popup.dataset.p);
+  if (!team || Number.isNaN(p)) return;
+
+  const num = (document.getElementById('sn-num').value || '').trim();
+  const name = (document.getElementById('sn-name').value || '').trim();
+  const pos = document.getElementById('sn-pos').value || '';
+
+  /* A name is what the sheet is for, and the row stays `visibility: collapse`
+     without one — so a jersey number on its own would be written somewhere the
+     scorer cannot see. The move itself is already on the card either way, which
+     is what Cancel is for, and the message says which move so it is not calling
+     a pinch runner a substitution. */
+  if (!name) {
+    showPlayReject('Enter a name — or Cancel, the '
+      + (popup.dataset.kind === 'pr' ? 'pinch runner' : 'substitution') + ' is already recorded.');
+    const n = document.getElementById('sn-name');
+    if (n) n.focus();
+    return;
+  }
+
+  /* `.slice`, not just the field's `maxlength`: `input.value = x` does not honour
+     maxlength — only typing does — and `writeLineupField` sets it from script.
+     Same belt-and-braces the paste parser keeps for the same reason. */
+  if (num) writeLineupField(team, p, 'num', num.slice(0, 3));
+  writeLineupField(team, p, 'name', name);
+  if (pos) {
+    const sel = document.querySelector(`select[data-field="pos"][data-team="${team}"][data-p="${p}"]`);
+    if (sel) { sel.value = pos; posSelectChanged(sel); }
+    else writeLineupField(team, p, 'pos', pos);
+  }
+
+  /* The name arrived without a keystroke in the cell, so it never went through
+     the per-keystroke fit and a long one would overflow the Player column.
+     `force`, because it changed all at once. */
+  refitNames(true);
+  // `collectState` inside it re-scrapes every input, so this both persists the
+  // name now and reconciles state against the DOM — the dual write checks itself.
+  flushSave();
+  updateSituation();
+
+  const who = (num ? '#' + num + ' ' : '') + name;
+  const said = (popup.dataset.kind === 'pr' ? 'Pinch runner ' : 'Substitute ') + who + ' is on the card.';
+  showPlayNotice(said);
+  announce(said);
+  closeSubNameSheet();
 }
 
 /* PR — a pinch runner, which SUB cannot express (H2, D4).
@@ -8012,10 +8172,9 @@ function markPinchRunner() {
   // holding the runner's name is `visibility: collapse` until it has one, so PR
   // was a press with no toast, no mark and no next step — and the only feedback
   // it did give was an announcement naming a row that is still blank (F24).
-  const nameInp = revealSubRow(team, pIdx, runner);
+  const asked = openSubNameSheet(team, pIdx, runner, 'pr');
   announce(rowLabel(team, pIdx + runner) + ' pinch-runs for ' + rowLabel(team, pIdx + subRowOf(ab)));
-  showPlayNotice(nameInp ? 'Enter the pinch runner\'s name.'
-                         : 'Pinch runner recorded — open Show sub rows to name him.');
+  if (!asked) showPlayNotice('Pinch runner recorded — open Show sub rows to name him.');
   autoSave();
 }
 

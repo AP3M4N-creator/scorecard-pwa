@@ -151,12 +151,15 @@
     pendingTransitionTimer = null;
     if (selectedCell) selectedCell.classList.remove('selected');
     selectedCell = null;
-    // SUB puts the caret in the substitute's name field (F7), and the keyboard
-    // handler ignores every hotkey while an input has focus — correct in the app,
-    // where the scorer is typing a name, but it must not cross into the next case.
-    // The row SUB opened is shared DOM too, so it comes back closed.
+    // SUB puts the caret in the substitute's name field (F7 — the sheet's field
+    // since F46), and the keyboard handler ignores every hotkey while an input has
+    // focus — correct in the app, where the scorer is typing a name, but it must
+    // not cross into the next case. The sheet and any row SUB opened are shared
+    // DOM too, so they come back closed.
     if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
     document.querySelectorAll('tr.pos-sub.revealed').forEach(tr => tr.classList.remove('revealed'));
+    const snSheet = document.getElementById('sub-name-popup');
+    if (snSheet) snSheet.style.display = 'none';
     // The regulation-length select is a header field the grid never rebuilds, so a
     // case that shortened the game has to hand back a nine-inning card.
     const innSel = document.getElementById('info-innings');
@@ -4064,45 +4067,129 @@
      it, and a collapsed row refuses focus — so the field the scorer needs could not
      be reached, and nothing pointed at "Show sub rows" as the way in. SUB was a
      press with no toast, no mark and no next step. */
-  test('SUB opens the row it just created and puts the caret in it', () => {
+  /* F46 moved the field the caret lands in. It used to be the cell itself, which
+     is 13px — and below 16px Safari on iOS zooms the page in on focus and does not
+     zoom back out, so on the iPad this app is scored on the press that was supposed
+     to point at the name field was the press that broke the screen. The sheet is
+     what the caret lands in now; the cell keeps its 13px italic. */
+  test('SUB opens the name sheet, pointed at the row it just created', () => {
     sel('visiting', 0, 1);
     markSub();
-    const inp = document.querySelector('input[data-field="name"][data-team="visiting"][data-p="1"]');
-    ok('the sub row is open', inp.closest('tr').classList.contains('revealed'));
-    ok('with the caret in the name field', document.activeElement === inp);
-    ok('and the press said so', visible('play-reject'));
-    eq('as a notice, not a refusal',
-      document.getElementById('play-reject').dataset.tone, 'notice');
+    ok('the sheet is open', visible('sub-name-popup'));
+    const popup = document.getElementById('sub-name-popup');
+    eq('aimed at the slot\'s first sub row', popup.dataset.p, '1');
+    eq('on the right side of the card', popup.dataset.team, 'visiting');
+    eq('and it knows it is a substitution', popup.dataset.kind, 'sub');
+    ok('the title names the man coming out', /Substitute for/.test(popup.textContent));
+    ok('and there is a name field to type in', !!document.getElementById('sn-name'));
   });
 
-  // Only the one slot. `show-subs` opens all eighteen, which costs about half the
-  // visible batting slots on an iPad — the reason this is per-row.
-  test('SUB does not open every other slot\'s sub row', () => {
+  // The whole point of the sheet: the caret goes somewhere 16px. Reached through
+  // `focusSubName` because the app defers it a tick so a reader takes the title
+  // first, and this harness is synchronous.
+  test('the caret lands in the sheet, never in the 13px cell (F46)', () => {
     sel('visiting', 0, 1);
     markSub();
-    const opened = document.querySelectorAll('tr.pos-sub.revealed');
-    eq('one row opened', opened.length, 1);
+    focusSubName();
+    eq('the caret is in the sheet\'s name field',
+      document.activeElement, document.getElementById('sn-name'));
+    const cell = document.querySelector('input[data-field="name"][data-team="visiting"][data-p="1"]');
+    ok('and not in the card\'s own name cell', document.activeElement !== cell);
+  });
+
+  // Nothing on the card opens until a name is applied. `show-subs` opens all
+  // eighteen, which costs about half the visible batting slots on an iPad — the
+  // reason this was ever per-row.
+  test('SUB opens no sub row on the card until the sheet is answered', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    eq('no row was revealed', document.querySelectorAll('tr.pos-sub.revealed').length, 0);
     ok('and the wrap was not switched to show-subs',
       !document.querySelector('.grid-wrap.show-subs'));
   });
 
-  // A SUB pressed by mistake should not strand an open blank row on the card.
-  test('a SUB left without a name closes its row again', () => {
+  // A SUB pressed by mistake should not strand anything on the card. The
+  // substitution itself stays — it did happen, and undo is what takes it back.
+  test('cancelling the sheet leaves the card alone', () => {
     sel('visiting', 0, 1);
     markSub();
+    document.getElementById('sn-cancel').onclick();
+    ok('the sheet closed', !visible('sub-name-popup'));
+    eq('no row was left open', document.querySelectorAll('tr.pos-sub.revealed').length, 0);
     const inp = document.querySelector('input[data-field="name"][data-team="visiting"][data-p="1"]');
-    inp.blur();
-    ok('the empty row closed', !inp.closest('tr').classList.contains('revealed'));
+    eq('and no name was written', inp.value, '');
+    eq('while the substitution itself stands', ab('visiting', 0, 1).subChange, 1);
   });
 
-  test('a SUB that was named keeps its row open', () => {
+  test('a name applied in the sheet lands on the sub row', () => {
     lineupDirty = true;
     sel('visiting', 0, 1);
     markSub();
+    document.getElementById('sn-num').value = '24';
+    document.getElementById('sn-name').value = 'Carter';
+    document.getElementById('sn-pos').value = 'LF';
+    applySubName();
+    ok('the sheet closed behind it', !visible('sub-name-popup'));
     const inp = document.querySelector('input[data-field="name"][data-team="visiting"][data-p="1"]');
-    inp.value = 'Carter';
-    inp.blur();
-    ok('the named row stays open', inp.closest('tr').classList.contains('revealed'));
+    eq('the name is on the card', inp.value, 'Carter');
+    eq('and in state', gameState.teams.visiting.players[1].name, 'Carter');
+    eq('the jersey came with it', gameState.teams.visiting.players[1].num, '24');
+    eq('and the position', gameState.teams.visiting.players[1].pos, 'LF');
+  });
+
+  /* Enter and Escape are the sheet's own, because the global key handler bails as
+     soon as focus is in an INPUT or a SELECT — which is every control in here. A
+     scorer types the name and presses return; that has to be the whole gesture. */
+  test('Enter applies the sheet, Escape abandons it (F46)', () => {
+    const key = k => document.getElementById('sub-name-popup')
+      .dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+
+    sel('visiting', 0, 1);
+    markSub();
+    document.getElementById('sn-name').value = 'Ruiz';
+    key('Enter');
+    ok('Enter closed the sheet', !visible('sub-name-popup'));
+    eq('and the name is on the card', gameState.teams.visiting.players[1].name, 'Ruiz');
+
+    sel('visiting', 3, 1);
+    markSub();
+    document.getElementById('sn-name').value = 'Nobody';
+    key('Escape');
+    ok('Escape closed it too', !visible('sub-name-popup'));
+    eq('and wrote nothing', gameState.teams.visiting.players[4].name, '');
+    eq('while the substitution itself stands', ab('visiting', 3, 1).subChange, 1);
+  });
+
+  // The sheet's caps are the card's caps. A tighter one here would silently
+  // truncate a name the card would have taken, and `maxlength` cannot be the whole
+  // answer for the jersey because `writeLineupField` sets `.value` from script.
+  test('the sheet does not cap what the card would accept (F46)', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    eq('the jersey takes the card\'s three digits',
+      document.getElementById('sn-num').getAttribute('maxlength'), '3');
+    ok('and the name is uncapped, as it is on the card',
+      !document.getElementById('sn-name').hasAttribute('maxlength'));
+    const long = 'Papadopoulos-Villanueva';
+    document.getElementById('sn-name').value = long;
+    document.getElementById('sn-num').value = '1234';   // past the cap, set from script
+    applySubName();
+    eq('the long name landed whole', gameState.teams.visiting.players[1].name, long);
+    eq('and the jersey was cut to what the card holds',
+      gameState.teams.visiting.players[1].num, '123');
+  });
+
+  // A jersey number on a row with no name is written where it cannot be seen: the
+  // row stays `visibility: collapse` without a name in it.
+  test('the sheet refuses to apply without a name', () => {
+    sel('visiting', 0, 1);
+    markSub();
+    document.getElementById('sn-num').value = '24';
+    applySubName();
+    ok('the sheet is still open', visible('sub-name-popup'));
+    ok('and said why', visible('play-reject'));
+    eq('as a refusal', document.getElementById('play-reject').dataset.tone, 'reject');
+    eq('nothing was written', gameState.teams.visiting.players[1].num, '');
   });
 
   test('taking a sub out who never batted is an undo, not a re-entry', () => {
@@ -6598,12 +6685,14 @@
     sel('visiting', 0, 0);
     markPinchRunner();
     eq('the runner went into row 1', ab('visiting', 0, 0).prRow, 1);
-    const inp = document.querySelector('input[data-field="name"][data-team="visiting"][data-p="1"]');
-    ok('the runner\'s row is open', inp.closest('tr').classList.contains('revealed'));
-    ok('with the caret in the name field', document.activeElement === inp);
-    ok('and the press said so', visible('play-reject'));
-    eq('as a notice, not a refusal',
-      document.getElementById('play-reject').dataset.tone, 'notice');
+    ok('the sheet is open', visible('sub-name-popup'));
+    const popup = document.getElementById('sub-name-popup');
+    eq('aimed at row 1', popup.dataset.p, '1');
+    eq('and it knows it is a runner, not a batter', popup.dataset.kind, 'pr');
+    ok('the title says so', /Pinch runner for/.test(popup.textContent));
+    focusSubName();
+    eq('with the caret in the sheet\'s 16px field',
+      document.activeElement, document.getElementById('sn-name'));
   });
 
   // `revealSubRow` opens `slotBase + 1` because that is the only row SUB ever
@@ -6617,9 +6706,13 @@
     sel('visiting', 0, 0);
     markPinchRunner();
     eq('the runner went into row 2', ab('visiting', 0, 0).prRow, 2);
-    const row2 = document.querySelector('input[data-field="name"][data-team="visiting"][data-p="2"]');
-    ok('row 2 is the one that opened', row2.closest('tr').classList.contains('revealed'));
-    ok('and the caret is in it', document.activeElement === row2);
+    eq('row 2 is the one the sheet aims at',
+      document.getElementById('sub-name-popup').dataset.p, '2');
+    document.getElementById('sn-name').value = 'Gomez';
+    applySubName();
+    eq('and that is where the name went',
+      gameState.teams.visiting.players[2].name, 'Gomez');
+    eq('leaving the man he ran for alone', gameState.teams.visiting.players[1].name, '');
   });
 
   // The tail is additive: it must not change what PR records.
@@ -6631,6 +6724,7 @@
       document.getElementById('play-reject').dataset.tone, 'reject');
     eq('and nothing was marked', ab('visiting', 0, 0).prRow, 0);
     ok('and no row was opened', !document.querySelector('tr.pos-sub.revealed'));
+    ok('nor any sheet to name one', !visible('sub-name-popup'));
   });
 
   /* ---- F36: a fresh card opens on the side that bats first ------------ */

@@ -357,6 +357,49 @@ function stylesheetChecks() {
        height, and the browser check that found it is not repeatable here. All this
        asserts is that the declaration is still present and still derived from
        --cell-h — a fixed px value would stop tracking the fit. */
+    /* F46 — the sheet exists so the scorer never focuses a sub-16px field on an
+       iPad, because below 16px Safari zooms the page in on focus and does not zoom
+       back out. If this ever drops under 16 the sheet is pointless and the original
+       defect is back, silently: nothing in a jsdom DOM or a desktop browser can
+       see it, which is exactly how it shipped the first time. */
+    check('the name sheet\'s fields stay above the iOS zoom threshold', () => {
+      /* Which rule *wins*, not merely which rule exists. The first cut of this
+         asserted a bare `.sn-field { font-size: 16px }` was in the file and passed
+         while the browser measured 12px: `.jsp-input`'s 12px is declared later at
+         equal specificity and took it. So resolve the cascade the way the browser
+         does — more classes wins, and at a tie the later declaration wins. */
+      const decls = [];
+      const rule = /([^{}]+)\{([^}]*)\}/g;
+      let m;
+      while ((m = rule.exec(css))) {
+        const sels = m[1].split(',').map(x => x.trim());
+        const size = /font-size:\s*([\d.]+)px/.exec(m[2]);
+        if (!size) continue;
+        // Only selectors that this element actually matches: <input class="jsp-input sn-field">
+        for (const sel of sels) {
+          const classes = (sel.match(/\.[A-Za-z_-][\w-]*/g) || []).map(c => c.slice(1));
+          if (!classes.length || !classes.every(c => c === 'jsp-input' || c === 'sn-field')) continue;
+          if (/[>+~\s]/.test(sel.replace(/^\s+|\s+$/g, '')) || /[:\[]/.test(sel)) continue;
+          decls.push({ sel, px: parseFloat(size[1]), n: classes.length, at: m.index });
+        }
+      }
+      if (!decls.length) return 'nothing sizes the sheet\'s name field at all';
+      decls.sort((a, b) => a.n - b.n || a.at - b.at);
+      const won = decls[decls.length - 1];
+      return won.px >= 16 ? null
+        : `\`${won.sel}\` wins at ${won.px}px — iOS Safari zooms the page on focus below 16px`
+          + ` (candidates: ${decls.map(d => d.sel + ' ' + d.px + 'px').join(', ')})`;
+    });
+
+    // And the card is deliberately *not* raised with it: the sub line reads as
+    // subordinate to the starter above it, which is what the 13px italic buys.
+    check('the card keeps its 13px sub line, which is why the sheet exists', () => {
+      const m = css.match(/\.pos-sub td\.player-cell input\s*\{[^}]*?font-size:\s*([\d.]+)px/);
+      if (!m) return 'the sub row\'s name field no longer declares a size of its own';
+      return parseFloat(m[1]) < 16 ? null
+        : 'the card\'s sub line is now >=16px — if that was deliberate the sheet may be redundant';
+    });
+
     check('a shown sub row still declares a height', () => {
       const m = css.match(/\.grid-wrap\.show-subs \.scoring-grid tr\.pos-sub\s*\{[^}]*?height:\s*([^;]+);/);
       if (!m) return 'nothing gives a shown sub row a height — with absolute-positioned controls it collapses to its borders';
