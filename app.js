@@ -3068,8 +3068,8 @@ function applyPlay(play, target) {
     while (getPitchCount(ab.pitches).strikes < 3) ab.pitches.push('S');
   } else if (play === 'BB') {
     // A walk tapped on a 3-ball count stayed at three pitches. Not IBB: since 2017 an
-    // intentional walk is awarded without a pitch thrown, so padding it to four balls
-    // would invent them.
+    // intentional walk is awarded without a pitch thrown, so it gets no pitch at all —
+    // neither four balls nor the one 'B' it used to invent.
     while (getPitchCount(ab.pitches).balls < 4) ab.pitches.push('B');
   } else if (play !== 'IBB' && play !== 'HBP') {
     // The result pitch: ball was put in play (hit/out).
@@ -3078,8 +3078,8 @@ function applyPlay(play, target) {
       if (isHitPlay(play) || isErrorPlay(play) || play === 'HR') ab.pitches.push('H');
       else ab.pitches.push('X');
     }
-  } else if (ab.pitches.length === 0) {
-    ab.pitches.push('B'); // an IBB/HBP always involves at least 1 pitch
+  } else if (play === 'HBP' && ab.pitches.length === 0) {
+    ab.pitches.push('B'); // the pitch that hit him
   }
   // Track which pitcher the batter faced
   ab.pitcher = getEffectivePitcher(team, innIdx);

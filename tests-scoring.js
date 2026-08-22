@@ -559,11 +559,26 @@
     eq('count', JSON.stringify(getPitchCount(ab('visiting', 0, 0).pitches)), '{"balls":4,"strikes":0}');
   });
 
-  // An intentional walk is awarded without a pitch under the current rule, so padding
-  // one to four balls would invent them.
-  test('an intentional walk is not padded to four balls', () => {
+  // An intentional walk is awarded without a pitch under the current rule, so neither
+  // padding it to four balls nor giving it a single ball is right: it gets none.
+  test('an intentional walk throws no pitch at all', () => {
     sel('visiting', 0, 0);
     play('IBB');
+    eq('pitches', ab('visiting', 0, 0).pitches.join(''), '');
+  });
+
+  // Called mid-count, the IBB leaves the pitches already thrown alone.
+  test('an intentional walk keeps the pitches already thrown', () => {
+    sel('visiting', 0, 0);
+    pitch('B'); pitch('S');
+    play('IBB');
+    eq('pitches', ab('visiting', 0, 0).pitches.join(''), 'BS');
+  });
+
+  // A hit batsman did take a pitch, so that one stays.
+  test('a hit by pitch still records the pitch that hit him', () => {
+    sel('visiting', 0, 0);
+    play('HBP');
     eq('pitches', ab('visiting', 0, 0).pitches.join(''), 'B');
   });
 
