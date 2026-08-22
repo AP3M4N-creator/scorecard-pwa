@@ -1014,6 +1014,30 @@ details.info-details > summary:hover { color: var(--navy); }
 .diamond-svg .seg.reached ~ .home-dot { fill: var(--text); }
 .diamond-svg.scored .base-line { stroke: var(--text); stroke-width: 3.5; }
 .diamond-svg.scored .diamond-fill { fill: var(--text); opacity: .88; }
+
+/* The extra-innings runner, drawn as what he is: put on second, not batted
+   there. State has to mark the first leg — it is how `recomputeInning` finds a
+   live runner at all — so the drawing takes it back, and the one pale leg
+   between home and first is the whole mark. Nothing else on the cell changes,
+   which is why this costs the card no height: he sits in a box that was going
+   to be blank.
+
+   Stated after `.scored` on purpose. A placed runner who comes round to score
+   fills his diamond like anybody else, and the fill would otherwise paint over
+   the very leg that says how he got on. */
+.diamond-svg.xir .seg[data-seg="0"] .base-line,
+.diamond-svg.xir.scored .seg[data-seg="0"] .base-line {
+  stroke: var(--border-light); stroke-width: 1.5;
+}
+.diamond-svg.xir:not(.scored) .home-dot { fill: #b9b5b0; }
+/* Hidden everywhere but on a placed runner — see `diamondSVG`. Pale like an
+   unrun leg while he is on base; the card's own ground once he has scored and
+   the navy fill would otherwise have swallowed it. */
+.diamond-svg .xir-leg { display: none; }
+.diamond-svg.xir .xir-leg {
+  display: block; stroke: var(--border-light); stroke-width: 1.5; stroke-linecap: round;
+}
+.diamond-svg.xir.scored .xir-leg { stroke: var(--card); stroke-width: 2.5; }
 .diamond-svg .diamond-fill { fill: transparent; pointer-events: none; }
 .diamond-svg .out-on-path { stroke: var(--text); stroke-width: 3.5; stroke-linecap: butt; }
 .diamond-svg .out-on-cross { stroke: var(--text); stroke-width: 2.5; stroke-linecap: butt; }
@@ -1367,6 +1391,16 @@ details.info-details > summary:hover { color: var(--navy); }
   font-weight: 700;
   border-color: var(--safe); background: var(--safe); color: var(--gold);
 }
+/* Not a control. The extras runner's run is unearned by rule, so the review
+   lists it — the sheet has to account for every run on the line — and states it
+   rather than offering it. Flat, no hover, no press: a chip that can only ever
+   be wrong should not look pressable. */
+.jsp-chip--fixed {
+  display: inline-flex; align-items: center;
+  cursor: default; font-weight: 700;
+  border-style: dashed; background: transparent;
+}
+.jsp-chip--fixed:hover { background: transparent; }
 .jsp-chip--out { color: var(--accent); }
 .jsp-chip--out[aria-pressed="true"] {
   border-color: var(--accent); background: var(--accent); color: var(--gold);
@@ -2309,6 +2343,13 @@ details.info-details > summary::before { color: var(--rb-red); }
 .diamond-svg .seg.reached ~ .home-dot { fill: var(--rb-blue); }
 .diamond-svg.scored .base-line { stroke: var(--rb-blue); }
 .diamond-svg.scored .diamond-fill { fill: var(--rb-blue); opacity: .9; }
+/* The placed runner's unbatted first leg, in the re-skin's own pale navy. Same
+   two selectors as the base block and for the same reason — see there. */
+.diamond-svg.xir .seg[data-seg="0"] .base-line,
+.diamond-svg.xir.scored .seg[data-seg="0"] .base-line { stroke: rgba(0,50,120,0.25); }
+.diamond-svg.xir:not(.scored) .home-dot { fill: rgba(0,50,120,0.25); }
+.diamond-svg.xir .xir-leg { stroke: rgba(0,50,120,0.25); }
+.diamond-svg.xir.scored .xir-leg { stroke: var(--rb-white); }
 .diamond-svg .out-on-path, .diamond-svg .out-on-cross { stroke: var(--rb-blue); }
 .diamond-svg .adv-label { fill: var(--rb-blue); }
 /* Was `color: var(--rb-white)`, and that was only ever right on the home run. The

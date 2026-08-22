@@ -192,6 +192,38 @@ function regulationInnings() {
    comparisons actually want. */
 function lastRegulationIdx() { return regulationInnings() - 1; }
 
+/* The extra-innings runner, and the code his cell wears.
+
+   Since 2020 — permanently since 2023 — every half-inning after regulation in a
+   regular-season MLB game starts with a runner already on second: the man in the
+   batting order immediately before that half's leadoff hitter, or a pinch runner
+   for him. `XIR` is the notation official scorers write in the box he would
+   otherwise have batted in, and writing it there is what lets the rest of the
+   card carry him: he is a live plate appearance to `recomputeInning`, so the
+   bases, the run, the LOB and the linescore all follow without a second model of
+   what a runner is.
+
+   Two things about him are not a batter's, and both are handled where they are
+   counted rather than here: he is no plate appearance (`tallyAtBats`,
+   `updatePitcherStats`), and his run is unearned (`reachedOnError`, which the ER
+   column already gates on). The rule puts him on "as though he reached on a
+   fielding error, with no error charged", which is exactly that flag. */
+const XIR_PLAY = 'XIR';
+
+function isAutoRunnerAB(ab) { return !!ab && ab.play === XIR_PLAY; }
+
+/* Whether this card places him at all. On unless the scorer says otherwise: the
+   postseason plays extras straight, and so do plenty of leagues. Absent from a
+   save written before the rule existed, which is why the test is `!== false`
+   rather than a truthiness test — an old card is an MLB card. */
+function autoRunnerEnabled() {
+  return !!(gameState && gameState.rules) && gameState.rules.autoRunner !== false;
+}
+
+/* Is this column an extra inning — one past regulation, where the runner
+   belongs? Real inning, not column: a bat-around column is still its own inning. */
+function isExtraInning(realInn) { return realInn > lastRegulationIdx(); }
+
 /* How many inning columns the card is showing. Falls back to regulation rather
    than to a literal 9, so a 7-inning game with no stored value doesn't briefly
    claim nine columns. */
@@ -391,7 +423,7 @@ function createEmptyState() {
     // `allowReentry`: OBR 5.10(d) says a replaced player is out of the game;
     // youth and some rec leagues let a starter back in. Off by default, and the
     // re-entry prompt is where a scorer turns it on for the game in hand.
-    rules: { allowReentry: false, regulationInnings: DEFAULT_REGULATION },
+    rules: { allowReentry: false, regulationInnings: DEFAULT_REGULATION, autoRunner: true },
     // Scorer decisions the card can't re-derive: a starter coming back in, and
     // the inning a side lost its DH. Logs, like `defChanges` — recorded when the
     // decision is made and not pruned when a cell is later cleared.
@@ -446,6 +478,12 @@ function updateColumnHeaders(team) {
   });
 }
 
+/* `.xir-leg` is the home-to-first path drawn a second time, after the fill.
+   The `.seg` lines are painted *under* `.diamond-fill`, so suppressing seg 0 is
+   only visible while the placed runner is still standing on second — the moment
+   he scores, the filled diamond covers the very mark that says he was placed
+   there rather than batted there. This one is on top of the fill and cuts back
+   through it. Inert on every other cell: nothing shows it but `.xir`. */
 function diamondSVG(team, playerIdx, innIdx) {
   const id = `d-${team}-${playerIdx}-${innIdx}`;
   return `<svg viewBox="0 0 60 60" class="diamond-svg" id="${id}">
@@ -466,6 +504,7 @@ function diamondSVG(team, playerIdx, innIdx) {
     <g id="oob-${id}-1" display="none"><line class="out-on-path" x1="52" y1="30" x2="38" y2="16"/><line class="out-on-cross" x1="42" y1="12" x2="34" y2="20"/></g>
     <g id="oob-${id}-2" display="none"><line class="out-on-path" x1="30" y1="8" x2="16" y2="22"/><line class="out-on-cross" x1="12" y1="18" x2="20" y2="26"/></g>
     <g id="oob-${id}-3" display="none"><line class="out-on-path" x1="8" y1="30" x2="22" y2="44"/><line class="out-on-cross" x1="18" y1="48" x2="26" y2="40"/></g>
+    <line class="xir-leg" x1="30" y1="52" x2="52" y2="30"/>
     <text class="ue-mark" id="ue-${id}" display="none" x="30" y="31" text-anchor="middle" dominant-baseline="middle" font-size="9" font-weight="800" font-family="var(--mono)" fill="var(--accent)">UE</text>
   </svg>`;
 }
@@ -1219,6 +1258,10 @@ function renderDiamond(team, pIdx, innIdx) {
   if (!svg) return;
   svg.querySelectorAll('.seg').forEach((seg, i) => seg.classList.toggle('reached', ab.bases[i]));
   svg.classList.toggle('scored', ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null);
+  // He was put on second, not batted there. State says he passed first because
+  // that is how `recomputeInning` finds a live runner at all; the drawing says he
+  // did not, and the empty home-to-first leg is the whole tell.
+  svg.classList.toggle('xir', isAutoRunnerAB(ab));
   // Advancement reason labels
   const reasons = ab.advReason || ['','','',''];
   for (let i = 0; i < 4; i++) {
@@ -1346,6 +1389,15 @@ function readCellInWords(team, pIdx, col) {
   if (!o) return ['Nothing recorded here yet.'];
   const lines = [playSentence(o.play)];
 
+  // The one cell on the card that is not a plate appearance, and the readout has
+  // to say so — otherwise a beginner reads a runner on second and goes looking
+  // for the hit that put him there.
+  if (o.play === XIR_PLAY) {
+    lines.push('Extra innings start with a runner on second: the batter before the'
+      + ' leadoff hitter. He was placed there, so it is no time at bat, and if he'
+      + ' scores the run is unearned.');
+  }
+
   // Where he ended, but only when the play's own name has not already said —
   // the same test `describePlayInWords` applies, for the same reason.
   const implied = IMPLIED_BATTER_BASE[o.play];
@@ -1441,7 +1493,7 @@ const SENTENCE_BASES = ['1st', '2nd', '3rd', 'home'];
 // Which base the play's own name already puts the batter on. Anything not listed
 // leaves it an open question — an error, a fielder's choice, a dropped third
 // strike — and those are the ones the sentence has to answer out loud.
-const IMPLIED_BATTER_BASE = { '1B': 0, '2B': 1, '3B': 2, 'BB': 0, 'IBB': 0, 'HBP': 0, 'CI': 0 };
+const IMPLIED_BATTER_BASE = { '1B': 0, '2B': 1, '3B': 2, 'BB': 0, 'IBB': 0, 'HBP': 0, 'CI': 0, 'XIR': 1 };
 
 // The fielders a code carries: "6-3" → "6-3", "F8" → "8", "E6" → "6",
 // "DP 6-4-3" → "6-4-3". The codes that are *only* fielders and nothing else —
@@ -2186,7 +2238,8 @@ const PLAY_TITLE = {
   'GO': 'Ground Out', 'FO': 'Fly Out', 'LO': 'Line Out', 'PO': 'Pop Out',
   'SF': 'Sacrifice Fly', 'SH': 'Sacrifice Bunt', 'SAC': 'Sacrifice',
   'IF': 'Infield Fly', 'DP': 'Double Play', 'TP': 'Triple Play',
-  'FC': "Fielder's Choice"
+  'FC': "Fielder's Choice",
+  'XIR': 'Extra-Innings Runner'
 };
 
 function playTitle(play) {
@@ -4058,7 +4111,7 @@ const CONTROL_RULES = [
 // entry control wears the same reason (INNING_OVER).
 const ENTRY_ACTS = ['applyPlay', 'promptGroundout', 'promptPositionPlay', 'promptErrorPlay',
                     'applyRunnerEvent', 'promptSBBase', 'promptCSBase', 'promptPickoff',
-                    'moveRunner', 'addPitch', 'promptGuidedPlay'];
+                    'moveRunner', 'addPitch', 'promptGuidedPlay', 'promptAutoRunnerHere'];
 
 /* Why this control cannot do anything right now, or '' if it can. Asked of the
    same state the press itself would ask — `inn.bases`, `inn.outs` — so a dimmed
@@ -4073,6 +4126,11 @@ function controlUnavailableReason(btn) {
   if (!inn) return '';
 
   if (inn.outs >= 3 && ENTRY_ACTS.indexOf(act) >= 0) return INNING_OVER;
+
+  // Not a runner rule — a calendar one. The extras runner has nowhere to stand
+  // in a regulation inning, and the beginner meets this button in the 3rd long
+  // before he meets the 10th.
+  if (act === 'promptAutoRunnerHere' && !isExtraInning(getRealInning(team, innIdx))) return NOT_EXTRAS;
 
   const empty = inn.bases.every(b => b === null);
   if (empty) {
@@ -4758,6 +4816,8 @@ function switchToNextHalf(team, innIdx) {
   if (nextCol < 0) { showPlayReject(CARD_FULL); return; }
   switchTab(nextTeam);
   selectNextBatterForInning(nextTeam, nextCol);
+  // Extras: somebody is on second before a pitch is thrown.
+  maybeOfferAutoRunner(nextTeam, nextCol);
 }
 
 // The next inning leads off with the batter after the last completed plate
@@ -4816,6 +4876,191 @@ function selectNextBatterForInning(team, colIdx) {
   // No stored leadoff — start from position 1
   const cell = document.querySelector(`.at-bat-cell[data-team="${team}"][data-p="0"][data-inn="${colIdx}"]`);
   if (cell) { selectCell(cell); return; }
+}
+
+/* --------------------------------------------- the extras runner ------
+
+   Who he is. The rule names him as the batter immediately before the half's
+   leadoff hitter, and `markNextInningLeadoff` filed that leadoff under this
+   column a moment ago — so he is one spot back, wrapped round the order. A card
+   with nothing filed (opened straight into extras by hand, or imported) falls
+   back to the bottom of the order, which is what precedes a leadoff of spot 1.
+
+   The answer is the *slot's* first row, the index every at-bat is stored under.
+   Which man in the slot is out there is `subRowOf`'s business and already
+   travels with the cell. */
+function autoRunnerSlotFor(team, colIdx) {
+  const filed = gameState.nextLeadoff && gameState.nextLeadoff[team]
+    ? gameState.nextLeadoff[team][colIdx] : undefined;
+  const leadoffPos = filed === undefined ? 0 : Math.floor(filed / ROWS_PER_POS);
+  return ((leadoffPos - 1 + POSITIONS) % POSITIONS) * ROWS_PER_POS;
+}
+
+// Is he already out there? Asked of the real inning, not the column: a half that
+// bats around spans several and he is only ever placed in the first.
+function inningHasAutoRunner(team, realInn) {
+  const players = gameState.teams[team].players;
+  for (const col of getColumnsForInning(team, realInn)) {
+    for (const player of players) if (isAutoRunnerAB(player.atBats[col])) return true;
+  }
+  return false;
+}
+
+/* Put him on second. Everything that makes him a runner rather than a batter is
+   in these few lines and nowhere else:
+
+   `bases` [1st, 2nd] is what `recomputeInning` reads to find a live runner and
+   work out which bag he is standing on — it wants the first leg set to count him
+   at all, so state says he passed first and the drawing does not (`.xir`).
+
+   `reachedOnError` is the rule itself: he is placed "as though he reached on a
+   fielding error, with no error charged", so the run he scores is the pitcher's
+   to allow and not his to earn. The ER column already gates on this flag.
+
+   `pitcher` is whoever is on the mound as the half opens, which is who owes the
+   run if it comes in. A reliever who arrives later inherits him. */
+function placeAutoRunner(team, colIdx, pIdx) {
+  const players = gameState.teams[team].players;
+  const ab = players[pIdx] && players[pIdx].atBats[colIdx];
+  if (!ab) return false;
+  if (ab.play) { showPlayReject(rowLabel(team, pIdx) + ' already has a play in this inning.'); return false; }
+  if (getInnState(team, colIdx).outs >= 3) { showPlayReject(INNING_OVER); return false; }
+
+  pushUndo(team, pIdx, colIdx);
+  ab.play = XIR_PLAY;
+  ab.bases = [true, true, false, false];
+  ab.advReason = ['', '', '', ''];
+  ab.outOnBase = null;
+  ab.out = 0; ab.outsRecorded = 0; ab.rbi = 0; ab.hitLoc = null;
+  ab.reachedOnError = true;
+  ab.pitcher = getEffectivePitcher(team, colIdx);
+  // He is placed before anybody bats, so he sorts ahead of every play in the
+  // half — which is what the pitcher-decision timeline needs him to do.
+  gameState.playSeq = (gameState.playSeq || 0) + 1;
+  ab.seq = gameState.playSeq;
+
+  renderDiamond(team, pIdx, colIdx);
+  renderPlayText(team, pIdx, colIdx);
+  renderOut(team, pIdx, colIdx);
+  recomputeInning(team, getRealInning(team, colIdx));
+  updatePlayerStats(team);
+  updatePitcherStats(team);
+  updateSituation();
+  noteCardChanged();
+  autoSave();
+  announce(rowLabel(team, pIdx + subRowOf(ab)) + ' starts the inning on second base.');
+  return true;
+}
+
+/* The offer, at the top of every extra half-inning. It confirms rather than just
+   doing it because the card cannot always know: the man the order points at may
+   have left the game between innings, and a pinch runner for him is a normal
+   move that nothing on the card would otherwise have said. */
+function maybeOfferAutoRunner(team, colIdx) {
+  if (!autoRunnerEnabled()) return;
+  const realInn = getRealInning(team, colIdx);
+  if (!isExtraInning(realInn)) return;
+  if (inningHasAutoRunner(team, realInn)) return;
+  promptAutoRunner(team, colIdx);
+}
+
+/* Manual entry to the same offer, for the paths the half-inning transition never
+   runs through: a card built by hand, a column revealed with +EI, or a scorer who
+   said "No runner" and thought better of it. */
+function promptAutoRunnerHere() {
+  if (!requireSelection()) return;
+  const team = selectedCell.dataset.team;
+  const colIdx = parseInt(selectedCell.dataset.inn);
+  const realInn = getRealInning(team, colIdx);
+  if (!isExtraInning(realInn)) {
+    showPlayReject(NOT_EXTRAS);
+    return;
+  }
+  if (inningHasAutoRunner(team, realInn)) {
+    showPlayReject('This inning already started with a runner on second.');
+    return;
+  }
+  promptAutoRunner(team, colIdx);
+}
+
+function autoRunnerPopup() {
+  let popup = document.getElementById('xir-popup');
+  if (!popup) {
+    popup = document.createElement('div');
+    popup.id = 'xir-popup';
+    popup.className = 'jsp jsp--centred';
+    document.body.appendChild(popup);
+  }
+  return popup;
+}
+
+function promptAutoRunner(team, colIdx) {
+  const realInn = getRealInning(team, colIdx);
+  const slot = autoRunnerSlotFor(team, colIdx);
+  const players = gameState.teams[team].players;
+  const ab = players[slot] && players[slot].atBats[colIdx];
+  // His own spot is taken — a bat-around in the half before pushed a play into
+  // this column already. Let the scorer pick instead of refusing the whole rule.
+  const taken = !!(ab && ab.play);
+  const name = rowLabel(team, slot + subRowOf(ab || {}));
+  const popup = autoRunnerPopup();
+
+  let html = `<div class="jsp-title">Runner on second — Inn ${realInn + 1}</div><div class="jsp-body">`;
+  html += '<div class="jsp-note">Extra innings start with a runner on second: the batter'
+       + ' before the leadoff hitter. He is no time at bat, and the run is unearned.</div>';
+  if (taken) {
+    html += `<div class="jsp-hint">${escapeHtml(name)} already has a play in this column — pick who goes out there.</div>`;
+  } else {
+    html += `<button class="jsp-btn jsp-btn--wide jsp-btn--primary" id="xir-place">Place ${escapeHtml(name)}</button>`;
+    html += '<button class="jsp-btn jsp-btn--wide" id="xir-pr">Place him, then pinch-run</button>';
+  }
+  html += '<button class="jsp-btn jsp-btn--wide" id="xir-other">Someone else…</button>';
+  html += '</div>';
+  html += '<button class="jsp-btn jsp-btn--wide" id="xir-none" data-dismiss="cancel">No runner</button>';
+  popup.innerHTML = html;
+  openPopup(popup);
+
+  const done = (pIdx, thenPR) => {
+    closePopup(popup);
+    if (!placeAutoRunner(team, colIdx, pIdx)) return;
+    const cell = document.querySelector(`.at-bat-cell[data-team="${team}"][data-p="${pIdx}"][data-inn="${colIdx}"]`);
+    if (thenPR && cell) { selectCell(cell); markPinchRunner(); return; }
+    // Back to the man who is actually batting, so the next entry lands on him.
+    selectNextBatterForInning(team, colIdx);
+  };
+
+  const place = document.getElementById('xir-place');
+  if (place) place.onclick = () => done(slot, false);
+  const pr = document.getElementById('xir-pr');
+  if (pr) pr.onclick = () => done(slot, true);
+  document.getElementById('xir-other').onclick = () => showAutoRunnerPicker(team, colIdx, done);
+  document.getElementById('xir-none').onclick = () => closePopup(popup);
+}
+
+/* The whole order, for the case the rule's own answer is wrong — he was lifted
+   between innings, or the card was picked up mid-game. Spots whose cell in this
+   column is already spoken for are offered as disabled rather than dropped, so
+   the list stays the batting order and not a subset of it. */
+function showAutoRunnerPicker(team, colIdx, done) {
+  const players = gameState.teams[team].players;
+  const popup = autoRunnerPopup();
+  let html = '<div class="jsp-title">Who is on second?</div><div class="jsp-body jsp-list">';
+  for (let pos = 0; pos < POSITIONS; pos++) {
+    const pIdx = pos * ROWS_PER_POS;
+    const ab = players[pIdx] && players[pIdx].atBats[colIdx];
+    const taken = !!(ab && ab.play);
+    html += `<button class="xir-opt jsp-btn jsp-btn--wide${taken ? '' : ' jsp-btn--primary'}"`
+         + ` data-p="${pIdx}"${taken ? ' disabled' : ''}>`
+         + `${pos + 1}. ${escapeHtml(rowLabel(team, pIdx + subRowOf(ab || {})))}`
+         + (taken ? ' — has a play here' : '') + '</button>';
+  }
+  html += '</div><button class="jsp-btn jsp-btn--wide" id="xir-back" data-dismiss="cancel">Cancel</button>';
+  popup.innerHTML = html;
+  openPopup(popup);
+  popup.querySelectorAll('.xir-opt').forEach(btn => {
+    btn.onclick = function () { done(parseInt(this.dataset.p), false); };
+  });
+  document.getElementById('xir-back').onclick = () => closePopup(popup);
 }
 
 /* Pitch tracking */
@@ -5544,6 +5789,12 @@ function showBasePickerPopup(title, options, callback) {
   document.getElementById('bp-cancel').onclick = function() { closePopup(popup); };
 }
 
+/* The extras runner's own wall, said once. It is worded about regulation rather
+   than about "the 10th" because regulation is settable: a seven-inning game's
+   extras start in the 8th, and a message that says otherwise is wrong on exactly
+   the cards that most need it. */
+const NOT_EXTRAS = 'Only an inning past regulation starts with a runner on second.';
+
 /* Why each of these needs somebody on base, in the words a scorer would use. Rule
    9.13 charges a wild pitch or a passed ball only when a runner advances on it, and
    6.02(a) makes a balk with the bases empty a ball to the batter — so with nobody on
@@ -6189,7 +6440,12 @@ function inningErProvisional(battingTeam, realInn) {
   // An 'E' advancement reason is the third signal: a runner moved up by a throwing
   // error on a steal or a pickoff leaves no error play on any cell, so without this
   // the inning read as clean and never asked for review (#13).
-  const hasSignal = ab => ab.reachedOnError || isErrorPlay(ab.play) || ab.play === 'CI' ||
+  // The extras runner carries `reachedOnError` by rule rather than because
+  // anybody misplayed anything, so he is not a signal on his own. An error he
+  // then advanced on still is — that one is a real misplay, and it can change
+  // whether the runs behind him were earned.
+  const hasSignal = ab => (ab.reachedOnError && !isAutoRunnerAB(ab)) ||
+    isErrorPlay(ab.play) || ab.play === 'CI' ||
     (Array.isArray(ab.advReason) && ab.advReason.includes('E'));
   for (const col of cols) {
     for (const player of players) {
@@ -6201,6 +6457,7 @@ function inningErProvisional(battingTeam, realInn) {
 
 function describeReach(ab) {
   const p = ab.play || '';
+  if (p === XIR_PLAY) return 'placed on second to start the inning — unearned';
   if (isErrorPlay(p)) return 'reached on error';
   if (p === '1B') return 'single';
   if (p === '2B') return 'double';
@@ -6256,8 +6513,15 @@ function reviewEarnedRuns() {
       html += '<div class="jsp-split">';
       html += `<div class="jsp-split-text"><div class="jsp-split-name">${escapeHtml(label)}</div><div class="jsp-split-sub">${escapeHtml(describeReach(r.ab))}</div></div>`;
       html += '<div class="jsp-chips jsp-chips--tight">';
-      html += `<button data-act="markRunEarned" data-argnum="${i}" class="jsp-chip jsp-chip--pick" aria-pressed="${!unearned}">Earned</button>`;
-      html += `<button data-act="markRunUnearned" data-argnum="${i}" class="jsp-chip jsp-chip--out" aria-pressed="${unearned}">Unearned</button>`;
+      if (isAutoRunnerAB(r.ab)) {
+        // Listed, so the sheet accounts for every run on the line, but not
+        // offered: the rule gives the scorer no discretion here, and a chip that
+        // can only be wrong is worse than no chip.
+        html += '<span class="jsp-chip jsp-chip--out jsp-chip--fixed" aria-disabled="true">Unearned by rule</span>';
+      } else {
+        html += `<button data-act="markRunEarned" data-argnum="${i}" class="jsp-chip jsp-chip--pick" aria-pressed="${!unearned}">Earned</button>`;
+        html += `<button data-act="markRunUnearned" data-argnum="${i}" class="jsp-chip jsp-chip--out" aria-pressed="${unearned}">Unearned</button>`;
+      }
       html += '</div></div>';
     });
   }
@@ -6271,6 +6535,7 @@ function setRunEarnedByIndex(idx, unearned) {
   const entry = erReviewList[idx];
   if (!entry) return;
   const ab = entry.ab;
+  if (isAutoRunnerAB(ab)) return;                 // unearned by rule — not a choice
   if (!!ab.reachedOnError === !!unearned) return; // no change
   pushUndo(entry.team, entry.pIdx, entry.colIdx);
   ab.reachedOnError = !!unearned;
@@ -6516,9 +6781,14 @@ function collectState() {
   if (innSel) {
     const n = parseInt(innSel.value);
     if (n >= 1 && n <= INNINGS) {
-      if (!gameState.rules) gameState.rules = { allowReentry: false, regulationInnings: DEFAULT_REGULATION };
+      if (!gameState.rules) gameState.rules = { allowReentry: false, regulationInnings: DEFAULT_REGULATION, autoRunner: true };
       gameState.rules.regulationInnings = n;
     }
+  }
+  const arSel = document.getElementById('info-auto-runner');
+  if (arSel) {
+    if (!gameState.rules) gameState.rules = { allowReentry: false, regulationInnings: DEFAULT_REGULATION, autoRunner: true };
+    gameState.rules.autoRunner = arSel.value !== '0';
   }
   gameState.umpires.hp = document.getElementById('ump-hp').value;
   gameState.umpires['1b'] = document.getElementById('ump-1b').value;
@@ -6601,6 +6871,9 @@ function mergeStateDefaults(parsed) {
   if (!parsed.rules) parsed.rules = defaults.rules;
   const parsedReg = parseInt(parsed.rules.regulationInnings);
   parsed.rules.regulationInnings = (parsedReg >= 1 && parsedReg <= INNINGS) ? parsedReg : DEFAULT_REGULATION;
+  // Same backfill, one rule later. Only an explicit `false` turns the extras
+  // runner off, so a save written before the toggle existed keeps the MLB rule.
+  parsed.rules.autoRunner = parsed.rules.autoRunner !== false;
   // Dropped in Phase 9: an older save still carries an unbounded play log (#31)
   // and an unused standings table (#33). Shed them rather than writing them back
   // out on every autoSave.
@@ -6823,11 +7096,12 @@ function applyState() {
   if (gameState.timerRunning === undefined) gameState.timerRunning = false;
   if (gameState.notes === undefined) gameState.notes = '';
   if (!gameState.defChanges) gameState.defChanges = [];
-  if (!gameState.rules) gameState.rules = { allowReentry: false, regulationInnings: DEFAULT_REGULATION };
+  if (!gameState.rules) gameState.rules = { allowReentry: false, regulationInnings: DEFAULT_REGULATION, autoRunner: true };
   // A save from before regulation length was settable carries `rules` without the
   // key, so this has to backfill inside the object, not just create it.
   const savedReg = parseInt(gameState.rules.regulationInnings);
   gameState.rules.regulationInnings = (savedReg >= 1 && savedReg <= INNINGS) ? savedReg : DEFAULT_REGULATION;
+  gameState.rules.autoRunner = gameState.rules.autoRunner !== false;
   if (!Array.isArray(gameState.reentries)) gameState.reentries = [];
   if (!gameState.dhTerminated) gameState.dhTerminated = { visiting: null, home: null };
   if (!gameState.visibleInnings) gameState.visibleInnings = regulationInnings();
@@ -6878,6 +7152,8 @@ function applyState() {
   document.getElementById('info-attendance').value = gameState.info.attendance || '';
   const innSelEl = document.getElementById('info-innings');
   if (innSelEl) innSelEl.value = String(regulationInnings());
+  const arSelEl = document.getElementById('info-auto-runner');
+  if (arSelEl) arSelEl.value = autoRunnerEnabled() ? '1' : '0';
   document.getElementById('ump-hp').value = gameState.umpires.hp || '';
   document.getElementById('ump-1b').value = gameState.umpires['1b'] || '';
   document.getElementById('ump-2b').value = gameState.umpires['2b'] || '';
@@ -7714,6 +7990,10 @@ function tallyAtBats(team, pIdx, atBats, row) {
     const scored = atBat.bases[0] && atBat.bases[1] && atBat.bases[2] && atBat.bases[3] && atBat.outOnBase == null;
     if (scored && runRowOf(atBat) === row) r++;
     if (subRowOf(atBat) !== row) continue;
+    // The extras runner was never at the plate. His run is his — it was credited
+    // two lines up — and the rest of the line is nobody's: no at-bat, no time on
+    // base, so no hit and no walk either.
+    if (isAutoRunnerAB(atBat)) continue;
     const isSac = ['SAC','SF','SH'].includes(atBat.play);
     const noAB = isSac
       ? sacrificeExemptsAB(team, pIdx, col, atBat)
@@ -7789,6 +8069,15 @@ function updatePitcherStats(battingTeam) {
       const pi = ab.pitcher || 0;
       if (!stats[pi]) stats[pi] = emptyPitcherLine();
       const s = stats[pi];
+      /* The extras runner, who is a run to allow and nothing else. He faced no
+         pitcher, threw no pitches and can never be an earned run — the rule
+         places him as though he reached on an error — so he takes this one
+         branch and skips every count below. The pitcher charged is the one on
+         the mound as the half opened; a reliever after that inherits him. */
+      if (isAutoRunnerAB(ab)) {
+        if (ab.bases[0] && ab.bases[1] && ab.bases[2] && ab.bases[3] && ab.outOnBase == null) s.r++;
+        continue;
+      }
       // Batters faced — the record that he pitched at all, which IP alone cannot
       // carry: a reliever who retires nobody has 0 outs and so did read as an empty
       // row (M6).
@@ -8408,7 +8697,7 @@ function promptSubRemoval(team, pIdx, innIdx) {
       closePopup(popup);
       if (key === 'cancel') return;
       if (nowAllowed) {
-        if (!gameState.rules) gameState.rules = { allowReentry: false };
+        if (!gameState.rules) gameState.rules = { allowReentry: false, autoRunner: true };
         gameState.rules.allowReentry = true;
       }
       pushUndo(team, pIdx, innIdx);
@@ -9268,12 +9557,27 @@ function updateExtraInnings() { updateInningVisibility(); }
 function setRegulationInnings(value) {
   const n = parseInt(value);
   if (!(n >= 1 && n <= INNINGS)) return;
-  if (!gameState.rules) gameState.rules = { allowReentry: false, regulationInnings: DEFAULT_REGULATION };
+  if (!gameState.rules) gameState.rules = { allowReentry: false, regulationInnings: DEFAULT_REGULATION, autoRunner: true };
   gameState.rules.regulationInnings = n;
   gameState.visibleInnings = Math.max(n, lastColumnWithPlays() + 1);
   gameOverShown = false;
   updateInningVisibility();
   updateLiveStatsFromState();
+  autoSave();
+}
+
+/* On or off for this card. Nothing already written is touched: a runner already
+   standing on second is a play on a cell, and turning the rule off is a statement
+   about the innings still to come, not a licence to rub out the ones behind. */
+function setAutoRunnerRule(value) {
+  const on = !(value === false || value === 0 || value === '0' || value === 'false');
+  if (!gameState.rules) gameState.rules = { allowReentry: false, regulationInnings: DEFAULT_REGULATION, autoRunner: true };
+  gameState.rules.autoRunner = on;
+  // The select is scraped with the rest of the header on every save, so it is the
+  // last word on what gets written. Set from anywhere else and the control has to
+  // come with it, or the next save quietly puts the old answer back.
+  const sel = typeof document !== 'undefined' && document.getElementById('info-auto-runner');
+  if (sel) sel.value = on ? '1' : '0';
   autoSave();
 }
 
@@ -10242,6 +10546,7 @@ function showGameSummary() {
         const scored = atBat.bases[0] && atBat.bases[1] && atBat.bases[2] && atBat.bases[3] && atBat.outOnBase == null;
         if (scored && runRowOf(atBat) === row) r++;
         if (subRowOf(atBat) !== row) return;
+        if (isAutoRunnerAB(atBat)) return;   // no plate appearance — see `tallyAtBats`
         if (isHitPlay(atBat.play)) h++;
         if (atBat.play === 'HR') hr++;
         rbi += (atBat.rbi || 0);
@@ -10475,9 +10780,14 @@ function showGameSummary() {
   const regLine = regulationInnings() !== DEFAULT_REGULATION
     ? 'Regulation: ' + regulationInnings() + ' innings'
     : null;
-  if (dhLines.length || reentries.length || regLine) {
+  // Only when it is off. On is the regular-season rule and the card's default, and
+  // a summary that restates every default is a summary nobody reads. Off changes
+  // how the extra innings below it were scored, so it has to be on the record.
+  const arLine = autoRunnerEnabled() ? null : 'Extra innings: no automatic runner';
+  if (dhLines.length || reentries.length || regLine || arLine) {
     html += '<div class="gs-section"><h3>Lineup Rules</h3>';
     if (regLine) html += '<div class="gs-pitching-line">' + escapeHtml(regLine) + '</div>';
+    if (arLine) html += '<div class="gs-pitching-line">' + escapeHtml(arLine) + '</div>';
     dhLines.forEach(l => { html += '<div class="gs-pitching-line">' + l + '</div>'; });
     if (reentries.length) {
       html += '<table class="gs-table"><thead><tr><th>Inning</th><th>Team</th><th>Spot</th><th>Re-entered</th><th>For</th></tr></thead><tbody>';
@@ -10846,6 +11156,7 @@ function legendDiamond(id, opts) {
     const ue = svg.querySelector('#ue-d-legend-' + id + '-0');
     if (ue) ue.removeAttribute('display');
   }
+  if (o.xir) svg.classList.add('xir');
   return '<div class="diamond-wrap">' + svg.outerHTML + '</div>';
 }
 
@@ -10867,6 +11178,11 @@ function buildCardLegend() {
     'How he moved, in the corner: SB, CS, E, WP, PB or BK');
   h += legendItem(legendCell(legendDiamond(5, { reached: 4, scored: true, ue: true })),
     'UE — he scored, but the run is unearned');
+  // Sixth, because the mark is the newest on the card and the only one that says
+  // a man is on base without saying how he got there.
+  h += legendItem(legendCell(legendDiamond(9, { reached: 2, xir: true }) +
+      '<span class="play-text play-on">XIR</span>'),
+    'XIR — the extra-innings runner, placed on 2nd: the pale path from home is the one he never ran');
   h += '</div></div>';
 
   h += '<div class="lg-group"><h4>What the cell colour means</h4><div class="lg-row">';
@@ -11017,6 +11333,10 @@ document.getElementById('info-innings')?.addEventListener('change', function() {
   // Snap the select back if the change was refused or clamped, so what it reads is
   // always what the card is actually using.
   this.value = String(regulationInnings());
+});
+document.getElementById('info-auto-runner')?.addEventListener('change', function() {
+  setAutoRunnerRule(this.value);
+  this.value = autoRunnerEnabled() ? '1' : '0';
 });
 
 /* Event delegation for cell selection */

@@ -71,6 +71,13 @@
             <option value="6">6</option>
             <option value="5">5</option>
           </select></div>
+          <!-- The MLB extra-innings runner, on by default because that is the
+               regular-season rule. Off is the postseason, which plays extras
+               straight, and any league that never adopted it. -->
+          <div class="info-row"><label for="info-auto-runner">Extras runner</label><select id="info-auto-runner">
+            <option value="1">On</option>
+            <option value="0">Off</option>
+          </select></div>
         </div>
         <div class="info-group">
           <div class="info-row"><label for="info-weather">Weather</label><input type="text" id="info-weather"></div>
@@ -233,6 +240,7 @@
             <button class="quick-btn runner" data-word="balk" data-act="applyRunnerEvent" data-arg="BK">BK</button>
             <button class="quick-btn runner" data-word="pickoff" data-act="promptPickoff">PK<small>o</small></button>
             <button class="quick-btn runner" data-word="move a runner" data-act="moveRunner">Move</button>
+            <button class="quick-btn runner" data-word="extras runner" data-act="promptAutoRunnerHere" title="Put the extra-innings runner on second">XIR</button>
           </div>
           <div class="qbg-panel" data-group="subs">
             <button class="quick-btn pitcher-change" data-word="new pitcher" data-act="changePitcher">P.Chg</button>
@@ -389,6 +397,7 @@
             <button class="quick-btn runner" data-word="balk" data-act="applyRunnerEvent" data-arg="BK">BK</button>
             <button class="quick-btn runner" data-word="pickoff" data-act="promptPickoff">PK<small>o</small></button>
             <button class="quick-btn runner" data-word="move a runner" data-act="moveRunner">Move</button>
+            <button class="quick-btn runner" data-word="extras runner" data-act="promptAutoRunnerHere" title="Put the extra-innings runner on second">XIR</button>
           </div>
           <div class="qbg-panel" data-group="subs">
             <button class="quick-btn pitcher-change" data-word="new pitcher" data-act="changePitcher">P.Chg</button>

@@ -4884,6 +4884,210 @@
     eq('regulation is untouched', regulationInnings(), 7);
   });
 
+  /* ------------------------------------------------- the extras runner ---
+
+     MLB has started every half-inning after regulation with a runner on second
+     since 2020, permanently since 2023, in the regular season only. He is the
+     batter before the leadoff hitter, he is no plate appearance, and the run he
+     scores is unearned. Nine columns of the card already knew how to carry a
+     runner; these are the four places where he is not a batter. */
+
+  test('the extras runner is the batter before the leadoff hitter', () => {
+    touch(9);
+    gameState.nextLeadoff = { visiting: { 9: 0 } };   // spot 1 leads off the 10th
+    eq('so spot 9 is on second', autoRunnerSlotFor('visiting', 9), 8 * ROWS_PER_POS);
+    gameState.nextLeadoff = { visiting: { 9: 3 } };   // spot 2 leads off
+    eq('so spot 1 is on second', autoRunnerSlotFor('visiting', 9), 0);
+  });
+
+  test('placing him puts a runner on second and nowhere else', () => {
+    touch(9);
+    ok('placed', placeAutoRunner('visiting', 9, 24));
+    eq('second', onB('visiting', 9, 1), 24);
+    eq('first is empty', onB('visiting', 9, 0), null);
+    eq('third is empty', onB('visiting', 9, 2), null);
+    eq('no out was recorded', inn('visiting', 9).outs, 0);
+  });
+
+  test('he is no plate appearance — no at-bat, and nobody faced him', () => {
+    touch(9);
+    placeAutoRunner('visiting', 9, 24);
+    eq('no at-bat on his line', bStat('visiting', 24, 'ab'), '');
+    eq('no hit either', lsInput('visiting', 9).value, '');
+    // A pitcher who has faced nobody has no IP line at all. If the placed runner
+    // counted as a batter faced this would read '0.0'.
+    eq('the pitcher has not started the inning', pStat('visiting', 0, 'ip'), '');
+  });
+
+  test('his run counts against the pitcher but is never earned', () => {
+    touch(9);
+    placeAutoRunner('visiting', 9, 24);
+    sel('visiting', 0, 9);
+    play('HR');                                     // two in: the placed man and the batter
+    eq('two runs on the line', lsInput('visiting', 9).value, '2');
+    eq('two runs allowed', pStat('visiting', 0, 'r'), '2');
+    eq('but only one earned', pStat('visiting', 0, 'er'), '1');
+    eq('the run is on his line', bStat('visiting', 24, 'r'), '1');
+    eq('and still no at-bat', bStat('visiting', 24, 'ab'), '');
+  });
+
+  test('the batter who drives him in gets the RBI', () => {
+    touch(9);
+    placeAutoRunner('visiting', 9, 24);
+    sel('visiting', 0, 9);
+    play('HR');
+    eq('two RBI on the homer', ab('visiting', 0, 9).rbi, 2);
+  });
+
+  test('left on second, he is a man left on base', () => {
+    touch(9);
+    placeAutoRunner('visiting', 9, 24);
+    sel('visiting', 0, 9); play('K');
+    sel('visiting', 3, 9); play('K');
+    sel('visiting', 6, 9); play('K');
+    eq('LOB', lobTotal('visiting'), '1');
+  });
+
+  test('the review lists his run and refuses to call it earned', () => {
+    touch(9);
+    placeAutoRunner('visiting', 9, 24);
+    sel('visiting', 0, 9);
+    play('HR');
+    sel('visiting', 24, 9);
+    reviewEarnedRuns();
+    const idx = erReviewList.findIndex(r => r.pIdx === 24);
+    ok('his run is in the list', idx >= 0);
+    setRunEarnedByIndex(idx, false);                // "Earned"
+    ok('still unearned', ab('visiting', 24, 9).reachedOnError);
+    eq('and the ER column has not moved', pStat('visiting', 0, 'er'), '1');
+    closePopupById('er-review-popup');
+  });
+
+  test('he does not on his own make the inning need an ER review', () => {
+    touch(9);
+    placeAutoRunner('visiting', 9, 24);
+    sel('visiting', 0, 9);
+    play('HR');
+    ok('no error signal in the inning', !inningErProvisional('visiting', 9));
+  });
+
+  test('he can be caught stealing like any other runner', () => {
+    touch(9);
+    placeAutoRunner('visiting', 9, 24);
+    sel('visiting', 0, 9);
+    applyCSAtBase('visiting', 9, 1);
+    eq('second is empty', onB('visiting', 9, 1), null);
+    eq('one out', inn('visiting', 9).outs, 1);
+    eq('and it is an out on the pitcher line', pStat('visiting', 0, 'ip'), '0.1');
+  });
+
+  test('the diamond draws him as placed, not as batted', () => {
+    touch(9);
+    placeAutoRunner('visiting', 9, 24);
+    const svg = document.getElementById('d-visiting-24-9');
+    ok('the cell is marked as a placed runner', svg.classList.contains('xir'));
+  });
+
+  test('the rule can be switched off, and then nothing is offered', () => {
+    touch(9);
+    setAutoRunnerRule(false);
+    ok('off', !autoRunnerEnabled());
+    gameState.nextLeadoff = { visiting: { 9: 0 } };
+    maybeOfferAutoRunner('visiting', 9);
+    ok('no sheet opened', !visible('xir-popup'));
+    ok('and nobody is on second', onB('visiting', 9, 1) === null);
+    setAutoRunnerRule(true);
+  });
+
+  test('the offer only comes in extras', () => {
+    touch(4);
+    maybeOfferAutoRunner('visiting', 4);            // the 5th of a nine-inning game
+    ok('no sheet in regulation', !visible('xir-popup'));
+    touch(9);
+    gameState.nextLeadoff = { visiting: { 9: 0 } };
+    maybeOfferAutoRunner('visiting', 9);
+    ok('a sheet in the 10th', visible('xir-popup'));
+    closePopupById('xir-popup');
+  });
+
+  test('the offer does not come twice in one inning', () => {
+    touch(9);
+    placeAutoRunner('visiting', 9, 24);
+    maybeOfferAutoRunner('visiting', 9);
+    ok('already out there, so no sheet', !visible('xir-popup'));
+  });
+
+  test('the manual XIR entry refuses a regulation inning', () => {
+    sel('visiting', 0, 4);
+    promptAutoRunnerHere();
+    ok('refused', !visible('xir-popup'));
+    ok('and said why', rejected());
+  });
+
+  test('the XIR key is dimmed in regulation and live in extras, for the same reason', () => {
+    const btn = () => document.querySelector('.tab-content.active .quick-btn[data-act="promptAutoRunnerHere"]');
+    sel('visiting', 0, 4);
+    refreshControlAvailability();
+    eq('dimmed in the 5th', btn().getAttribute('aria-disabled'), 'true');
+    eq('and wearing the refusal it would give', btn().dataset.why, NOT_EXTRAS);
+    touch(9);
+    sel('visiting', 0, 9);
+    refreshControlAvailability();
+    eq('live in the 10th', btn().getAttribute('aria-disabled'), null);
+  });
+
+  test('the rule survives a round trip through storage', () => {
+    clearStorage();
+    try {
+      setAutoRunnerRule(false);
+      flushSave();
+      const back = mergeStateDefaults(JSON.parse(safeStorage.getItem(CURRENT_GAME_KEY)));
+      eq('off came back', back.rules.autoRunner, false);
+    } finally { clearStorage(); setAutoRunnerRule(true); }
+  });
+
+  test('undo takes the placed runner back off second', () => {
+    touch(9);
+    placeAutoRunner('visiting', 9, 24);
+    undoLastPlay();
+    eq('second is empty again', onB('visiting', 9, 1), null);
+    eq('and the cell is blank', ab('visiting', 24, 9).play, '');
+  });
+
+  test('clearing his cell takes his run off the line with him', () => {
+    touch(9);
+    placeAutoRunner('visiting', 9, 24);
+    sel('visiting', 0, 9);
+    play('HR');
+    eq('two runs first', lsInput('visiting', 9).value, '2');
+    sel('visiting', 24, 9);
+    clearSelectedCell();
+    eq('one run left', lsInput('visiting', 9).value, '1');
+    eq('and one run allowed', pStat('visiting', 0, 'r'), '1');
+  });
+
+  test('the order bats round past him into a new column', () => {
+    touch(9);
+    placeAutoRunner('visiting', 9, 24);            // spot 9 holds the runner
+    for (let pos = 0; pos < 8; pos++) {            // spots 1-8 all walk
+      sel('visiting', pos * ROWS_PER_POS, 9);
+      play('BB');
+    }
+    // Spot 9 is due up and his cell in column 9 is the runner's, so the card has
+    // to open a column for him rather than write over it.
+    selectNextBatter('visiting', 9);
+    eq('he bats in the next column', curCol(), 10);
+    eq('and it is still the 10th inning', getRealInning('visiting', 10), 9);
+    eq('the runner is untouched', ab('visiting', 24, 9).play, 'XIR');
+  });
+
+  test('a save from before the rule existed keeps the MLB default', () => {
+    const old = JSON.parse(JSON.stringify(createEmptyState()));
+    delete old.rules.autoRunner;                    // `rules` exists, the key does not
+    const merged = mergeStateDefaults(old);
+    eq('on', merged.rules.autoRunner, true);
+  });
+
   test('regulation length survives a round trip through storage', () => {
     clearStorage();
     try {
